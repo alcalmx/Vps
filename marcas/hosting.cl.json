@@ -8,12 +8,24 @@
     "mascara": "255.255.255.0",
     "dns": ["1.1.1.1", "8.8.8.8"],
     "portgroup": null,
-    "nota": "Subred definida por el usuario 2026-09-10. Gateway .1 por convención del wizard de altas — confirmar. PENDIENTE: qué portgroup del ESXi transporta la 10.100.48.0/24 (candidato probable: 'Switch Interno 1 Data ethr6'; la gestión del host va en 10.100.37.x)."
+    "nota": "Red de PRODUCCIÓN (usuario 2026-09-10): se usará cuando creemos VPS reales en un host VMware real; está en una VLAN que NO llega al host de pruebas. PENDIENTE: portgroup del host de producción."
+  },
+  "red_pruebas": {
+    "subred": "192.168.122.0/24",
+    "gateway": "192.168.122.1",
+    "mascara": "255.255.255.0",
+    "dns": ["1.1.1.1", "8.8.8.8"],
+    "portgroup": "Switch Interno 1 Data ethr6",
+    "nota": "Para las pruebas en 10.100.37.245 (usuario 2026-09-10). Portgroup verificado: es el que usan noc-monitor y el VPS de IA (192.168.122.x). Mismo proceso de buscar IP libre. Sin IP pública/NAT en pruebas."
   },
   "ip_libre": {
     "metodo": "copiar del dashboard NOC /api/alta/privada (dashboard.py ~9336)",
-    "detalle": "SSH al MikroTik RouterData 172.16.1.90: '/ip firewall nat print terse' + '/ip arp print terse'; ocupadas = NAT ∪ ARP ∪ {.1}; se asigna el octeto libre más alto desde .254 hacia abajo.",
+    "detalle": "SSH al MikroTik RouterData 172.16.1.90: '/ip firewall nat print terse' + '/ip arp print terse'; ocupadas = NAT ∪ ARP ∪ {.1}; se asigna el octeto libre más alto desde .254 hacia abajo. OJO en pruebas (192.168.122.0/24): validar que RouterData vea esa red en su ARP; si no, complementar con barrido ping/ARP local desde noc-monitor.",
     "red": "10.100.48"
+  },
+  "ip_publica_nat": {
+    "metodo": "copiar del dashboard NOC /api/alta/publica (~9365) y /api/alta/crear (~9414)",
+    "detalle": "Elegir pública de la address-list de la marca (entrada habilitada, sin comentario, sin NAT incl. deshabilitados, sin ARP vivo, sin otras address-lists, muda al ping desde el CCR de borde 172.16.1.69) → crear srcnat+dstnat en RouterData con comment '[NOC] ...', deshabilitar+comentar la entrada de la address-list, registrar privada y pública en NetBox, pausar Monitoreo Externo. Solo producción — en pruebas se omite."
   },
   "dominio_hostname": "hosting.cl",
   "nota": "Sabores en sabores/hosting.cl/ (dictados de la web 2026-09-10: vps-estandar, vps-empresas, vps-cyber-black)."

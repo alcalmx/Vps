@@ -5,6 +5,38 @@
 
 ---
 
+## 2026-09-10 (jueves, tarde-2) — NAT/IP pública al flujo, red de pruebas y cPanel definidos
+
+**Definiciones del usuario:**
+- **NAT + IP pública**: también se copia del NOC. Mapeado el código real:
+  `/api/alta/publica` (dashboard.py ~9365) elige la pública de la address-list de la
+  marca con 5 validaciones (habilitada sin comentario / sin NAT incl. deshabilitados /
+  sin ARP vivo / sin otras address-lists / muda al ping desde el CCR 172.16.1.69);
+  `/api/alta/crear` (~9414) crea srcnat+dstnat en RouterData (comment "[NOC] ..."),
+  deshabilita+comenta la entrada de la address-list, registra ambas IPs en NetBox y
+  pausa el Monitoreo Externo. Agregado como pasos 2–3 del flujo Crear (README).
+  **En pruebas se omite** (solo IP privada).
+- **cPanel**: los 3 planes lo incluyen → instalarlo automáticamente (última versión)
+  tras el primer boot, vía SSH con la llave de gestión. Tarda 30–60 min → tarea en
+  background + notificación. Futuro: dorada con cPanel preinstalado.
+- **Red de PRUEBAS: 192.168.122.0/24, gw 192.168.122.1** — la 10.100.48.0/24 está en
+  otra VLAN que no llega al host de pruebas; se usará cuando creemos VPS reales en un
+  host real. Verificado en el ESXi: la 192.168.122.x va por el portgroup
+  **"Switch Interno 1 Data ethr6"** (el de noc-monitor, Claude_Code y Prueba1).
+  Mismo proceso de IP libre (validar que RouterData vea la 122 en ARP; si no,
+  barrido local desde noc-monitor).
+- **ISO local vs centralizada**: pregunta abierta del usuario — propuesta de Claude:
+  biblioteca **centralizada** (datastore NFS montado en todos los hosts) como estándar
+  de flota, porque la ISO solo se usa para construir doradas (1 vez por versión de SO)
+  y centralizada evita duplicados/desincronización; las **doradas sí van locales** en
+  cada host (el clon vmkfstools debe ser local para ser rápido). Implementar al sumar
+  el 2º host; fase 1 sigue con la ISO local. PENDIENTE ok del usuario.
+
+**marcas/hosting.cl.json** actualizado: red_default (producción) + red_pruebas +
+ip_publica_nat documentados.
+
+---
+
 ## 2026-09-10 (jueves, tarde) — Sabores, red y repo definidos por el usuario
 
 **Respuestas del usuario a las preguntas abiertas:**

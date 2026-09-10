@@ -85,16 +85,29 @@ automática), dashboard propio, más marcas (Planeta Hosting, etc.), IPAM vía N
 ## Flujo de cada operación
 
 ### Crear
-1. Validar entrada: marca + sabor existen, hostname único, IP con formato válido.
-2. Verificar cupo del host (RAM/CPU/disco comprometidos vs límites de `hosts.json`).
-3. SSH (wrapper): `mkdir [DiscoA37245]/VPS/vps-hcl-<id>` + `vmkfstools -i` clon
+1. Validar entrada: marca + sabor existen, hostname único.
+2. **IP privada libre** — lógica copiada de `/api/alta/privada` del NOC (NAT+ARP del
+   MikroTik RouterData 172.16.1.90; ocupadas = NAT ∪ ARP ∪ {.1}; el octeto libre más
+   alto desde .254). En **pruebas**: red 192.168.122.0/24; en producción: la subred
+   de la marca (hosting.cl: 10.100.48.0/24).
+3. **IP pública + NAT** — lógica copiada de `/api/alta/publica` y `/api/alta/crear`
+   del NOC: elegir pública de la address-list de la marca (habilitada, sin comentario,
+   sin NAT, sin ARP, sin otras listas, muda al ping) → crear `srcnat` + `dstnat` en
+   RouterData con etiqueta `[NOC]`, deshabilitar/comentar la entrada de la
+   address-list, registrar ambas IPs en NetBox, pausar Monitoreo Externo.
+   En **pruebas** este paso se omite (la VM queda solo con la privada).
+4. Verificar cupo del host (RAM/CPU/disco comprometidos vs límites de `hosts.json`).
+5. SSH (wrapper): `mkdir [DiscoA37245]/VPS/vps-hcl-<id>` + `vmkfstools -i` clon
    **thin** del disco dorado.
-4. govc: crear VM (CPU/RAM/red del sabor), adjuntar el disco clonado.
-5. Inyectar configuración por **guestinfo cloud-init** (hostname, IP estática,
+6. govc: crear VM (CPU/RAM/red del sabor), adjuntar el disco clonado.
+7. Inyectar configuración por **guestinfo cloud-init** (hostname, IP estática,
    gateway, DNS, llave pública de gestión). La contraseña NUNCA viaja.
-6. Power on → esperar IP/estado por VMware Tools (timeout con reintentos).
-7. Registrar en el registro + auditoría + notificación en NOC.
-8. (Opcional, encadenable) llamar a vps-provision → llave del cliente a la bóveda.
+8. Power on → esperar IP/estado por VMware Tools (timeout con reintentos).
+9. **Instalar cPanel (última versión)** vía SSH con la llave de gestión — tarda
+   30–60 min; corre como tarea en segundo plano con notificación al terminar.
+   (Optimización futura: dorada con cPanel preinstalado para entrega casi instantánea.)
+10. Registrar en el registro + auditoría + notificación en NOC.
+11. (Encadenable) llamar a vps-provision → llave del cliente a la bóveda.
 
 ### Eliminar (papelera, nunca destrucción directa)
 1. La VM debe estar en el registro (si no, se rechaza).
@@ -126,6 +139,9 @@ automática), dashboard propio, más marcas (Planeta Hosting, etc.), IPAM vía N
 | Cómo crear VMs | Plantilla dorada + clon `vmkfstools` + cloud-init guestinfo | ESXi standalone (sin vCenter) no tiene clone por API. El clon de disco + VMX propio es el método robusto y rápido (~segundos con thin). Sin instalar nada en el host. |
 | Origen de la dorada | Instalación única desde la **ISO AlmaLinux 9.7** que ya está en el host (`[datastore1 (7)] AlmaLinux-9.7-x86_64-minimal.iso`) + instalar cloud-init y open-vm-tools a mano | Decisión del usuario 2026-09-10: partir con el AlmaLinux que ya tenemos en este VMware; después se agregan más ISOs/SOs. (También hay AlmaLinux 8.10 en DiscoA37245.) |
 | Búsqueda de IP libre | Copiar la lógica de `/api/alta/privada` del dashboard NOC | Ya probada en producción: consulta NAT+ARP del MikroTik RouterData (172.16.1.90) por SSH y asigna el octeto libre más alto de la /24. Se aplica sobre la subred de la marca (hosting.cl: 10.100.48.0/24). |
+| IP pública + NAT | Copiar `/api/alta/publica` + `/api/alta/crear` del NOC | Mismo criterio ya probado: candidata de la address-list validada 5 veces (lista/NAT/ARP/otras listas/ping) → srcnat+dstnat en RouterData + NetBox + pausa de monitoreo. |
+| Red de PRUEBAS | 192.168.122.0/24, gw .1, portgroup "Switch Interno 1 Data ethr6" (verificado: es el de noc-monitor y el VPS de IA) | La 10.100.48.0/24 está en otra VLAN que no llega a este host de pruebas. Producción usará 10.100.48.0/24 en el host real. Sin NAT/pública en pruebas. |
+| cPanel | Post-instalación automática, última versión, tras el primer boot | Decisión del usuario 2026-09-10. Tarda 30–60 min → tarea en background con notificación. Futuro: dorada con cPanel preinstalado. |
 | API al ESXi | govc con usuario local `svc-vps` (rol custom) | Sin vCenter igual hay API por 443. Rol con privilegios mínimos de VM; la clave NO es la de root. |
 | SSH al ESXi | Llave dedicada + `command=` wrapper que whitelistea operaciones | Solo lo que la API no puede (vmkfstools). El wrapper valida que toda ruta esté bajo `/VPS/`. Detalle en SEGURIDAD.md. |
 | Dónde corre el motor | noc-monitor, contenedor + quadlet | Patrón probado (vps-provision), mismo dashboard, misma operación. |
@@ -173,8 +189,12 @@ Vps/
 - [x] Diseño y documentación (2026-09-10)
 - [x] Sabores de hosting.cl dictados de la web (estándar / empresas / cyber-black)
 - [x] Subred de los VPS: 10.100.48.0/24 (IP libre: lógica de /api/alta/privada del NOC)
-- [ ] Confirmar portgroup que transporta la 10.100.48.0/24
-- [ ] Definir cómo entra cPanel al flujo (¿dorada con cPanel? ¿post-install?)
+- [x] Red de pruebas: 192.168.122.0/24 gw .1, portgroup "Switch Interno 1 Data ethr6"
+- [x] cPanel: post-instalación automática con la última versión (futuro: dorada con cPanel)
+- [x] Flujo NAT + IP pública: copiar /api/alta/publica y /api/alta/crear del NOC (solo producción)
+- [ ] Confirmar portgroup de la 10.100.48.0/24 en el host de producción (cuando toque)
+- [ ] ISOs: propuesta = biblioteca centralizada NFS montada en todos los hosts
+      (implementar al sumar el 2º host; fase 1 usa la ISO local del host de pruebas)
 - [ ] Crear en ESXi: carpeta `VPS/`, usuario `svc-vps` + rol, llave + wrapper SSH
 - [ ] Plantilla dorada AlmaLinux 9.7 (instalar desde la ISO del host + cloud-init + open-vm-tools)
 - [ ] engine: crear (end-to-end contra VM de prueba)
