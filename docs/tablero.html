@@ -194,7 +194,7 @@
     <div class="metrics">
       <div class="metric"><div class="n"><span class="accent">4</span></div><div class="l">Fases del proyecto</div></div>
       <div class="metric"><div class="n">Fase&nbsp;1</div><div class="l">Etapa actual (intermedia)</div></div>
-      <div class="metric"><div class="n">44<span style="color:var(--faint)">%</span></div><div class="l">Avance global</div></div>
+      <div class="metric"><div class="n">48<span style="color:var(--faint)">%</span></div><div class="l">Avance global</div></div>
       <div class="metric"><div class="n">2<span style="color:var(--faint)">/2</span></div><div class="l">Servicios desplegados</div></div>
     </div>
   </header>
@@ -203,10 +203,10 @@
   <div class="live">
     <div class="dot"></div>
     <div class="t">
-      <b>Ahora mismo:</b> la plantilla dorada <span class="mono">AlmaLinux&nbsp;9.7</span>
-      se está reconstruyendo (instalando cloud-init y open-vm-tools). En cuanto se selle
-      y apague sola, se lanza la primera creación de prueba <span class="mono">vps-hcl-0001</span>
-      con cPanel, viendo los 13 pasos en el dashboard.
+      <b>Ahora mismo:</b> creación end-to-end <span class="mono">validada</span> —
+      los 11 pasos de creación pasan en verde (IP estática automática vía cloud-init,
+      SSH verificado). Corriendo la instalación de cPanel del primer VPS de prueba
+      <span class="mono">vps-hcl-0003</span> (paso 12 de 13).
     </div>
   </div>
 
@@ -276,7 +276,7 @@
     </div>
     <div class="p current">
       <div class="code">FASE 1</div><div class="nm">Motor y plataforma</div>
-      <div class="st">78% · en curso</div>
+      <div class="st">92% · en curso</div>
       <div class="youare">◈ estás aquí</div>
     </div>
     <div class="p">
@@ -322,8 +322,8 @@
         <span class="ph-tag tag-prog">En curso · etapa intermedia</span>
       </div>
       <div class="ph-status">
-        <div class="ph-pct" style="color:var(--prog)">78%</div>
-        <div class="ph-bar"><span style="width:78%;background:var(--prog)"></span></div>
+        <div class="ph-pct" style="color:var(--prog)">92%</div>
+        <div class="ph-bar"><span style="width:92%;background:var(--prog)"></span></div>
       </div>
     </div>
     <ul class="tasks">
@@ -334,8 +334,9 @@
       <li class="tk-done"><span class="tk-ic">✔</span><span class="tk-txt">Motor <span class="mono">vps-engine</span> desplegado — jobs con pasos, registro SQLite</span></li>
       <li class="tk-done"><span class="tk-ic">✔</span><span class="tk-txt">Sección “VPS” en el dashboard NOC — panel de progreso en vivo</span></li>
       <li class="tk-done"><span class="tk-ic">✔</span><span class="tk-txt">Internet en la red de pruebas</span><span class="tk-note">solo pruebas</span></li>
-      <li class="tk-prog"><span class="tk-ic">◐</span><span class="tk-txt">Plantilla dorada AlmaLinux 9.7 — reconstruyendo con repos online</span><span class="tk-chip chip-prog">en curso</span></li>
-      <li class="tk-prog"><span class="tk-ic">◐</span><span class="tk-txt">Primera creación de prueba end-to-end — validar personalización cloud-init</span><span class="tk-chip chip-prog">siguiente</span></li>
+      <li class="tk-done"><span class="tk-ic">✔</span><span class="tk-txt">Plantilla dorada AlmaLinux 9.7 — construida, sellada y probada</span></li>
+      <li class="tk-done"><span class="tk-ic">✔</span><span class="tk-txt">Creación end-to-end — IP estática automática (cloud-init + nmcli), SSH verificado</span></li>
+      <li class="tk-prog"><span class="tk-ic">◐</span><span class="tk-txt">Instalación de cPanel en la creación — validando en <span class="mono">vps-hcl-0003</span></span><span class="tk-chip chip-prog">en curso</span></li>
     </ul>
   </section>
 
