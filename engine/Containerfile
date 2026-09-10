@@ -1,0 +1,23 @@
+# vps-engine — build desde la RAÍZ del repo (necesita marcas/ y sabores/):
+#   podman build -t vps-engine -f engine/Containerfile .
+FROM almalinux:9
+
+RUN dnf -y install python3-pip openssh-clients iputils iproute && dnf clean all \
+ && pip3 --no-cache-dir install flask paramiko
+
+# govc (CLI de la API vSphere). Pin de versión para builds reproducibles.
+ARG GOVC_VER=v0.51.0
+RUN curl -fsSL -o /tmp/govc.tgz \
+      https://github.com/vmware/govmomi/releases/download/${GOVC_VER}/govc_Linux_x86_64.tar.gz \
+ && tar -xzf /tmp/govc.tgz -C /usr/local/bin govc && rm /tmp/govc.tgz && govc version
+
+WORKDIR /app
+COPY engine/app.py /app/app.py
+COPY marcas/  /app/config/marcas/
+COPY sabores/ /app/config/sabores/
+
+# Secretos y llaves llegan por env-file y volúmenes (ver vps-engine.container):
+#   /keys/vps_engine_esxi  (llave SSH del wrapper, 600)
+#   /keys/gestion_hosting  (llave de gestión para verificar/instalar cPanel)
+#   /data/                 (registry.db)
+CMD ["python3", "/app/app.py"]

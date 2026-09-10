@@ -1,0 +1,40 @@
+# Quadlet — /etc/containers/systemd/vps-engine.container en noc-monitor
+# systemctl daemon-reload && systemctl start vps-engine
+[Unit]
+Description=vps-engine (ciclo de vida de VPS en ESXi)
+After=network-online.target
+
+[Container]
+Image=localhost/vps-engine:latest
+ContainerName=vps-engine
+# Red de host (como vaultwarden/vps-provision): escucha directo en 127.0.0.1:8224,
+# inmune al problema CNI/firewalld y con acceso a la 192.168.122.0/24 para el
+# barrido de IP libre en modo pruebas.
+Network=host
+EnvironmentFile=/opt/vps-engine/engine.env
+Volume=/opt/vps-engine/data:/data:Z
+Volume=/opt/vps-engine/keys:/keys:ro,Z
+HealthCmd=curl -fsS -H "X-Auth-Token: $ENGINE_TOKEN" http://127.0.0.1:8224/health || exit 1
+HealthInterval=60s
+HealthRetries=3
+HealthOnFailure=kill
+
+[Service]
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
+
+# /opt/vps-engine/engine.env (chmod 600, FUERA del repo):
+#   ENGINE_TOKEN=...
+#   GOVC_URL=https://10.100.37.245/sdk
+#   GOVC_USERNAME=svc-vps
+#   GOVC_PASSWORD=...
+#   GOVC_INSECURE=1
+#   GOVC_DATASTORE=DiscoA37245
+#   ESXI_HOST=10.100.37.245
+#   ESXI_SSH_KEY=/keys/vps_engine_esxi
+#   MGMT_PUBKEY=ssh-ed25519 AAAA... gestion@hosting.cl
+#   MGMT_PRIVKEY_PATH=/keys/gestion_hosting
+#   MODO=pruebas
+#   DORADA=dorada-almalinux9.7

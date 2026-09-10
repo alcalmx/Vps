@@ -82,6 +82,15 @@ automática), dashboard propio, más marcas (Planeta Hosting, etc.), IPAM vía N
 
 ---
 
+### Visibilidad del proceso (jobs con pasos)
+
+Toda operación (crear/eliminar/suspender/editar) corre como **job asíncrono** cuyo
+avance se persiste paso a paso en SQLite: cada paso con estado
+`pendiente → corriendo → ok/error`, detalle y hora. El dashboard hace polling de
+`/job/<id>` cada 3 s y pinta la lista de pasos en vivo — se ve exactamente por
+dónde va la creación y en qué paso se atascó si falla. Spec de la UI en
+[docs/dashboard-integracion.md](docs/dashboard-integracion.md).
+
 ## Flujo de cada operación
 
 ### Crear

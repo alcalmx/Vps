@@ -5,6 +5,58 @@
 
 ---
 
+## 2026-09-10 (jueves, tarde-3) — Código del motor completo + infra del ESXi preparada
+
+**Autorización del usuario:** construir la automatización de creación, lanzable desde
+el dashboard y con el proceso VISIBLE paso a paso ("saber si se queda parado en algún
+punto"). Diseño de visibilidad: toda operación es un job asíncrono con pasos
+(pendiente→corriendo→ok/error + detalle + hora) persistidos en SQLite; el dashboard
+hace polling de /job/<id> cada 3 s. Spec UI en docs/dashboard-integracion.md.
+
+**Código escrito (en el repo):**
+- [engine/app.py](engine/app.py) — vps-engine completo: jobs con pasos, registro
+  SQLite (vms/jobs/operaciones), flujos crear (13 pasos, incl. cPanel última versión
+  con polling del log), suspender/reanudar, eliminar (papelera), editar (delta de
+  sabor; disco solo crece), purga, auditoría. Guardarraíles en código
+  (`guardarraices()`: registro + regex prefijo).
+- [engine/Containerfile](engine/Containerfile) + [engine/vps-engine.container](engine/vps-engine.container)
+  (quadlet, Network=host, 127.0.0.1:8224, healthcheck).
+- [esxi/vps-wrapper.sh](esxi/vps-wrapper.sh) — wrapper SSH restringido (subcomandos:
+  ping, mkdir-vm, create-disk [solo doradas], clone-disk, grow-disk, trash-vm,
+  restore-trash, purge-trash [>7 días], list-*, df).
+- [dorada/ks.cfg](dorada/ks.cfg) + [dorada/README.md](dorada/README.md) — construcción
+  DESATENDIDA de la dorada desde la ISO local vía kickstart en mini-ISO OEMDRV
+  (anaconda lo toma solo). Particionado con / al final (growpart), cloud-init
+  datasource VMware, sella identidad y se apaga al primer boot.
+- [docs/dashboard-integracion.md](docs/dashboard-integracion.md) — spec de la sección
+  "VPS" del NOC (3 tabs: Crear con panel de progreso en vivo, Gestionados con
+  acciones, Jobs/auditoría).
+
+**Infra ejecutada HOY:**
+- ESXi: creado `[DiscoA37245] VPS/` con `_plantillas/ _papelera/ _bin/`.
+- noc-monitor: `/opt/vps-engine/{keys,data}`, llave **RSA 4096** `vps_engine_esxi`
+  (RSA por el FIPS del ESXi), `engine.env` (600) con token + credenciales svc-vps.
+- Wrapper subido a `_bin/` y llave instalada en authorized_keys del ESXi con
+  `command=` forzado. **Probado:** `ping`→pong; `ls /etc`→denegado;
+  `trash-vm noc-monitor.hosting.cl`→denegado por regex; `df`→OK.
+
+**Bloqueado por el clasificador de permisos (requiere al usuario):**
+- Crear la cuenta `svc-vps` en el ESXi y (2º paso) instalar govc en noc-monitor +
+  crear rol mínimo. Scripts listos y revisables:
+  - `sh scripts/01-esxi-cuenta-svc-vps.sh '<GOVC_PASSWORD del engine.env>'`
+  - `ssh noc-monitor 'bash -s' < scripts/02-rol-vpsoperator.sh`
+  El rol **VpsOperator** deliberadamente SIN `VirtualMachine.Inventory.Delete`
+  (la API no puede destruir archivos de VM ni comprometida; borrar = wrapper→papelera).
+
+**Pendiente (orden):**
+- [ ] Usuario ejecuta scripts 01 y 02 (o autoriza a Claude a correrlos)
+- [ ] Construir la dorada (dorada/README.md) — ~15 min desatendido
+- [ ] Build de la imagen vps-engine + quadlet en noc-monitor (deploy con OK)
+- [ ] Sección "VPS" en el dashboard (docs/dashboard-integracion.md) + permiso rol
+- [ ] Prueba end-to-end: crear vps-hcl-0001 desde el dashboard viendo el progreso
+
+---
+
 ## 2026-09-10 (jueves, tarde-2) — NAT/IP pública al flujo, red de pruebas y cPanel definidos
 
 **Definiciones del usuario:**
