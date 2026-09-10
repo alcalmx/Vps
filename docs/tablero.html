@@ -1,0 +1,406 @@
+<title>Proyecto Vps</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  /* ─────────── Tokens: consola NOC (oscuro) + blueprint (claro) ─────────── */
+  :root{
+    --ground:#eef1f6; --panel:#ffffff; --panel-2:#f4f7fb; --inset:#eaeef4;
+    --line:#d2dae5; --line-soft:#e2e8f0;
+    --ink:#182231; --muted:#586579; --faint:#8b96a7;
+    --accent:#0e9c8c; --accent-deep:#0b7d70; --accent-soft:rgba(14,156,140,.12);
+    --done:#1a8a3a; --done-bg:rgba(26,138,58,.12);
+    --prog:#b0730a; --prog-bg:rgba(176,115,10,.13);
+    --pend:#8894a6; --pend-bg:rgba(136,148,166,.12);
+    --user:#8a5bd6; --user-bg:rgba(138,91,214,.13);
+    --shadow:0 1px 2px rgba(20,30,48,.06),0 8px 24px rgba(20,30,48,.06);
+    --mono:ui-monospace,"Cascadia Code","SF Mono",Menlo,Consolas,monospace;
+    --sans:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  }
+  :root:not([data-theme="light"]){ color-scheme:dark; }
+  @media (prefers-color-scheme:dark){
+    :root:not([data-theme="light"]){
+      --ground:#0a0f17; --panel:#111a27; --panel-2:#15202f; --inset:#0d1521;
+      --line:#243044; --line-soft:#1b2635;
+      --ink:#d7e0ee; --muted:#8695a9; --faint:#5c6b80;
+      --accent:#4fd8c6; --accent-deep:#2bb6a5; --accent-soft:rgba(79,216,198,.11);
+      --done:#46c65b; --done-bg:rgba(70,198,91,.13);
+      --prog:#f0b429; --prog-bg:rgba(240,180,41,.13);
+      --pend:#66748a; --pend-bg:rgba(102,116,138,.14);
+      --user:#b48bf0; --user-bg:rgba(180,139,240,.15);
+      --shadow:0 1px 2px rgba(0,0,0,.4),0 10px 30px rgba(0,0,0,.35);
+    }
+  }
+  [data-theme="dark"]{
+    color-scheme:dark;
+    --ground:#0a0f17; --panel:#111a27; --panel-2:#15202f; --inset:#0d1521;
+    --line:#243044; --line-soft:#1b2635;
+    --ink:#d7e0ee; --muted:#8695a9; --faint:#5c6b80;
+    --accent:#4fd8c6; --accent-deep:#2bb6a5; --accent-soft:rgba(79,216,198,.11);
+    --done:#46c65b; --done-bg:rgba(70,198,91,.13);
+    --prog:#f0b429; --prog-bg:rgba(240,180,41,.13);
+    --pend:#66748a; --pend-bg:rgba(102,116,138,.14);
+    --user:#b48bf0; --user-bg:rgba(180,139,240,.15);
+    --shadow:0 1px 2px rgba(0,0,0,.4),0 10px 30px rgba(0,0,0,.35);
+  }
+
+  *{box-sizing:border-box}
+  body{
+    margin:0; background:var(--ground); color:var(--ink);
+    font-family:var(--sans); line-height:1.55;
+    -webkit-font-smoothing:antialiased;
+  }
+  .wrap{max-width:1060px; margin:0 auto; padding:clamp(20px,4vw,56px) clamp(16px,4vw,40px) 72px}
+
+  .mono{font-family:var(--mono)}
+  .eyebrow{
+    font-family:var(--mono); font-size:.72rem; letter-spacing:.22em; text-transform:uppercase;
+    color:var(--accent-deep); font-weight:600;
+  }
+  @media (prefers-color-scheme:dark){ :root:not([data-theme="light"]) .eyebrow{color:var(--accent)} }
+  [data-theme="dark"] .eyebrow{color:var(--accent)}
+
+  /* ─────────── Encabezado ─────────── */
+  header{border-bottom:1px solid var(--line); padding-bottom:28px; margin-bottom:34px}
+  h1{
+    font-size:clamp(2.1rem,5.5vw,3.2rem); line-height:1.02; margin:.35em 0 .28em;
+    letter-spacing:-.02em; font-weight:680; text-wrap:balance;
+  }
+  h1 .dim{color:var(--faint); font-weight:400}
+  .lede{font-size:1.06rem; color:var(--muted); max-width:60ch; margin:0}
+
+  .metrics{
+    display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:1px;
+    background:var(--line-soft); border:1px solid var(--line); border-radius:14px;
+    overflow:hidden; margin-top:30px;
+  }
+  .metric{background:var(--panel); padding:16px 18px}
+  .metric .n{font-family:var(--mono); font-size:1.6rem; font-weight:600; letter-spacing:-.02em; font-variant-numeric:tabular-nums}
+  .metric .l{font-size:.78rem; color:var(--muted); margin-top:2px}
+  .metric .n .accent{color:var(--accent-deep)}
+  @media (prefers-color-scheme:dark){ :root:not([data-theme="light"]) .metric .n .accent{color:var(--accent)} }
+  [data-theme="dark"] .metric .n .accent{color:var(--accent)}
+
+  /* ─────────── Esquema de arquitectura ─────────── */
+  .schematic{
+    background:var(--panel); border:1px solid var(--line); border-radius:16px;
+    padding:22px 20px 12px; margin:30px 0 40px; box-shadow:var(--shadow);
+  }
+  .schematic h2{font-size:.82rem; letter-spacing:.14em; text-transform:uppercase; color:var(--muted); margin:0 0 4px; font-family:var(--mono); font-weight:600}
+  .schematic svg{width:100%; height:auto; display:block; margin-top:6px}
+  .sch-cap{font-size:.8rem; color:var(--faint); margin:6px 2px 8px}
+
+  /* ─────────── Barra "estás aquí" de fases ─────────── */
+  .phasebar{display:flex; gap:8px; flex-wrap:wrap; margin-bottom:34px}
+  .phasebar .p{
+    flex:1 1 160px; border:1px solid var(--line); border-radius:11px; padding:12px 14px;
+    background:var(--panel); position:relative; overflow:hidden;
+  }
+  .phasebar .p .code{font-family:var(--mono); font-size:.72rem; color:var(--faint); letter-spacing:.08em}
+  .phasebar .p .nm{font-weight:600; font-size:.94rem; margin-top:1px}
+  .phasebar .p .st{font-size:.76rem; margin-top:6px; color:var(--muted); font-family:var(--mono)}
+  .phasebar .p.current{border-color:var(--accent); box-shadow:0 0 0 1px var(--accent), 0 8px 24px var(--accent-soft)}
+  .phasebar .p.current::before{content:""; position:absolute; inset:0 auto 0 0; width:3px; background:var(--accent)}
+  .phasebar .p.done .st{color:var(--done)}
+  .youare{
+    display:inline-flex; align-items:center; gap:6px; font-family:var(--mono);
+    font-size:.68rem; letter-spacing:.12em; text-transform:uppercase; color:var(--accent-deep);
+    background:var(--accent-soft); padding:2px 8px; border-radius:20px; margin-top:8px;
+  }
+  @media (prefers-color-scheme:dark){ :root:not([data-theme="light"]) .youare{color:var(--accent)} }
+  [data-theme="dark"] .youare{color:var(--accent)}
+
+  /* ─────────── Fases (paneles) ─────────── */
+  .phase{
+    border:1px solid var(--line); border-radius:16px; background:var(--panel);
+    margin-bottom:20px; overflow:hidden; box-shadow:var(--shadow);
+  }
+  .phase.is-current{border-color:var(--accent); box-shadow:0 0 0 1px var(--accent),var(--shadow)}
+  .ph-head{
+    display:flex; align-items:flex-start; gap:16px; padding:20px 22px;
+    background:var(--panel-2); border-bottom:1px solid var(--line-soft);
+  }
+  .ph-num{
+    font-family:var(--mono); font-size:.78rem; font-weight:600; letter-spacing:.05em;
+    color:var(--faint); padding-top:4px; white-space:nowrap;
+  }
+  .ph-title{flex:1; min-width:0}
+  .ph-title h3{margin:0; font-size:1.22rem; letter-spacing:-.01em; font-weight:660}
+  .ph-title p{margin:3px 0 0; color:var(--muted); font-size:.9rem}
+  .ph-status{text-align:right; white-space:nowrap; padding-top:2px}
+  .ph-pct{font-family:var(--mono); font-size:1.35rem; font-weight:600; font-variant-numeric:tabular-nums; letter-spacing:-.02em}
+  .ph-bar{width:118px; height:6px; border-radius:6px; background:var(--inset); overflow:hidden; margin-top:6px; margin-left:auto}
+  .ph-bar span{display:block; height:100%; border-radius:6px; background:var(--accent)}
+  .ph-tag{
+    display:inline-block; font-family:var(--mono); font-size:.66rem; letter-spacing:.1em;
+    text-transform:uppercase; padding:3px 9px; border-radius:20px; margin-top:7px; font-weight:600;
+  }
+  .tag-done{color:var(--done); background:var(--done-bg)}
+  .tag-prog{color:var(--prog); background:var(--prog-bg)}
+  .tag-pend{color:var(--pend); background:var(--pend-bg)}
+
+  .tasks{list-style:none; margin:0; padding:8px 12px 14px}
+  .tasks li{
+    display:flex; align-items:baseline; gap:12px; padding:8px 10px;
+    border-radius:9px;
+  }
+  .tasks li + li{border-top:1px solid var(--line-soft)}
+  .tk-ic{font-family:var(--mono); font-size:.9rem; width:1.4em; flex:none; text-align:center; line-height:1.5}
+  .tk-done .tk-ic{color:var(--done)}
+  .tk-prog .tk-ic{color:var(--prog)}
+  .tk-pend .tk-ic{color:var(--pend)}
+  .tk-user .tk-ic{color:var(--user)}
+  .tk-txt{flex:1; font-size:.93rem}
+  .tk-pend .tk-txt{color:var(--muted)}
+  .tk-note{font-size:.78rem; color:var(--faint); font-family:var(--mono)}
+  .tk-chip{
+    font-family:var(--mono); font-size:.64rem; letter-spacing:.08em; text-transform:uppercase;
+    padding:2px 7px; border-radius:20px; white-space:nowrap; align-self:center; font-weight:600;
+  }
+  .chip-prog{color:var(--prog); background:var(--prog-bg)}
+  .chip-user{color:var(--user); background:var(--user-bg)}
+
+  /* ─────────── Nota "ahora mismo" ─────────── */
+  .live{
+    display:flex; gap:14px; align-items:flex-start;
+    border:1px solid var(--accent); background:var(--accent-soft);
+    border-radius:14px; padding:16px 18px; margin-bottom:34px;
+  }
+  .live .dot{width:9px; height:9px; border-radius:50%; background:var(--accent); margin-top:7px; flex:none;
+    box-shadow:0 0 0 0 var(--accent); animation:pulse 2.2s infinite}
+  @keyframes pulse{0%{box-shadow:0 0 0 0 var(--accent-soft)}70%{box-shadow:0 0 0 9px transparent}100%{box-shadow:0 0 0 0 transparent}}
+  @media (prefers-reduced-motion:reduce){ .live .dot{animation:none} }
+  .live .t{font-size:.92rem}
+  .live .t b{font-family:var(--mono); font-weight:600}
+
+  /* ─────────── Pie ─────────── */
+  footer{margin-top:44px; padding-top:22px; border-top:1px solid var(--line); color:var(--faint); font-size:.82rem}
+  footer .row{display:flex; flex-wrap:wrap; gap:8px 24px; font-family:var(--mono)}
+  footer a{color:var(--accent-deep); text-decoration:none}
+  @media (prefers-color-scheme:dark){ :root:not([data-theme="light"]) footer a{color:var(--accent)} }
+  [data-theme="dark"] footer a{color:var(--accent)}
+  .legend{display:flex; gap:16px; flex-wrap:wrap; margin:10px 0 0; font-family:var(--mono); font-size:.76rem; color:var(--muted)}
+  .legend span{display:inline-flex; align-items:center; gap:6px}
+  .legend i{font-style:normal}
+</style>
+
+<div class="wrap">
+
+  <header>
+    <div class="eyebrow">Proyecto de infraestructura · hosting.cl</div>
+    <h1>Vps <span class="dim">— motor de aprovisionamiento</span></h1>
+    <p class="lede">Automatiza el ciclo de vida de los VPS de clientes en VMware ESXi
+      —crear, eliminar, suspender y editar— desde una plantilla dorada y operable
+      desde el dashboard NOC, viendo cada creación paso a paso.</p>
+
+    <div class="metrics">
+      <div class="metric"><div class="n"><span class="accent">4</span></div><div class="l">Fases del proyecto</div></div>
+      <div class="metric"><div class="n">Fase&nbsp;1</div><div class="l">Etapa actual (intermedia)</div></div>
+      <div class="metric"><div class="n">44<span style="color:var(--faint)">%</span></div><div class="l">Avance global</div></div>
+      <div class="metric"><div class="n">2<span style="color:var(--faint)">/2</span></div><div class="l">Servicios desplegados</div></div>
+    </div>
+  </header>
+
+  <!-- Nota en vivo -->
+  <div class="live">
+    <div class="dot"></div>
+    <div class="t">
+      <b>Ahora mismo:</b> la plantilla dorada <span class="mono">AlmaLinux&nbsp;9.7</span>
+      se está reconstruyendo (instalando cloud-init y open-vm-tools). En cuanto se selle
+      y apague sola, se lanza la primera creación de prueba <span class="mono">vps-hcl-0001</span>
+      con cPanel, viendo los 13 pasos en el dashboard.
+    </div>
+  </div>
+
+  <!-- Esquema de arquitectura -->
+  <div class="schematic">
+    <h2>Cómo encaja</h2>
+    <div class="sch-cap">El operador lanza desde el dashboard; el motor orquesta el ESXi con credenciales acotadas; la creación clona la dorada y personaliza el clon.</div>
+    <svg viewBox="0 0 900 210" role="img" aria-label="Esquema: dashboard NOC llama al motor vps-engine, que opera el ESXi por API acotada y SSH restringido; el motor clona la plantilla dorada para crear cada VPS y encadena con la bóveda.">
+      <defs>
+        <marker id="arw" markerWidth="9" markerHeight="9" refX="7" refY="4.5" orient="auto">
+          <path d="M0,0 L9,4.5 L0,9 z" fill="var(--faint)"/>
+        </marker>
+        <marker id="arwA" markerWidth="9" markerHeight="9" refX="7" refY="4.5" orient="auto">
+          <path d="M0,0 L9,4.5 L0,9 z" fill="var(--accent)"/>
+        </marker>
+      </defs>
+      <style>
+        .box{fill:var(--panel-2); stroke:var(--line); stroke-width:1.5; rx:11}
+        .boxA{fill:var(--accent-soft); stroke:var(--accent); stroke-width:1.5}
+        .lbl{fill:var(--ink); font-family:var(--mono); font-size:14px; font-weight:600}
+        .sub{fill:var(--muted); font-family:var(--mono); font-size:11px}
+        .flow{stroke:var(--faint); stroke-width:1.6; fill:none}
+        .flowA{stroke:var(--accent); stroke-width:1.8; fill:none}
+        .flab{fill:var(--faint); font-family:var(--mono); font-size:10.5px}
+      </style>
+
+      <!-- Dashboard -->
+      <rect class="box" x="8" y="66" width="172" height="66" rx="11"/>
+      <text class="lbl" x="26" y="94">Dashboard NOC</text>
+      <text class="sub" x="26" y="112">operador · progreso en vivo</text>
+
+      <!-- Motor -->
+      <rect class="boxA" x="248" y="58" width="196" height="82" rx="11"/>
+      <text class="lbl" x="268" y="86">vps-engine</text>
+      <text class="sub" x="268" y="104">127.0.0.1:8224</text>
+      <text class="sub" x="268" y="120">registro · jobs · sabores</text>
+
+      <!-- ESXi -->
+      <rect class="box" x="520" y="16" width="360" height="80" rx="11"/>
+      <text class="lbl" x="540" y="42">ESXi 10.100.37.245</text>
+      <text class="sub" x="540" y="60">API acotada (svc-vps) · SSH wrapper</text>
+      <text class="sub" x="540" y="78">dorada → clon thin → VPS del cliente</text>
+
+      <!-- Bóveda -->
+      <rect class="box" x="520" y="120" width="360" height="70" rx="11"/>
+      <text class="lbl" x="540" y="148">Securización + Bóveda</text>
+      <text class="sub" x="540" y="166">vps-provision · Vaultwarden (se reutiliza)</text>
+
+      <!-- Flujos -->
+      <path class="flowA" d="M180,99 L246,99" marker-end="url(#arwA)"/>
+      <text class="flab" x="188" y="92">POST /crear</text>
+
+      <path class="flowA" d="M444,86 L518,56" marker-end="url(#arwA)"/>
+      <text class="flab" x="452" y="64">crea/opera</text>
+
+      <path class="flow" d="M444,112 L518,150" marker-end="url(#arw)"/>
+      <text class="flab" x="452" y="140">encadena</text>
+    </svg>
+  </div>
+
+  <!-- Barra de fases -->
+  <div class="eyebrow" style="margin-bottom:12px">Ruta por fases</div>
+  <div class="phasebar">
+    <div class="p done">
+      <div class="code">FASE 0</div><div class="nm">Diseño</div>
+      <div class="st">100% ✓ completa</div>
+    </div>
+    <div class="p current">
+      <div class="code">FASE 1</div><div class="nm">Motor y plataforma</div>
+      <div class="st">78% · en curso</div>
+      <div class="youare">◈ estás aquí</div>
+    </div>
+    <div class="p">
+      <div class="code">FASE 2</div><div class="nm">Ciclo de vida completo</div>
+      <div class="st">por hacer</div>
+    </div>
+    <div class="p">
+      <div class="code">FASE 3</div><div class="nm">Automatización y escala</div>
+      <div class="st">futuro</div>
+    </div>
+  </div>
+
+  <!-- FASE 0 -->
+  <section class="phase">
+    <div class="ph-head">
+      <div class="ph-num">FASE 0</div>
+      <div class="ph-title">
+        <h3>Diseño y fundaciones</h3>
+        <p>Decidir cómo se construye, con qué seguridad, y dejarlo documentado y versionado.</p>
+        <span class="ph-tag tag-done">Completa</span>
+      </div>
+      <div class="ph-status">
+        <div class="ph-pct" style="color:var(--done)">100%</div>
+        <div class="ph-bar"><span style="width:100%;background:var(--done)"></span></div>
+      </div>
+    </div>
+    <ul class="tasks">
+      <li class="tk-done"><span class="tk-ic">✔</span><span class="tk-txt">Arquitectura documentada — dorada + clon vmkfstools + govc + cloud-init</span></li>
+      <li class="tk-done"><span class="tk-ic">✔</span><span class="tk-txt">Modelo de seguridad de 5 capas</span><span class="tk-note">SEGURIDAD.md</span></li>
+      <li class="tk-done"><span class="tk-ic">✔</span><span class="tk-txt">Sabores de hosting.cl: Estándar, Empresas, Cyber Black</span></li>
+      <li class="tk-done"><span class="tk-ic">✔</span><span class="tk-txt">Redes definidas — pruebas 192.168.122.0/24 · producción 10.100.48.0/24</span></li>
+      <li class="tk-done"><span class="tk-ic">✔</span><span class="tk-txt">Repositorio en GitHub (privado)</span><span class="tk-note">alcalmx/Vps</span></li>
+    </ul>
+  </section>
+
+  <!-- FASE 1 -->
+  <section class="phase is-current">
+    <div class="ph-head">
+      <div class="ph-num">FASE 1</div>
+      <div class="ph-title">
+        <h3>Motor y plataforma</h3>
+        <p>Construir el motor, prepararlo con seguridad en el ESXi y poder lanzarlo desde el dashboard viendo el proceso.</p>
+        <span class="ph-tag tag-prog">En curso · etapa intermedia</span>
+      </div>
+      <div class="ph-status">
+        <div class="ph-pct" style="color:var(--prog)">78%</div>
+        <div class="ph-bar"><span style="width:78%;background:var(--prog)"></span></div>
+      </div>
+    </div>
+    <ul class="tasks">
+      <li class="tk-done"><span class="tk-ic">✔</span><span class="tk-txt">Estructura en el ESXi — carpeta VPS/ (plantillas · papelera · bin)</span></li>
+      <li class="tk-done"><span class="tk-ic">✔</span><span class="tk-txt">Usuario API <span class="mono">svc-vps</span> con rol mínimo — verificado que no se auto-eleva</span></li>
+      <li class="tk-done"><span class="tk-ic">✔</span><span class="tk-txt">Wrapper SSH restringido — probado (rechaza shell y rutas fuera de VPS/)</span></li>
+      <li class="tk-done"><span class="tk-ic">✔</span><span class="tk-txt">Llaves dedicadas — acceso ESXi y llave de gestión</span></li>
+      <li class="tk-done"><span class="tk-ic">✔</span><span class="tk-txt">Motor <span class="mono">vps-engine</span> desplegado — jobs con pasos, registro SQLite</span></li>
+      <li class="tk-done"><span class="tk-ic">✔</span><span class="tk-txt">Sección “VPS” en el dashboard NOC — panel de progreso en vivo</span></li>
+      <li class="tk-done"><span class="tk-ic">✔</span><span class="tk-txt">Internet en la red de pruebas</span><span class="tk-note">solo pruebas</span></li>
+      <li class="tk-prog"><span class="tk-ic">◐</span><span class="tk-txt">Plantilla dorada AlmaLinux 9.7 — reconstruyendo con repos online</span><span class="tk-chip chip-prog">en curso</span></li>
+      <li class="tk-prog"><span class="tk-ic">◐</span><span class="tk-txt">Primera creación de prueba end-to-end — validar personalización cloud-init</span><span class="tk-chip chip-prog">siguiente</span></li>
+    </ul>
+  </section>
+
+  <!-- FASE 2 -->
+  <section class="phase">
+    <div class="ph-head">
+      <div class="ph-num">FASE 2</div>
+      <div class="ph-title">
+        <h3>Ciclo de vida completo</h3>
+        <p>Probar y afinar las cuatro operaciones y enlazar la entrega de credenciales al cliente.</p>
+        <span class="ph-tag tag-pend">Por hacer</span>
+      </div>
+      <div class="ph-status">
+        <div class="ph-pct" style="color:var(--pend)">0%</div>
+        <div class="ph-bar"><span style="width:0%"></span></div>
+      </div>
+    </div>
+    <ul class="tasks">
+      <li class="tk-pend"><span class="tk-ic">○</span><span class="tk-txt">Crear validado end-to-end, incluyendo instalación de cPanel</span></li>
+      <li class="tk-pend"><span class="tk-ic">○</span><span class="tk-txt">Eliminar — a papelera con retención de 7 días</span></li>
+      <li class="tk-pend"><span class="tk-ic">○</span><span class="tk-txt">Suspender / reanudar cliente</span></li>
+      <li class="tk-pend"><span class="tk-ic">○</span><span class="tk-txt">Editar plan — CPU, RAM y crecer disco</span></li>
+      <li class="tk-pend"><span class="tk-ic">○</span><span class="tk-txt">Encadenar con securización + bóveda — llave del cliente a Vaultwarden</span></li>
+      <li class="tk-pend"><span class="tk-ic">○</span><span class="tk-txt">Notificaciones y auditoría afinadas</span></li>
+    </ul>
+  </section>
+
+  <!-- FASE 3 -->
+  <section class="phase">
+    <div class="ph-head">
+      <div class="ph-num">FASE 3</div>
+      <div class="ph-title">
+        <h3>Automatización y escala</h3>
+        <p>Que el alta de un servicio dispare la creación sola, y crecer a varios hosts y marcas.</p>
+        <span class="ph-tag tag-pend">Futuro</span>
+      </div>
+      <div class="ph-status">
+        <div class="ph-pct" style="color:var(--pend)">0%</div>
+        <div class="ph-bar"><span style="width:0%"></span></div>
+      </div>
+    </div>
+    <ul class="tasks">
+      <li class="tk-pend"><span class="tk-ic">○</span><span class="tk-txt">WHMCS → creación automática al contratar un servicio</span></li>
+      <li class="tk-pend"><span class="tk-ic">○</span><span class="tk-txt">NetBox IPAM — reserva automática de IP</span></li>
+      <li class="tk-pend"><span class="tk-ic">○</span><span class="tk-txt">Multi-host + doradas distribuidas (una construcción, se reparte)</span></li>
+      <li class="tk-pend"><span class="tk-ic">○</span><span class="tk-txt">Multi-marca — Planeta Hosting y otras</span></li>
+      <li class="tk-pend"><span class="tk-ic">○</span><span class="tk-txt">Cupos de recursos por host</span></li>
+      <li class="tk-pend"><span class="tk-ic">○</span><span class="tk-txt">Biblioteca de ISOs centralizada (NFS)</span></li>
+    </ul>
+  </section>
+
+  <div class="legend">
+    <span><i style="color:var(--done)">✔</i> completado</span>
+    <span><i style="color:var(--prog)">◐</i> en curso</span>
+    <span><i style="color:var(--pend)">○</i> por hacer</span>
+    <span><i style="color:var(--user)">◆</i> requiere al usuario</span>
+  </div>
+
+  <footer>
+    <div class="row">
+      <span>REPO · github.com/alcalmx/Vps</span>
+      <span>HOST PRUEBAS · 10.100.37.245</span>
+      <span>MOTOR · noc-monitor:8224</span>
+      <span>ACTUALIZADO · 2026-09-10</span>
+    </div>
+  </footer>
+
+</div>

@@ -5,6 +5,41 @@
 
 ---
 
+## 2026-09-10 (jueves, tarde-7) — Dorada OK, red estática resuelta, tablero web en la red interna
+
+**Dorada v3 (repos online) — CONSTRUIDA OK:** el ISO minimal NO trae cloud-init/open-vm-tools
+(2º intento se detuvo en "missing packages"). Fix: `repo --name=... --baseurl=` online en el
+kickstart → anaconda instaló 374 paquetes (incl. open-vm-tools y cloud-init). Sellada y apagada.
+
+**Tablero web del proyecto (pedido del usuario) — en la RED INTERNA:**
+- `docs/tablero.html`: fases + avance con diseño (consola NOC oscuro / blueprint claro).
+- Servido por nginx de noc-monitor: **https://noc.hosting.cl/vps** (patrón de /informe /guia;
+  location = /vps → alias /usr/share/nginx/html/vps-tablero.html). Backup de dashboard.conf.
+  Publicado también como artifact de Claude (privado). Se actualiza re-subiendo el HTML.
+
+**2ª y 3ª prueba E2E — cloud-init SÍ personaliza, faltaba la red estática:**
+- La dorada nueva SÍ trae cloud-init: el clon aplicó **hostname** (demo1.hosting.cl), usuarios,
+  llave y SSH desde guestinfo (`DataSourceVMware [seed=guestinfo]`).
+- PERO la **IP estática no se aplicó**: el clon quedó con DHCP (192.168.121.169, no la
+  192.168.122.249 asignada). Causa raíz: en ESXi standalone el datasource VMware se detecta en
+  la etapa **"network"** (tras subir DHCP), así cloud-init NO re-aplica la red del metadata
+  (`extended_status: degraded`; el network-config.json TENÍA la config correcta pero la
+  nmconnection quedó en DHCP).
+- **Fix probado a mano y luego automatizado:** forzar la estática con **nmcli** vía
+  `write_files` + `runcmd` en el userdata (corre en cloud-final con NetworkManager arriba).
+  Manual en la VM viva: quedó en 192.168.122.249, SSH OK, **internet OK** (NAT del usuario).
+- Motor actualizado (`cloudinit_userdata` ahora recibe ip/pfx/gw/dns y escribe el script nmcli),
+  imagen reconstruida y `systemctl restart vps-engine`.
+
+**Red de pruebas:** el segmento "Switch Interno 1 Data ethr6" tiene DHCP que reparte 192.168.121.x;
+por eso el clon sin estática caía en 121.x. La /24 objetivo de pruebas es 192.168.122.0/24 (la que
+usa el buscador de IP libre). El usuario dio **internet a toda la 192.168.122.0/24** (solo pruebas;
+en producción el egress vendrá del NAT con la IP pública).
+
+**En curso:** 3ª prueba E2E (vps-hcl-0003) con cPanel — validando que la estática ahora entra sola.
+
+---
+
 ## 2026-09-10 (jueves, tarde-6) — DEPLOY completo + 1ª prueba E2E (falla útil) + fix dorada
 
 **Autorizado por el usuario ("ok haslo"): deploy a producción de motor y dashboard.**

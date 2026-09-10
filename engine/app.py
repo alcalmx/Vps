@@ -279,21 +279,39 @@ def cloudinit_metadata(nombre, hostname, ip, prefijo, gateway, dns):
     }
     return json.dumps(md)
 
-def cloudinit_userdata(hostname):
+def cloudinit_userdata(hostname, ip, prefijo, gateway, dns):
+    # El datasource VMware en ESXi standalone suele detectarse en la etapa
+    # "network" (después de que la NIC ya subió por DHCP), así que cloud-init
+    # NO aplica la red estática del metadata. La forzamos determinísticamente
+    # con nmcli (script en write_files → runcmd, corre con NetworkManager arriba).
+    dns_str = " ".join(dns)
     return """#cloud-config
-hostname: %s
+hostname: %(host)s
 disable_root: false
 ssh_pwauth: false
 users:
   - name: root
     ssh_authorized_keys:
-      - %s
+      - %(pub)s
 growpart:
   mode: auto
   devices: ['/']
+write_files:
+  - path: /usr/local/sbin/vps-netcfg.sh
+    permissions: '0755'
+    content: |
+      #!/bin/bash
+      DEV=$(nmcli -t -f DEVICE,TYPE dev status | awk -F: '$2=="ethernet"{print $1; exit}')
+      CON=$(nmcli -t -f NAME,DEVICE con show --active | awk -F: -v d="$DEV" '$2==d{print $1; exit}')
+      [ -z "$CON" ] && CON=$(nmcli -t -f NAME,DEVICE con show | awk -F: -v d="$DEV" '$2==d{print $1; exit}')
+      [ -z "$CON" ] && CON="$DEV"
+      nmcli con mod "$CON" ipv4.addresses %(ip)s/%(pfx)d ipv4.gateway %(gw)s ipv4.dns "%(dns)s" ipv4.method manual
+      nmcli con up "$CON"
 runcmd:
+  - [bash, /usr/local/sbin/vps-netcfg.sh]
   - [sh, -c, 'touch /var/lib/vps-engine.provisioned']
-""" % (hostname, MGMT_PUBKEY)
+""" % {"host": hostname, "pub": MGMT_PUBKEY, "ip": ip, "pfx": prefijo,
+       "gw": gateway, "dns": dns_str}
 
 # ── Helpers de dominio ───────────────────────────────────────────────────────
 VM_RE = re.compile(r"^vps-[a-z]{2,5}-[a-z0-9][a-z0-9-]{0,40}$")
@@ -434,7 +452,7 @@ def flujo_crear(job, marca, sabor_slug, cliente, hostname, instalar_cpanel):
     job.paso()
     fqdn = hostname if "." in hostname else "%s.%s" % (hostname, marca_cfg.get("dominio_hostname", marca))
     md = cloudinit_metadata(nombre, fqdn, ip, prefijo, red["gateway"], red["dns"])
-    ud = cloudinit_userdata(fqdn)
+    ud = cloudinit_userdata(fqdn, ip, prefijo, red["gateway"], red["dns"])
     govc("vm.change", "-vm", nombre,
          "-e", "guestinfo.metadata=%s" % _gz64(md),
          "-e", "guestinfo.metadata.encoding=gzip+base64",
