@@ -337,11 +337,16 @@ def set_estado(nombre, estado, **extra):
                   (estado, *extra.values(), nombre))
 
 def siguiente_nombre(marca_cfg, cliente):
+    # Numeración por MAX(sufijo)+1, no por COUNT: robusto ante borrados (si se
+    # borra una del medio, no se reutiliza su número ni colisiona con las vivas).
     pref = marca_cfg["prefijo_vm"]
+    rx = re.compile(r"^%s-(\d+)" % re.escape(pref))
     with DB_LOCK, db() as c:
-        n = c.execute("SELECT COUNT(*) c FROM vms WHERE nombre LIKE ?", (pref + "-%",)).fetchone()["c"]
+        nums = [int(m.group(1)) for r in c.execute("SELECT nombre FROM vms WHERE nombre LIKE ?",
+                (pref + "-%",)) for m in [rx.match(r["nombre"])] if m]
+    nxt = (max(nums) + 1) if nums else 1
     slug = re.sub(r"[^a-z0-9-]", "", (cliente or "").lower().replace(" ", "-"))[:20]
-    base = "%s-%04d" % (pref, n + 1)
+    base = "%s-%04d" % (pref, nxt)
     return ("%s-%s" % (base, slug)) if slug else base
 
 def red_activa(marca_cfg):
@@ -476,9 +481,11 @@ def flujo_crear(job, marca, sabor_slug, cliente, hostname, instalar_cpanel):
         job.detalle("esperando VMware Tools/IP… (%ds)" % int(time.time() - t0))
     if not ip_real:
         raise RuntimeError("la VM no reportó IP en 7 min — revisar consola en la UI de ESXi")
-    job.detalle("VM arriba con IP %s (esperada %s)" % (ip_real, ip))
-    if ip_real != ip:
-        job.detalle("⚠ IP reportada %s ≠ asignada %s (¿cloud-init no aplicó la red?)" % (ip_real, ip))
+    if ip_real == ip:
+        job.detalle("VM arriba con su IP estática %s" % ip)
+    else:
+        job.detalle("VM arriba (IP DHCP transitoria %s); la estática %s se fija al "
+                    "arranque y se confirma en el paso siguiente" % (ip_real, ip))
 
     # 11. verificar ssh
     job.paso()
