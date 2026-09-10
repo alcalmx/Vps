@@ -1,0 +1,24 @@
+{
+  "slug": "vps-estandar",
+  "marca": "hosting.cl",
+  "nombre_web": "VPS Estándar",
+  "vcpu": 4,
+  "ram_mb": 4096,
+  "disco_gb": 100,
+  "so_default": "almalinux9",
+  "red": {
+    "portgroup": null,
+    "nota": "null = usar el default de la marca (marcas/hosting.cl.json)"
+  },
+  "extras": {
+    "ips_adicionales": 0,
+    "backup_incluido": true,
+    "backup_frecuencia": "semanal-externo",
+    "cpanel_licencia_cuentas": 30,
+    "ssl_habilitado": true,
+    "cyberboost_activaciones_anio": 0
+  },
+  "precio_ref_clp": 99900,
+  "activo": true,
+  "notas": "Web 2026-09: $99.900 +IVA/mes · $1.018.980 +IVA/1 año (-8%) · $1.798.200 +IVA/2 años (-25%). Incluye 30 Licencia cPanel, setup gratis, backups externos semanales, 1 IP, certificado SSL."
+}

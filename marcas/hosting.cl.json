@@ -1,0 +1,20 @@
+{
+  "marca": "hosting.cl",
+  "prefijo_vm": "vps-hcl",
+  "activo": true,
+  "red_default": {
+    "subred": "10.100.48.0/24",
+    "gateway": "10.100.48.1",
+    "mascara": "255.255.255.0",
+    "dns": ["1.1.1.1", "8.8.8.8"],
+    "portgroup": null,
+    "nota": "Subred definida por el usuario 2026-09-10. Gateway .1 por convención del wizard de altas — confirmar. PENDIENTE: qué portgroup del ESXi transporta la 10.100.48.0/24 (candidato probable: 'Switch Interno 1 Data ethr6'; la gestión del host va en 10.100.37.x)."
+  },
+  "ip_libre": {
+    "metodo": "copiar del dashboard NOC /api/alta/privada (dashboard.py ~9336)",
+    "detalle": "SSH al MikroTik RouterData 172.16.1.90: '/ip firewall nat print terse' + '/ip arp print terse'; ocupadas = NAT ∪ ARP ∪ {.1}; se asigna el octeto libre más alto desde .254 hacia abajo.",
+    "red": "10.100.48"
+  },
+  "dominio_hostname": "hosting.cl",
+  "nota": "Sabores en sabores/hosting.cl/ (dictados de la web 2026-09-10: vps-estandar, vps-empresas, vps-cyber-black)."
+}

@@ -1,0 +1,24 @@
+{
+  "slug": "vps-cyber-black",
+  "marca": "hosting.cl",
+  "nombre_web": "VPS Cyber Black",
+  "vcpu": 6,
+  "ram_mb": 8192,
+  "disco_gb": 150,
+  "so_default": "almalinux9",
+  "red": {
+    "portgroup": null,
+    "nota": "null = usar el default de la marca (marcas/hosting.cl.json)"
+  },
+  "extras": {
+    "ips_adicionales": 0,
+    "backup_incluido": true,
+    "backup_frecuencia": "semanal-externo",
+    "cpanel_licencia_cuentas": 30,
+    "ssl_habilitado": true,
+    "cyberboost_activaciones_anio": 4
+  },
+  "precio_ref_clp": 179900,
+  "activo": true,
+  "notas": "Web 2026-09: $179.900 +IVA/mes · $1.834.980 +IVA/1 año (-8%) · $3.238.200 +IVA/2 años (-25%). Incluye 30 Licencia cPanel, setup gratis, backups externos semanales, 1 IP, SSL y CyberBoost (4 activaciones al año)."
+}
