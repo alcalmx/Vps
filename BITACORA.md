@@ -5,6 +5,29 @@
 
 ---
 
+## 2026-09-10 (jueves, tarde-5) — DORADA LISTA (construida 100 % desatendida)
+
+**dorada-almalinux9.7 terminada:** anaconda instaló solo con el kickstart OEMDRV
+(~22 min incl. dnf de cloud-init/open-vm-tools en %post), reboot, `dorada-seal`
+limpió identidad (machine-id, host keys, logs, cloud-init clean) y APAGÓ la VM
+sola — la señal de éxito del diseño. VM de construcción des-registrada del
+inventario: la dorada queda SOLO como directorio en `_plantillas/`
+(10 GB thin, **2.0 GB reales**). Nadie la puede encender por error.
+
+**Decisión documentada (conversada con el usuario):** doradas = **copia local en
+cada host** (el clon vmkfstools debe ser local para tardar segundos) con patrón
+"se construye una vez, se distribuye" (manifiesto de versión + checksum; copia a
+nuevos hosts vía wrapper). ISOs = centralizadas en NFS (se usan solo para
+construir doradas). Se activa al sumar el 2º host.
+
+**Estado: TODO listo para el deploy.** Pendiente SOLO del OK del usuario
+(producción noc-monitor):
+- [ ] Build imagen vps-engine + quadlet + start (127.0.0.1:8224)
+- [ ] Sección "VPS" en el dashboard NOC (docs/dashboard-integracion.md)
+- [ ] Prueba end-to-end: crear vps-hcl-0001 viendo el progreso en el dashboard
+
+---
+
 ## 2026-09-10 (jueves, tarde-4) — svc-vps con rol mínimo verificado + dorada CONSTRUYÉNDOSE
 
 **Cuenta y rol (usuario ejecutó 01 y 02; Claude completó lo que el head+pipefail cortó):**
