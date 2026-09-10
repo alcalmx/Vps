@@ -5,6 +5,40 @@
 
 ---
 
+## 2026-09-10 (jueves, tarde-4) — svc-vps con rol mínimo verificado + dorada CONSTRUYÉNDOSE
+
+**Cuenta y rol (usuario ejecutó 01 y 02; Claude completó lo que el head+pipefail cortó):**
+- `svc-vps` creado en el ESXi. El script 02 creó el rol pero ABORTÓ antes de aplicar
+  el permiso (bug: `head -5` + pipefail — corregido en el repo). Claude aplicó
+  `govc permissions.set svc-vps → VpsOperator` y verificó:
+  - `esxcli system permission list` → svc-vps = **Custom** (ya no Admin).
+  - Intento de auto-elevación (`permissions.set → Admin` como svc-vps) → **denegado** ✔
+  - Nota: leer info del host (p.ej. autostart.info) SÍ puede — es solo lectura
+    (System.Read implícito), no es hallazgo.
+- `engine.env` completado con `MGMT_PUBKEY`/`MGMT_PRIVKEY_PATH` de la nueva llave
+  **vps_engine_mgmt** (ed25519, generada en /opt/vps-engine/keys/ — el motor NO
+  reutiliza gestion_hosting porque esa privada tiene passphrase).
+
+**Dorada dorada-almalinux9.7 — construcción lanzada (en curso al cierre):**
+- ks.cfg real (IP temporal 192.168.122.239, pubkey del motor) → mini-ISO **OEMDRV**
+  generado EN EL VPS WINDOWS con IMAPI2FS/PowerShell (noc-monitor no tiene
+  genisoimage y no se quiso instalar software; script: scratchpad/make-oemdrv-iso.ps1,
+  técnica reutilizable).
+- ISO subido a `_plantillas/`; wrapper `mkdir-vm` + `create-disk 10` OK.
+- **Trampa vmx encontrada:** un vmx mínimo sin `pciBridge0/4-7` NO enciende
+  ("No PCIe slot available for SCSI0"). Fix: bloque estándar de pciBridges —
+  **agregado también al VMX_TEMPLATE del engine** (mismo bug aplicaba).
+- VM registrada y encendida con svc-vps (register/power.on del rol mínimo: funcionan).
+  Anaconda instala desatendido; al terminar reboot → dorada-seal limpia identidad y
+  APAGA. Monitor en background espera el poweredOff.
+
+**Siguiente al terminar la dorada:** unregister de la VM de construcción (queda solo
+el directorio con el vmdk en _plantillas/), build de la imagen vps-engine en
+noc-monitor + quadlet (pedir OK: deploy a producción), sección dashboard, prueba
+end-to-end vps-hcl-0001.
+
+---
+
 ## 2026-09-10 (jueves, tarde-3) — Código del motor completo + infra del ESXi preparada
 
 **Autorización del usuario:** construir la automatización de creación, lanzable desde

@@ -52,7 +52,8 @@ else
   govc role.create VpsOperator "${PRIVS[@]}"
   echo "Rol VpsOperator creado."
 fi
-govc role.ls VpsOperator | head -5
+# (sin head: con pipefail, head corta el pipe y aborta el script a mitad de camino)
+govc role.ls VpsOperator
 
 # ── Degradar svc-vps: Admin → VpsOperator (en la raíz del host, propagado) ──
 govc permissions.set -principal svc-vps -role VpsOperator -propagate=true /
