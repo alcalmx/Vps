@@ -30,4 +30,6 @@
 - Secretos solo en `/opt/vps-engine/engine.env` del server — jamás en el repo.
 - Documentar cada sesión en `BITACORA.md` (más reciente arriba).
 - Deploys a noc-monitor (producción): pedir OK explícito del usuario.
-- Cuando el repo tenga remoto en GitHub: commit + push tras cada cambio.
+- Repo remoto: **https://github.com/alcalmx/Vps.git** (privado) — commit + push tras
+  cada cambio. El workaround de DNS de GitHub ya está en la config del repo
+  (`http.curloptResolve=github.com:443:140.82.112.3`).
