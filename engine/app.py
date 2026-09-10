@@ -617,8 +617,13 @@ def auth():
 
 @app.route("/health")
 def health():
+    detalle = [{"marca": s["marca"], "slug": s["slug"], "nombre_web": s["nombre_web"],
+                "vcpu": s["vcpu"], "ram_mb": s["ram_mb"], "disco_gb": s["disco_gb"],
+                "activo": s.get("activo", True)} for s in SABORES.values()]
+    detalle.sort(key=lambda s: (s["marca"], s["slug"]))
     return jsonify({"ok": True, "modo": MODO,
-                    "marcas": sorted(MARCAS), "sabores": sorted("%s/%s" % k for k in SABORES)})
+                    "marcas": sorted(MARCAS), "sabores": sorted("%s/%s" % k for k in SABORES),
+                    "sabores_detalle": detalle})
 
 @app.route("/crear", methods=["POST"])
 def crear():

@@ -54,6 +54,19 @@ al final para que growpart crezca el disco de cada clon al tamaño del sabor.
 7. **Probar**: crear un VPS de prueba vía el engine (`POST /crear`) y verificar
    que el clon toma hostname/IP del cloud-init y que la llave de gestión entra.
 
+## ⚠️ Lección de la 1ª construcción (2026-09-10)
+
+- **cloud-init y open-vm-tools DEBEN ir en `%packages`, no en un `dnf` de `%post`.**
+  La VLAN de construcción (192.168.122.0/24) tiene NAT por whitelist de IP de origen
+  → una VM nueva no tiene salida a internet, el `dnf` del %post falla en silencio
+  (el %post usa `set -x`, no `set -e`) y la dorada queda SIN esos paquetes. El
+  síntoma: los clones arrancan con la identidad de la dorada (hostname `dorada`,
+  sin personalizar) porque no hay cloud-init que lea el guestinfo. Anaconda instala
+  `%packages` desde el repo del propio ISO → independiente de la red.
+- **Red DHCP en el kickstart, no IP estática**: si se hornea una IP, cada clon
+  arranca con ella hasta que cloud-init la cambia (y si cloud-init falla, se queda
+  pegado ahí). Con DHCP no hay identidad de red horneada.
+
 ## Notas
 
 - La dorada NO trae cPanel (decisión 2026-09-10: cPanel se instala post-creación,

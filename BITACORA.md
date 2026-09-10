@@ -5,6 +5,57 @@
 
 ---
 
+## 2026-09-10 (jueves, tarde-6) — DEPLOY completo + 1ª prueba E2E (falla útil) + fix dorada
+
+**Autorizado por el usuario ("ok haslo"): deploy a producción de motor y dashboard.**
+
+**Motor vps-engine desplegado en noc-monitor:**
+- Imagen construida (`podman build`), quadlet `vps-engine.container` (Network=host,
+  127.0.0.1:8224), servicio `active`. Fix menor: HealthCmd sin token (/health es
+  público). Smoke test: /health OK, sin token→401, sabor malo→400.
+- `engine.env` completado con MGMT_PUBKEY/MGMT_PRIVKEY (llave nueva `vps_engine_mgmt`
+  ed25519 — el motor no usa gestion_hosting por su passphrase). Endpoint /health
+  ahora expone `sabores_detalle` (para poblar los selects del dashboard).
+
+**Sección "VPS" en el dashboard NOC (patrón VpsClientes):**
+- dashboard.py: nav en Infra Lógica, página con 3 tabs (Crear con panel de progreso
+  en vivo por polling de /job cada 3 s, VPS gestionados con acciones, Jobs), rutas
+  `/api/vpseng/*` (proxy con ENGINE_TOKEN, actor = usuario de sesión), permiso
+  **`vps_engine`** en _ALL_PAGES/PROTECTED_PAGES/permPages + rol `noc`.
+  Backup: `dashboard.py.bak.20260910-141603`. Imagen `hosting-dashboard:v2`
+  reconstruida + `systemctl restart dashboard` (HTTP 302 OK).
+
+**1ª prueba E2E (crear vps-hcl-0001-test, cPanel off):** el pipeline MECÁNICO
+funcionó completo — IP libre (192.168.122.248), clon de la dorada, grow, vmx (con
+pciBridges), register, guestinfo, power on → **AlmaLinux 9.7 arrancó desde nuestra
+dorada** (visto en consola). PERO el job falló, VISIBLE, en el paso "Esperar IP por
+VMware Tools" (7 min) — justo la visibilidad que pidió el usuario.
+
+**Diagnóstico (SSH al clon con la llave de gestión):** la dorada quedó **SIN
+cloud-init ni open-vm-tools** → el clon no leyó su guestinfo (hostname siguió
+`dorada`, sin personalizar). Causa: el `dnf` del %post falló porque la VLAN
+192.168.122.0/24 tiene **NAT por whitelist de IP de origen** (noc-monitor .252 sí
+navega por el mismo gw .122.1, pero una VM nueva no está en la whitelist).
+
+**Fixes aplicados:**
+- Kickstart: cloud-init + open-vm-tools movidos a `%packages` (anaconda los instala
+  desde el ISO, sin depender de internet) y red a DHCP (sin IP baked). Documentado
+  en dorada/README.md.
+- **Dorada RECONSTRUIDA** con el fix (en curso al cierre).
+- Prueba limpiada (VM a papelera + registro/jobs limpiados).
+
+**Coordinación con el usuario:** va a **whitelistear en el MikroTik el rango
+192.168.122.240-254** para dar salida a internet a los VPS de prueba (necesario solo
+para el paso cPanel; el resto del flujo es local). El motor asigna las IPs de prueba
+de ese rango (de .254 hacia abajo).
+
+**Pendiente inmediato:**
+- [ ] Al terminar la dorada nueva: re-test crear (cPanel off) → debe personalizar OK
+- [ ] Con el NAT del usuario listo: test con cPanel on
+- [ ] Push del repo con todos los fixes
+
+---
+
 ## 2026-09-10 (jueves, tarde-5) — DORADA LISTA (construida 100 % desatendida)
 
 **dorada-almalinux9.7 terminada:** anaconda instaló solo con el kickstart OEMDRV
