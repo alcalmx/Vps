@@ -68,6 +68,30 @@ entrega:
 Si el campo va **vacío** → flujo gestionado de siempre (generar → bóveda → Send). Ambos
 modos conviven; con WHMCS, el campo del formulario del cliente alimentará esto mismo.
 
+## 📌 PENDIENTE de diseño — contraseña de WHM/cPanel en la entrega (anotado 2026-09-11)
+
+Los VPS nacen con root **sin contraseña** (bloqueada) y el SSH es solo-llave — pero **WHM
+entra con root + contraseña**, y el cliente típico no sabrá que debe crearla. Al armar la
+entrega final (WHMCS) hay que resolverlo. Opciones:
+
+**Dirección elegida (usuario 2026-09-11): la entrega INSTRUYE al cliente para que él
+configure su contraseña** — el mensaje/página de entrega debe incluir el paso explícito:
+
+> *"Para acceder a tu panel WHM: entra a tu VPS por SSH con tu llave y ejecuta
+> `passwd root` para definir tu contraseña. Luego ingresa en https://TU-IP:2087 con
+> usuario `root` y esa contraseña."*
+
+Así el cliente participa (define su propia clave, nadie más la conoce) y no custodiamos
+contraseñas. Al construir la entrega WHMCS, este texto va en el correo/área de cliente;
+en el panel de acceso del dashboard también se puede mostrar.
+
+Alternativas descartadas por ahora: generar nosotros la contraseña e incluirla en la
+entrega (custodia innecesaria), o forzar cambio al primer login de WHM (complejidad).
+Nota técnica: la contraseña NO habilita SSH por password (PasswordAuthentication no
+viene grabado de la dorada) — solo sirve para WHM/consola.
+
+Mientras tanto (pruebas/manual): `passwd root` por SSH y listo.
+
 ## Ciclo de vida de la credencial en la bóveda (política B — implementada 2026-09-11)
 
 - Al **crear** el VPS: se genera la llave, se guarda en la bóveda (`cliente-<nombre>`) y se
