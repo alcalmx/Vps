@@ -171,6 +171,33 @@
   .live .t{font-size:.92rem}
   .live .t b{font-family:var(--mono); font-weight:600}
 
+  /* ─────────── Requisitos del host ─────────── */
+  .hostreq{
+    border:1px solid var(--line); border-radius:16px; background:var(--panel);
+    margin:34px 0 20px; overflow:hidden; box-shadow:var(--shadow);
+  }
+  .hostreq-head{padding:20px 22px 14px; border-bottom:1px solid var(--line-soft); background:var(--panel-2)}
+  .hostreq-head h3{margin:0; font-size:1.22rem; letter-spacing:-.01em; font-weight:660}
+  .hostreq-head p{margin:5px 0 0; color:var(--muted); font-size:.9rem; max-width:70ch}
+  .hostreq .scroll{overflow-x:auto}
+  .hostreq table{width:100%; border-collapse:collapse; font-size:.88rem; min-width:640px}
+  .hostreq th{
+    text-align:left; font-family:var(--mono); font-size:.7rem; letter-spacing:.1em; text-transform:uppercase;
+    color:var(--muted); font-weight:600; padding:12px 14px; border-bottom:1px solid var(--line);
+  }
+  .hostreq td{padding:12px 14px; border-bottom:1px solid var(--line-soft); vertical-align:top}
+  .hostreq tr:last-child td{border-bottom:none}
+  .hostreq .comp{font-weight:600; white-space:nowrap}
+  .hostreq .comp .mono{font-weight:600; font-size:.82rem; color:var(--accent-deep); display:block; margin-top:2px}
+  .hostreq .scope{
+    font-family:var(--mono); font-size:.66rem; letter-spacing:.06em; text-transform:uppercase;
+    padding:2px 8px; border-radius:20px; white-space:nowrap; font-weight:600;
+  }
+  .scope-host{color:var(--prog); background:var(--prog-bg)}
+  .scope-once{color:var(--done); background:var(--done-bg)}
+  @media (prefers-color-scheme:dark){ :root:not([data-theme="light"]) .hostreq .comp .mono{color:var(--accent)} }
+  [data-theme="dark"] .hostreq .comp .mono{color:var(--accent)}
+
   /* ─────────── Pie ─────────── */
   footer{margin-top:44px; padding-top:22px; border-top:1px solid var(--line); color:var(--faint); font-size:.82rem}
   footer .row{display:flex; flex-wrap:wrap; gap:8px 24px; font-family:var(--mono)}
@@ -307,7 +334,7 @@
       <li class="tk-done"><span class="tk-ic">✔</span><span class="tk-txt">Arquitectura documentada — dorada + clon vmkfstools + govc + cloud-init</span></li>
       <li class="tk-done"><span class="tk-ic">✔</span><span class="tk-txt">Modelo de seguridad de 5 capas</span><span class="tk-note">SEGURIDAD.md</span></li>
       <li class="tk-done"><span class="tk-ic">✔</span><span class="tk-txt">Sabores de hosting.cl: Estándar, Empresas, Cyber Black</span></li>
-      <li class="tk-done"><span class="tk-ic">✔</span><span class="tk-txt">Redes definidas — pruebas 192.168.122.0/24 · producción 10.100.48.0/24</span></li>
+      <li class="tk-done"><span class="tk-ic">✔</span><span class="tk-txt">Redes definidas — pruebas 192.168.122.0/24 · producción <span class="mono">10.100.16.0/24</span> (Vps Hosting)</span></li>
       <li class="tk-done"><span class="tk-ic">✔</span><span class="tk-txt">Repositorio en GitHub (privado)</span><span class="tk-note">alcalmx/Vps</span></li>
     </ul>
   </section>
@@ -346,22 +373,22 @@
       <div class="ph-num">FASE 2</div>
       <div class="ph-title">
         <h3>Ciclo de vida completo</h3>
-        <p>Repetir el ciclo crear→borrar para ganar confianza, y luego probar y afinar las cuatro operaciones enlazando la entrega de credenciales al cliente.</p>
-        <span class="ph-tag tag-prog">En curso · validación en vivo</span>
+        <p>Completar las cuatro operaciones y enlazar la entrega de credenciales — probándolo ya sobre la <b>red de producción</b> (10.100.16.0/24) para validar creación + securización como en la vida real.</p>
+        <span class="ph-tag tag-prog">En curso</span>
       </div>
       <div class="ph-status">
-        <div class="ph-pct" style="color:var(--prog)">10%</div>
-        <div class="ph-bar"><span style="width:10%;background:var(--prog)"></span></div>
+        <div class="ph-pct" style="color:var(--prog)">30%</div>
+        <div class="ph-bar"><span style="width:30%;background:var(--prog)"></span></div>
       </div>
     </div>
     <ul class="tasks">
-      <li class="tk-prog"><span class="tk-ic">◐</span><span class="tk-txt">Repetir crear→borrar varias veces desde el dashboard — observar el flujo</span><span class="tk-chip chip-prog">en curso</span></li>
       <li class="tk-done"><span class="tk-ic">✔</span><span class="tk-txt">Crear validado end-to-end, incluyendo cPanel</span></li>
-      <li class="tk-pend"><span class="tk-ic">○</span><span class="tk-txt">Eliminar — a papelera con retención de 7 días</span></li>
-      <li class="tk-pend"><span class="tk-ic">○</span><span class="tk-txt">Suspender / reanudar cliente</span></li>
-      <li class="tk-pend"><span class="tk-ic">○</span><span class="tk-txt">Editar plan — CPU, RAM y crecer disco</span></li>
-      <li class="tk-pend"><span class="tk-ic">○</span><span class="tk-txt">Encadenar con securización + bóveda — llave del cliente a Vaultwarden</span></li>
-      <li class="tk-pend"><span class="tk-ic">○</span><span class="tk-txt">Notificaciones y auditoría afinadas</span></li>
+      <li class="tk-done"><span class="tk-ic">✔</span><span class="tk-txt">Eliminar — a papelera con retención de 7 días</span><span class="tk-note">validado (0004 · 0005)</span></li>
+      <li class="tk-prog"><span class="tk-ic">◐</span><span class="tk-txt">Pasar a la red de producción 10.100.16.0/24 — cable directo al switch del rack</span><span class="tk-chip chip-prog">en curso</span></li>
+      <li class="tk-pend"><span class="tk-ic">①</span><span class="tk-txt"><b>Encadenar securización + bóveda</b> — llave del cliente a Vaultwarden (Bitwarden Send)</span><span class="tk-chip chip-prog">próximo</span></li>
+      <li class="tk-pend"><span class="tk-ic">②</span><span class="tk-txt">Suspender / reanudar cliente</span></li>
+      <li class="tk-pend"><span class="tk-ic">③</span><span class="tk-txt">Editar plan — CPU y RAM (crecer disco)</span></li>
+      <li class="tk-pend"><span class="tk-ic">④</span><span class="tk-txt">Notificaciones y auditoría afinadas</span></li>
     </ul>
   </section>
 
@@ -389,11 +416,84 @@
     </ul>
   </section>
 
+  <!-- Requisitos del host -->
+  <div class="hostreq">
+    <div class="hostreq-head">
+      <h3>Qué necesita un host VMware para este flujo</h3>
+      <p>Checklist de puesta en marcha: lo que debe tener un ESXi para que el motor pueda crear y gestionar
+        VPS ahí. Cuando sumes un host nuevo, esto es lo que hay que dejarle listo. La columna
+        <b>alcance</b> distingue lo que va en <b>cada host</b> de lo que se hace <b>una sola vez</b> (por SO/marca).</p>
+    </div>
+    <div class="scroll">
+      <table>
+        <thead>
+          <tr><th>Componente</th><th>Qué es / para qué sirve</th><th>Dónde vive</th><th>Alcance</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td class="comp">Estructura de carpetas<span class="mono">VPS/ _plantillas _papelera _bin</span></td>
+            <td>El árbol donde el sistema crea, guarda plantillas y manda a papelera. Todo opera solo aquí dentro.</td>
+            <td>Datastore del host</td>
+            <td><span class="scope scope-host">por host</span></td>
+          </tr>
+          <tr>
+            <td class="comp">ISO de instalación<span class="mono">AlmaLinux 9.x minimal</span></td>
+            <td>Base para <b>construir la dorada</b> (con repos online para cloud-init + open-vm-tools). Solo se usa al fabricar la plantilla, no en cada VPS.</td>
+            <td>Datastore (puede ser central)</td>
+            <td><span class="scope scope-once">1 vez / SO</span></td>
+          </tr>
+          <tr>
+            <td class="comp">Plantilla dorada<span class="mono">dorada-almalinux9.7</span></td>
+            <td>Imagen maestra de la que se clonan todos los VPS: AlmaLinux sellada con cloud-init, open-vm-tools, llave de gestión y sshd endurecido. El clon es local, por eso vive en cada host.</td>
+            <td><span class="mono">_plantillas/</span> del host</td>
+            <td><span class="scope scope-host">por host</span></td>
+          </tr>
+          <tr>
+            <td class="comp">Wrapper SSH<span class="mono">vps-wrapper.sh</span></td>
+            <td>Único punto de entrada SSH del motor al host. Whitelist de subcomandos (clonar, crecer, papelera) y valida que toda ruta esté bajo VPS/.</td>
+            <td><span class="mono">_bin/</span> del host</td>
+            <td><span class="scope scope-host">por host</span></td>
+          </tr>
+          <tr>
+            <td class="comp">Llave del wrapper<span class="mono">en authorized_keys</span></td>
+            <td>La pública del motor instalada con <span class="mono">command=</span> forzado al wrapper — sin shell libre aunque se filtre.</td>
+            <td>authorized_keys de root del host</td>
+            <td><span class="scope scope-host">por host</span></td>
+          </tr>
+          <tr>
+            <td class="comp">Usuario API + rol<span class="mono">svc-vps · VpsOperator</span></td>
+            <td>Cuenta con permisos mínimos de VM para la API (crear/config/power/registrar). Sin acceso de host ni root. El motor nunca usa root.</td>
+            <td>ESXi / vCenter</td>
+            <td><span class="scope scope-host">por host</span></td>
+          </tr>
+          <tr>
+            <td class="comp">Portgroup de la red VPS</td>
+            <td>El grupo de puertos que transporta la VLAN donde viven los VPS. Producción: <span class="mono">10.100.16.0/24</span> (Vps Hosting).</td>
+            <td>Red del host (vSwitch)</td>
+            <td><span class="scope scope-host">por host</span></td>
+          </tr>
+          <tr>
+            <td class="comp">Conectividad y salida</td>
+            <td>El host debe alcanzar la red de los VPS y el MikroTik (IP libre + NAT). Los VPS necesitan salida a internet para cPanel y la securización (en producción, vía el NAT de su IP pública).</td>
+            <td>Cableado / VLAN / NAT</td>
+            <td><span class="scope scope-host">por host</span></td>
+          </tr>
+          <tr>
+            <td class="comp">Recursos suficientes</td>
+            <td>CPU, RAM y disco libres en el datastore para los sabores que se creen (ej. Cyber Black = 6 vCPU / 8 GB / 150 GB).</td>
+            <td>Hardware del host</td>
+            <td><span class="scope scope-host">por host</span></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
   <div class="legend">
     <span><i style="color:var(--done)">✔</i> completado</span>
     <span><i style="color:var(--prog)">◐</i> en curso</span>
     <span><i style="color:var(--pend)">○</i> por hacer</span>
-    <span><i style="color:var(--user)">◆</i> requiere al usuario</span>
+    <span><i style="color:var(--prog)">①②③</i> orden de prioridad</span>
   </div>
 
   <footer>
@@ -401,7 +501,7 @@
       <span>REPO · github.com/alcalmx/Vps</span>
       <span>HOST PRUEBAS · 10.100.37.245</span>
       <span>MOTOR · noc-monitor:8224</span>
-      <span>ACTUALIZADO · 2026-09-10</span>
+      <span>ACTUALIZADO · 2026-09-11</span>
     </div>
   </footer>
 

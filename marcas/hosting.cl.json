@@ -3,12 +3,12 @@
   "prefijo_vm": "vps-hcl",
   "activo": true,
   "red_default": {
-    "subred": "10.100.48.0/24",
-    "gateway": "10.100.48.1",
+    "subred": "10.100.16.0/24",
+    "gateway": "10.100.16.1",
     "mascara": "255.255.255.0",
     "dns": ["1.1.1.1", "8.8.8.8"],
     "portgroup": null,
-    "nota": "Red de PRODUCCIÓN (usuario 2026-09-10): se usará cuando creemos VPS reales en un host VMware real; está en una VLAN que NO llega al host de pruebas. PENDIENTE: portgroup del host de producción."
+    "nota": "Red de PRODUCCIÓN 'Vps Hosting' (usuario 2026-09-11): AQUÍ deben quedar los VPS reales de los 3 sabores. Reemplaza a la 10.100.48.0/24 que se manejó antes. El usuario conectará el host de pruebas por cable directo al switch del rack1 para alcanzar esta VLAN y probar creación + securización con red real. PENDIENTE: crear/identificar el portgroup del ESXi que transporta la 10.100.16.0/24 y confirmar gateway .1."
   },
   "red_pruebas": {
     "subred": "192.168.122.0/24",
