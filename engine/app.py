@@ -931,38 +931,83 @@ def flujo_eliminar(job):
     job.ok("VPS %s en papelera (%s) — Send cerrado; la llave sigue en la bóveda hasta la purga (7 días)" % (job.vm, entrada))
 
 def flujo_editar(job, sabor_slug):
+    """Upgrade de plan (sabor) — SOLO hacia arriba (decisión 2026-09-11) y EN CALIENTE:
+    CPU/RAM suben por hot-add (la dorada trae vcpu/mem.hotadd) y el disco solo crece;
+    el filesystem se expande por SSH sin reiniciar. Cero corte para el cliente."""
     vm = guardarraices(job.vm)
     sabor = SABORES[(vm["marca"], sabor_slug)]
+
+    # 1. validar que sea estrictamente un upgrade
     job.paso()
+    if sabor_slug == vm["sabor"]:
+        job.ok("la VM ya tiene el plan %s — nada que cambiar" % sabor_slug)
+        return
+    bajas = []
+    if sabor["vcpu"] < vm["vcpu"]:
+        bajas.append("vCPU %d→%d" % (vm["vcpu"], sabor["vcpu"]))
+    if sabor["ram_mb"] < vm["ram_mb"]:
+        bajas.append("RAM %d→%d MB" % (vm["ram_mb"], sabor["ram_mb"]))
+    if sabor["disco_gb"] < vm["disco_gb"]:
+        bajas.append("disco %d→%d GB" % (vm["disco_gb"], sabor["disco_gb"]))
+    if bajas:
+        raise RuntimeError("el cambio a %s implica BAJAR recursos (%s) — solo se permiten upgrades"
+                           % (sabor_slug, ", ".join(bajas)))
     cambios = []
-    if sabor["vcpu"] != vm["vcpu"]:
+    if sabor["vcpu"] > vm["vcpu"]:
         cambios.append("vCPU %d→%d" % (vm["vcpu"], sabor["vcpu"]))
-    if sabor["ram_mb"] != vm["ram_mb"]:
+    if sabor["ram_mb"] > vm["ram_mb"]:
         cambios.append("RAM %d→%d MB" % (vm["ram_mb"], sabor["ram_mb"]))
     crecer = sabor["disco_gb"] > vm["disco_gb"]
     if crecer:
         cambios.append("disco %d→%d GB" % (vm["disco_gb"], sabor["disco_gb"]))
-    elif sabor["disco_gb"] < vm["disco_gb"]:
-        cambios.append("disco se MANTIENE en %d GB (nunca se achica)" % vm["disco_gb"])
     if not cambios:
-        job.ok("sin cambios: la VM ya coincide con %s" % sabor_slug)
+        job.ok("el plan %s tiene los mismos recursos — solo se actualiza la etiqueta" % sabor_slug)
+        with DB_LOCK, db() as c:
+            c.execute("UPDATE vms SET sabor=? WHERE nombre=?", (sabor_slug, job.vm))
         return
-    job.paso("cambios: " + ", ".join(cambios))  # → apagar
-    encendida = power_state(job.vm) == "poweredOn"
-    if encendida:
-        apagar_graceful(job, job.vm)
-    job.paso("apagada" if encendida else "ya estaba apagada")  # → aplicar
-    govc("vm.change", "-vm", job.vm, "-c", str(sabor["vcpu"]), "-m", str(sabor["ram_mb"]))
+    job.paso("upgrade validado: " + ", ".join(cambios))  # → aplicar CPU/RAM
+
+    # 2. CPU/RAM en caliente (hot-add; funciona también apagada)
+    if sabor["vcpu"] > vm["vcpu"] or sabor["ram_mb"] > vm["ram_mb"]:
+        govc("vm.change", "-vm", job.vm, "-c", str(sabor["vcpu"]), "-m", str(sabor["ram_mb"]))
+        job.detalle("CPU/RAM aplicados en caliente (hot-add), sin reinicio")
+    else:
+        job.detalle("CPU/RAM sin cambios")
+    job.paso()  # → crecer disco
+
+    # 3. disco: crecer el vmdk + expandir el filesystem del guest por SSH (sin boot)
     if crecer:
         esxi_ssh("grow-disk %s %d" % (job.vm, sabor["disco_gb"]))
-    job.paso("aplicado")  # → encender
-    if encendida or vm["estado"] == "activo":
-        govc("vm.power", "-on", job.vm)
-    disco_final = sabor["disco_gb"] if crecer else vm["disco_gb"]
-    set_estado(job.vm, vm["estado"], vcpu=sabor["vcpu"], ram_mb=sabor["ram_mb"], disco_gb=disco_final)
+        job.detalle("vmdk extendido a %d GB; expandiendo el filesystem…" % sabor["disco_gb"])
+        if MGMT_PRIVKEY_PATH and vm.get("ip") and power_state(job.vm) == "poweredOn":
+            try:
+                cli = paramiko.SSHClient()
+                cli.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+                cli.connect(vm["ip"], username="root", key_filename=MGMT_PRIVKEY_PATH,
+                            timeout=15, allow_agent=False, look_for_keys=False)
+                script = ("echo 1 > /sys/class/block/sda/device/rescan; "
+                          "PART=$(lsblk -no NAME,MOUNTPOINT /dev/sda | awk '$2==\"/\"{print $1}' | tr -dc '0-9'); "
+                          "growpart /dev/sda ${PART:-3}; "
+                          "xfs_growfs / 2>/dev/null || resize2fs /dev/sda${PART:-3}; "
+                          "df -h / | tail -1")
+                _, out, _ = cli.exec_command(script, timeout=60)
+                salida = out.read().decode().strip().splitlines()
+                cli.close()
+                job.detalle("filesystem expandido en caliente: %s" % (salida[-1] if salida else "ok"))
+            except Exception as e:  # noqa: BLE001 — growpart de cloud-init lo toma al próximo boot
+                job.detalle("vmdk crecido; no se pudo expandir el FS por SSH (%s) — se expandirá al próximo reinicio"
+                            % str(e)[:100])
+        else:
+            job.detalle("vmdk crecido; el guest expandirá el FS al próximo arranque")
+    else:
+        job.detalle("disco sin cambios")
+    job.paso()  # → registrar
+
+    # 4. registrar
+    set_estado(job.vm, vm["estado"], vcpu=sabor["vcpu"], ram_mb=sabor["ram_mb"], disco_gb=sabor["disco_gb"])
     with DB_LOCK, db() as c:
         c.execute("UPDATE vms SET sabor=? WHERE nombre=?", (sabor_slug, job.vm))
-    job.ok("VPS %s ahora es %s (%s)" % (job.vm, sabor_slug, ", ".join(cambios)))
+    job.ok("VPS %s mejorado a %s (%s) — sin corte de servicio" % (job.vm, sabor_slug, ", ".join(cambios)))
 
 def flujo_purgar(job):
     job.paso()
@@ -1101,7 +1146,8 @@ def editar():
     if (reg["marca"], sabor) not in SABORES:
         return jsonify({"error": "sabor desconocido para la marca %s" % reg["marca"]}), 400
     job = Job("editar", vm, actor,
-              ["Calcular cambios de plan", "Apagar", "Aplicar CPU/RAM/disco", "Encender"])
+              ["Validar upgrade de plan (solo hacia arriba)", "Aplicar CPU/RAM en caliente",
+               "Crecer disco y expandir filesystem", "Actualizar registro"])
     run_job(job, lambda j: flujo_editar(j, sabor))
     return jsonify({"ok": True, "job_id": job.id})
 
