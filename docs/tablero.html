@@ -230,11 +230,11 @@
   <div class="live">
     <div class="dot"></div>
     <div class="t">
-      <b>Ahora mismo:</b> <b>flujo comercial validado de punta a punta en producción</b> —
-      se creó un VPS en 10.100.16.x con IP pública 38.19.57.102 + NAT 1:1 real, se securizó
-      (llave del cliente a la bóveda + Bitwarden Send) y se <b>inició sesión por SSH desde
-      afuera con la llave entregada</b>. Falta definir la entrega a clientes externos
-      (ver "Entrega de credenciales").
+      <b>Ahora mismo:</b> <b>las 4 operaciones del ciclo de vida están validadas en
+      producción</b> — crear (con IP pública/NAT + securización + login real), suspender/
+      reanudar (bloqueo de la pública), editar (upgrade en caliente Estándar→Cyber Black
+      sin corte) y eliminar (papelera + NAT y Send limpios). Dorada v4 reconstruyéndose
+      con el fix del disco (growpart). Quedan: notificaciones y la integración WHMCS.
     </div>
   </div>
 
@@ -378,8 +378,8 @@
         <span class="ph-tag tag-prog">En curso</span>
       </div>
       <div class="ph-status">
-        <div class="ph-pct" style="color:var(--prog)">70%</div>
-        <div class="ph-bar"><span style="width:70%;background:var(--prog)"></span></div>
+        <div class="ph-pct" style="color:var(--prog)">85%</div>
+        <div class="ph-bar"><span style="width:85%;background:var(--prog)"></span></div>
       </div>
     </div>
     <ul class="tasks">
@@ -390,9 +390,9 @@
       <li class="tk-done"><span class="tk-ic">✔</span><span class="tk-txt"><b>Securización + bóveda + entrega</b> — login por SSH desde afuera con la llave entregada ✓</span></li>
       <li class="tk-done"><span class="tk-ic">✔</span><span class="tk-txt">Entrega de credenciales — decidido: enlaces públicos del vault (subdominio + email); interim: descarga local</span><span class="tk-note">plan en docs</span></li>
       <li class="tk-done"><span class="tk-ic">✔</span><span class="tk-txt">Limpieza de la bóveda — Send se borra al eliminar, llave al purgar (política B)</span></li>
-      <li class="tk-prog"><span class="tk-ic">◐</span><span class="tk-txt">Suspender / reanudar — por bloqueo de IP pública (address-list); construido, falta probar E2E</span><span class="tk-chip chip-prog">a probar</span></li>
+      <li class="tk-done"><span class="tk-ic">✔</span><span class="tk-txt">Suspender / reanudar — bloqueo de IP pública (address-list) · validado por el usuario</span></li>
+      <li class="tk-done"><span class="tk-ic">✔</span><span class="tk-txt">Editar plan — solo upgrades, CPU/RAM en caliente + disco · validado (Estándar→Cyber Black sin corte)</span></li>
       <li class="tk-pend"><span class="tk-ic">○</span><span class="tk-txt">Aviso WHMCS + confirmación Telegram para suspender — decidido: esperar acceso a WHMCS</span><span class="tk-note">docs/suspension.md</span></li>
-      <li class="tk-pend"><span class="tk-ic">③</span><span class="tk-txt">Editar plan — CPU y RAM (crecer disco)</span></li>
       <li class="tk-pend"><span class="tk-ic">④</span><span class="tk-txt">Notificaciones y auditoría afinadas</span></li>
       <li class="tk-pend"><span class="tk-ic">○</span><span class="tk-txt">Conectar el motor al vCenter — que el borrado no deje huérfanos (hoy se quitan a mano)</span><span class="tk-note">requiere cuenta vCenter</span></li>
     </ul>
