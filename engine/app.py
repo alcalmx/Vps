@@ -977,7 +977,13 @@ def flujo_editar(job, sabor_slug):
 
     # 3. disco: crecer el vmdk + expandir el filesystem del guest por SSH (sin boot)
     if crecer:
-        esxi_ssh("grow-disk %s %d" % (job.vm, sabor["disco_gb"]))
+        if power_state(job.vm) == "poweredOn":
+            # VM encendida: vmkfstools no puede (archivo lockeado) → hot-extend por API
+            govc("vm.disk.change", "-vm", job.vm, "-disk.filePath",
+                 "[%s] VPS/%s/%s.vmdk" % (DATASTORE, job.vm, job.vm),
+                 "-size", "%dG" % sabor["disco_gb"])
+        else:
+            esxi_ssh("grow-disk %s %d" % (job.vm, sabor["disco_gb"]))
         job.detalle("vmdk extendido a %d GB; expandiendo el filesystem…" % sabor["disco_gb"])
         if MGMT_PRIVKEY_PATH and vm.get("ip") and power_state(job.vm) == "poweredOn":
             try:
