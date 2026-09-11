@@ -230,11 +230,11 @@
   <div class="live">
     <div class="dot"></div>
     <div class="t">
-      <b>Ahora mismo:</b> <b>las 4 operaciones del ciclo de vida están validadas en
-      producción</b> — crear (con IP pública/NAT + securización + login real), suspender/
-      reanudar (bloqueo de la pública), editar (upgrade en caliente Estándar→Cyber Black
-      sin corte) y eliminar (papelera + NAT y Send limpios). Dorada v4 reconstruyéndose
-      con el fix del disco (growpart). Quedan: notificaciones y la integración WHMCS.
+      <b>Ahora mismo:</b> las 4 operaciones del ciclo de vida están <b>validadas en
+      producción</b>. Dorada base v4 reconstruyéndose (fix del disco/growpart); al
+      validarla el usuario con un flujo completo, se fabrica la <b>dorada con cPanel
+      preinstalado</b> (entrega con panel en ~7 min). El formulario ahora permite
+      <b>elegir la plantilla</b> (sin/con cPanel).
     </div>
   </div>
 
@@ -392,6 +392,7 @@
       <li class="tk-done"><span class="tk-ic">✔</span><span class="tk-txt">Limpieza de la bóveda — Send se borra al eliminar, llave al purgar (política B)</span></li>
       <li class="tk-done"><span class="tk-ic">✔</span><span class="tk-txt">Suspender / reanudar — bloqueo de IP pública (address-list) · validado por el usuario</span></li>
       <li class="tk-done"><span class="tk-ic">✔</span><span class="tk-txt">Editar plan — solo upgrades, CPU/RAM en caliente + disco · validado (Estándar→Cyber Black sin corte)</span></li>
+      <li class="tk-prog"><span class="tk-ic">◐</span><span class="tk-txt">Catálogo de doradas: 2 por SO (base y con cPanel) — base v4 reconstruyéndose; variante cPanel se fabrica tras validar el flujo</span><span class="tk-chip chip-prog">en curso</span></li>
       <li class="tk-pend"><span class="tk-ic">○</span><span class="tk-txt">Aviso WHMCS + confirmación Telegram para suspender — decidido: esperar acceso a WHMCS</span><span class="tk-note">docs/suspension.md</span></li>
       <li class="tk-pend"><span class="tk-ic">④</span><span class="tk-txt">Notificaciones y auditoría afinadas</span></li>
       <li class="tk-pend"><span class="tk-ic">○</span><span class="tk-txt">Conectar el motor al vCenter — que el borrado no deje huérfanos (hoy se quitan a mano)</span><span class="tk-note">requiere cuenta vCenter</span></li>
@@ -449,8 +450,8 @@
             <td><span class="scope scope-once">1 vez / SO</span></td>
           </tr>
           <tr>
-            <td class="comp">Plantilla dorada<span class="mono">dorada-almalinux9.7</span></td>
-            <td>Imagen maestra de la que se clonan todos los VPS: AlmaLinux sellada con cloud-init, open-vm-tools, llave de gestión y sshd endurecido. El clon es local, por eso vive en cada host.</td>
+            <td class="comp">Plantillas doradas (par por SO)<span class="mono">dorada-&lt;so&gt; · dorada-&lt;so&gt;-cpanel</span></td>
+            <td>Imágenes maestras de las que se clonan los VPS: 2 por versión de SO — la base (cloud-init, open-vm-tools, growpart, llave de gestión, sshd endurecido) y la variante con cPanel preinstalado (entrega con panel en ~7 min). Se refrescan ~mensual (fábrica automatizada); los clones se auto-actualizan (upcp).</td>
             <td><span class="mono">_plantillas/</span> del host</td>
             <td><span class="scope scope-host">por host</span></td>
           </tr>
