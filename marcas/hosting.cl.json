@@ -24,7 +24,8 @@
     "metodo": "copiar del dashboard NOC /api/alta/privada (dashboard.py ~9336)",
     "detalle": "SSH al MikroTik RouterData 172.16.1.90: '/ip firewall nat print terse' + '/ip arp print terse'; en_nat = octetos con regla src-address=10.100.16.X; en_arp = octetos VIVOS en ARP (los 'failed' se consideran libres); ocupadas = en_nat ∪ en_arp ∪ {.1 gateway}; se asigna el octeto libre más ALTO desde .254 hacia abajo. Es el mismo criterio de 'Alta de Servicios' del NOC.",
     "red": "10.100.16",
-    "PENDIENTE_ENGINE": "El motor hoy usa ip_libre_pruebas (barrido ping/ARP local desde noc-monitor, válido solo para 192.168.122.x). Para PRODUCCIÓN hay que implementar ip_libre_produccion con el método MikroTik de arriba (noc-monitor no alcanza la 10.100.16.x por ping). Parte del switch a modo producción."
+    "donde_corre": "El motor vive en noc-monitor. Verificado 2026-09-11: noc-monitor ALCANZA RouterData (172.16.1.90), la red de VPS producción (10.100.16.1 responde, ruta vía su gateway) y el ESXi. Es el 'control plane' y llega a todo lo necesario.",
+    "PENDIENTE_ENGINE": "El motor hoy usa ip_libre_pruebas (barrido ping local, para 192.168.122.x). Para PRODUCCIÓN hay que implementar ip_libre_produccion con el método MikroTik (consultar NAT+ARP a RouterData). Se prefiere sobre ping NO por alcance (noc-monitor sí llega) sino por CORRECCIÓN: la tabla NAT detecta IPs reservadas-pero-apagadas que un ping se saltaría. Parte del switch a modo producción."
   },
   "ip_publica_nat": {
     "metodo": "copiar del dashboard NOC /api/alta/publica (~9365) y /api/alta/crear (~9414)",
