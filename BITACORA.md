@@ -5,6 +5,44 @@
 
 ---
 
+## 2026-09-11 (viernes, tarde-2) — Flujo entero validado por el usuario + catálogo de doradas completo + Editar v2
+
+**El usuario probó el flujo COMPLETO solo, desde el dashboard (vps-hcl-0010-prueba5):**
+crear (nació con disco 97G correcto — dorada v4 certificada) → login por pública →
+**editar** Estándar→Empresas (RAM caliente + disco a 147G) → suspender → reanudar →
+eliminar. **5/5 en verde, MikroTik limpio.** Bugs cazados en el camino y corregidos:
+vmkfstools bloqueado con VM encendida (→ hot-extend por API), el vCenter bloquea el
+hot-extend vía host (→ fallback apagar-crecer-encender), grow-disk no idempotente (→ fix),
+faltaba cloud-utils-growpart en la dorada (→ v4).
+
+**Catálogo de doradas COMPLETO (decisión: 2 por versión de SO):**
+- `dorada-almalinux9.7` v4 (2.9G) — base con growpart.
+- `dorada-almalinux9.7-cpanel` (7.1G) — **cPanel última versión preinstalado**, fabricada
+  hoy: clon de la base +40G → instalación desatendida (~35 min) → sellado especial
+  (limpia mainip/licencia; firstboot `cpanel-firstboot.service` corre mainipcheck +
+  build_cpnat + cpkeyclt en cada clon) → sellado SO → des-registrada.
+- Licenciamiento por IP documentado (trial en pruebas; pool de licencias en producción).
+- Política de mantenimiento: refresh ~mensual (~1 h desatendida); clones se auto-actualizan (upcp).
+- Motor: si el plan lleva cPanel clona la `-cpanel` (paso dice "PREINSTALADO"); fallback
+  post-instalación solo si no existe. Formulario: **selector de plantilla** (sin/con cPanel)
+  — el tilde viejo se quitó; nota de que al final la creación la disparará WHMCS y el
+  dashboard quedará solo de gestión.
+
+**Editar v2 (decisión del usuario: permitir downgrade sacrificando disco):**
+- UPGRADE: CPU/RAM hot-add + disco crece — sin corte.
+- DOWNGRADE: CPU/RAM bajan con reinicio breve (~1-2 min; no hay hot-remove).
+- El disco NUNCA se achica (corrompería el FS) — se mantiene y se explica.
+- Dashboard: panel de cambio de plan con selector y advertencias automáticas
+  (verde=caliente / amarillo=reinicio / gris=disco se mantiene). Reemplaza al prompt().
+
+**UX del dashboard:** botón copiar-nombre en la tabla, auto-refresco 30s de lista/jobs,
+fix de legibilidad del tema oscuro (overrides body.dark-theme para #page-vps_engine).
+
+**Pendiente:** el usuario prueba la creación "Con cPanel" (~7 min, WHM en :2087) y la
+demo del downgrade. Luego: ④ notificaciones, vCenter, WHMCS.
+
+---
+
 ## 2026-09-11 (viernes, tarde) — Suspender/reanudar por address-list (capa 1) + decisión WHMCS
 
 **Diseño conversado con el usuario.** Su práctica real de suspensión por no-pago NO es
