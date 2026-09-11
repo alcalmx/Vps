@@ -426,6 +426,49 @@
     </ul>
   </section>
 
+  <!-- Integración WHMCS: lo que viene -->
+  <div class="hostreq">
+    <div class="hostreq-head">
+      <h3>Integración WHMCS — el siguiente paso</h3>
+      <p><b>Hoy (manual, horas):</b> el cliente paga en la web → se crea su ficha en WHMCS →
+        Fabián crea el VPS → Alcadio configura la red → Fabián entrega credenciales.
+        <b>Mañana (automático, ~15 min):</b> pago confirmado → WHMCS llama al motor
+        (módulo de provisioning) → el motor crea todo (IP pública, NAT, cPanel, llave) →
+        la ficha se actualiza sola y el cliente recibe su correo de bienvenida con los accesos.
+        Los eventos de WHMCS mapean 1:1 con la API ya construida y validada:
+        pago→crear · mora→suspender · pagó→reanudar · upgrade→editar · cancela→eliminar.</p>
+    </div>
+    <div class="scroll">
+      <table>
+        <thead><tr><th>#</th><th>Qué pedir a Cristian (WHMCS)</th><th>Para qué</th></tr></thead>
+        <tbody>
+          <tr><td>1</td><td class="comp">Instalar el módulo conector<span class="mono">modules/servers/hostingcl_vps</span></td>
+            <td>El puente WHMCS→motor (lo escribimos nosotros). Ideal con un producto de PRUEBA sin pago real.</td></tr>
+          <tr><td>2</td><td class="comp">Credenciales API de WHMCS<span class="mono">API Identifier + Secret</span></td>
+            <td>Actualizar la ficha (IP dedicada, notas) y disparar el correo de bienvenida.</td></tr>
+          <tr><td>3</td><td class="comp">IDs de los productos VPS</td>
+            <td>Mapear producto WHMCS → sabor (Estándar/Empresas/Cyber Black) y confirmar activación automática al pagar.</td></tr>
+          <tr><td>4</td><td class="comp">Campo custom en el producto<span class="mono">"Llave pública SSH (opcional)"</span></td>
+            <td>Alimenta el modo BYO (el cliente trae su llave; no custodiamos nada).</td></tr>
+          <tr><td>5</td><td class="comp">Dónde está alojado el WHMCS</td>
+            <td>Definir el camino seguro WHMCS→motor: allowlist de IP + token dedicado (nunca la API abierta a internet).</td></tr>
+          <tr><td>6</td><td class="comp">Plantilla del correo de bienvenida</td>
+            <td>"Tu VPS está listo": IP, acceso SSH (link de llave o nota BYO) y la instrucción de WHM (passwd root).</td></tr>
+          <tr><td>7</td><td class="comp">Política de mora/cancelación</td>
+            <td>Qué dispara la auto-suspensión — ahí se cuelga la confirmación por Telegram antes de ejecutar.</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="hostreq-head" style="border-top:1px solid var(--line-soft); border-bottom:none">
+      <p style="margin:0"><b>Prerrequisitos nuestros (antes del go-live):</b>
+        subdominio público de Sends (<span class="mono">entrega.hosting.cl</span>) para que el cliente
+        externo descargue su llave · exposición segura de la API del motor hacia el WHMCS ·
+        manejador de botones de Telegram para confirmar suspensiones/cancelaciones ·
+        escribir el módulo PHP (con los accesos 1-4 listos).
+        Detalle completo en <span class="mono">docs/integracion-whmcs.md</span>.</p>
+    </div>
+  </div>
+
   <!-- Requisitos del host -->
   <div class="hostreq">
     <div class="hostreq-head">
