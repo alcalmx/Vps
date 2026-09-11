@@ -975,34 +975,59 @@ def flujo_editar(job, sabor_slug):
         job.detalle("CPU/RAM sin cambios")
     job.paso()  # → crecer disco
 
-    # 3. disco: crecer el vmdk + expandir el filesystem del guest por SSH (sin boot)
+    # 3. disco: intentar hot-extend por API; si el vCenter lo bloquea, ciclo breve
+    #    apagar→crecer→encender. Luego expandir el filesystem del guest por SSH.
     if crecer:
-        if power_state(job.vm) == "poweredOn":
-            # VM encendida: vmkfstools no puede (archivo lockeado) → hot-extend por API
-            govc("vm.disk.change", "-vm", job.vm, "-disk.filePath",
-                 "[%s] VPS/%s/%s.vmdk" % (DATASTORE, job.vm, job.vm),
-                 "-size", "%dG" % sabor["disco_gb"])
-        else:
-            esxi_ssh("grow-disk %s %d" % (job.vm, sabor["disco_gb"]))
-        job.detalle("vmdk extendido a %d GB; expandiendo el filesystem…" % sabor["disco_gb"])
-        if MGMT_PRIVKEY_PATH and vm.get("ip") and power_state(job.vm) == "poweredOn":
+        encendida = power_state(job.vm) == "poweredOn"
+        hot_ok = False
+        if encendida:
             try:
-                cli = paramiko.SSHClient()
-                cli.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-                cli.connect(vm["ip"], username="root", key_filename=MGMT_PRIVKEY_PATH,
-                            timeout=15, allow_agent=False, look_for_keys=False)
-                script = ("echo 1 > /sys/class/block/sda/device/rescan; "
-                          "PART=$(lsblk -no NAME,MOUNTPOINT /dev/sda | awk '$2==\"/\"{print $1}' | tr -dc '0-9'); "
-                          "growpart /dev/sda ${PART:-3}; "
-                          "xfs_growfs / 2>/dev/null || resize2fs /dev/sda${PART:-3}; "
-                          "df -h / | tail -1")
-                _, out, _ = cli.exec_command(script, timeout=60)
-                salida = out.read().decode().strip().splitlines()
-                cli.close()
-                job.detalle("filesystem expandido en caliente: %s" % (salida[-1] if salida else "ok"))
-            except Exception as e:  # noqa: BLE001 — growpart de cloud-init lo toma al próximo boot
-                job.detalle("vmdk crecido; no se pudo expandir el FS por SSH (%s) — se expandirá al próximo reinicio"
-                            % str(e)[:100])
+                govc("vm.disk.change", "-vm", job.vm, "-disk.filePath",
+                     "[%s] VPS/%s/%s.vmdk" % (DATASTORE, job.vm, job.vm),
+                     "-size", "%dG" % sabor["disco_gb"])
+                hot_ok = True
+                job.detalle("vmdk extendido EN CALIENTE a %d GB" % sabor["disco_gb"])
+            except RuntimeError as e:
+                if "managing it" in str(e) or "restricted" in str(e):
+                    job.detalle("el vCenter bloquea el hot-extend vía host → crecimiento con "
+                                "reinicio breve (con acceso al vCenter sería sin corte)")
+                else:
+                    raise
+        if not hot_ok:
+            if encendida:
+                apagar_graceful(job, job.vm)
+            esxi_ssh("grow-disk %s %d" % (job.vm, sabor["disco_gb"]))
+            job.detalle("vmdk extendido a %d GB (VM apagada)" % sabor["disco_gb"])
+            if encendida:
+                govc("vm.power", "-on", job.vm)
+                job.detalle("VM encendida de nuevo; esperando SSH para expandir el filesystem…")
+        # expandir el FS del guest (con reintentos por si viene de un boot)
+        if MGMT_PRIVKEY_PATH and vm.get("ip"):
+            salida, err = [], None
+            for intento in range(12):
+                try:
+                    cli = paramiko.SSHClient()
+                    cli.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+                    cli.connect(vm["ip"], username="root", key_filename=MGMT_PRIVKEY_PATH,
+                                timeout=10, allow_agent=False, look_for_keys=False)
+                    script = ("echo 1 > /sys/class/block/sda/device/rescan; "
+                              "PART=$(lsblk -no NAME,MOUNTPOINT /dev/sda | awk '$2==\"/\"{print $1}' | tr -dc '0-9'); "
+                              "growpart /dev/sda ${PART:-3}; "
+                              "xfs_growfs / 2>/dev/null || resize2fs /dev/sda${PART:-3} 2>/dev/null; "
+                              "df -h / | tail -1")
+                    _, out, _ = cli.exec_command(script, timeout=60)
+                    salida = out.read().decode().strip().splitlines()
+                    cli.close()
+                    err = None
+                    break
+                except Exception as e:  # noqa: BLE001 — la VM puede estar arrancando
+                    err = e
+                    time.sleep(10)
+            if err:
+                job.detalle("vmdk crecido; no se pudo expandir el FS por SSH (%s) — se expandirá al próximo arranque"
+                            % str(err)[:100])
+            else:
+                job.detalle("filesystem expandido: %s" % (salida[-1] if salida else "ok"))
         else:
             job.detalle("vmdk crecido; el guest expandirá el FS al próximo arranque")
     else:
