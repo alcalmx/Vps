@@ -116,6 +116,10 @@ def init_db():
                 c.execute("ALTER TABLE vms ADD COLUMN %s %s" % (col, decl))
             except sqlite3.OperationalError:
                 pass  # ya existe
+        try:
+            c.execute("ALTER TABLE jobs ADD COLUMN resultado TEXT")  # datos de acceso
+        except sqlite3.OperationalError:
+            pass
 
 def audit(actor, accion, vm, detalle, resultado):
     with DB_LOCK, db() as c:
@@ -167,6 +171,12 @@ class Job:
                 self.pasos[self._i]["detalle"] = detalle_final
         self._save(estado="ok")
         audit(self.actor, self.tipo, self.vm, "job %s" % self.id, "ok")
+
+    def set_resultado(self, d):
+        """Guarda datos estructurados del resultado (acceso, IPs, link) — el
+        dashboard los usa para mostrar el panel 'Cómo iniciar sesión' al final."""
+        with DB_LOCK, db() as c:
+            c.execute("UPDATE jobs SET resultado=? WHERE id=?", (json.dumps(d), self.id))
 
     def fail(self, msg):
         if 0 <= self._i < len(self.pasos):
@@ -346,27 +356,32 @@ def ip_publica_libre(lista, rango=None, job=None):
     raise RuntimeError("sin IP pública libre en %s. Rechazadas: %s" % (lista, ", ".join(rechazadas) or "ninguna candidata"))
 
 
-def crear_nat(privada, publica, lista, etiqueta, job=None):
-    """NAT 1:1 en RouterData: srcnat + dstnat + marcar la pública como usada en la
-    address-list (deshabilitada + comentada). Igual que /api/alta/crear del NOC."""
+def crear_nat(privada, publica, lista, hostname, marca_nombre, job=None):
+    """NAT 1:1 en RouterData, con el MISMO formato que 'Alta de Servicios' del NOC:
+      - srcnat CON comentario '[NOC] <host> <ip-corta>, VPS <marca>'
+      - dstnat SIN comentario (queda agrupado bajo el srcnat)
+      - la entrada de la address-list se comenta '<host> - VPS <marca>' y se deshabilita."""
     # re-chequeo anti-carrera: ninguna de las 2 IPs debe tener NAT ya
     ok, out = mikrotik("/ip firewall nat print terse")
     if ok and re.search(r"=(?:%s|%s)\b" % (re.escape(privada), re.escape(publica)), out):
         raise RuntimeError("una de las IPs ya tiene NAT (¿carrera?) — abortado")
+    pub_short = ".".join(publica.split(".")[-2:])
+    etiqueta = "%s %s, VPS %s" % (hostname, pub_short, marca_nombre)
     ok1, o1 = mikrotik('/ip firewall nat add chain=srcnat src-address=%s action=src-nat '
-                       'to-addresses=%s comment="[VPS] %s"' % (privada, publica, etiqueta))
+                       'to-addresses=%s comment="[NOC] %s"' % (privada, publica, etiqueta))
     if not ok1:
         raise RuntimeError("srcnat falló: %s" % o1[:200])
     ok2, o2 = mikrotik('/ip firewall nat add chain=dstnat dst-address=%s action=dst-nat '
-                       'to-addresses=%s comment="[VPS] %s"' % (publica, privada, etiqueta))
+                       'to-addresses=%s' % (publica, privada))   # dstnat SIN comment
     if not ok2:
-        mikrotik('/ip firewall nat remove [find where comment="[VPS] %s"]' % etiqueta)  # rollback
+        mikrotik('/ip firewall nat remove [find where chain=srcnat and src-address=%s and to-addresses=%s]'
+                 % (privada, publica))  # rollback del srcnat
         raise RuntimeError("dstnat falló (srcnat revertido): %s" % o2[:200])
     mikrotik('/ip firewall address-list set [find where list=%s and address=%s] '
-             'comment="[VPS] %s" disabled=yes' % (lista, publica, etiqueta))
+             'comment="%s - VPS %s" disabled=yes' % (lista, publica, hostname, marca_nombre))
     if job:
-        job.detalle("NAT 1:1 creado: %s ↔ %s (srcnat+dstnat, pública marcada en %s)"
-                    % (privada, publica, lista))
+        job.detalle("NAT 1:1 creado: %s ↔ %s (srcnat con comentario [NOC], dstnat sin comentario)"
+                    % (privada, publica))
 
 
 def borrar_nat(privada, publica, lista, job=None):
@@ -629,7 +644,7 @@ def flujo_crear(job, marca, sabor_slug, cliente, hostname, instalar_cpanel, modo
                   (nombre, marca, sabor_slug, cliente, hostname,
                    sabor["vcpu"], sabor["ram_mb"], sabor["disco_gb"]))
     job.detalle("%s · %s (%d vCPU / %d MB / %d GB) · modo %s"
-                % (nombre, sabor["nombre_web"], sabor["vcpu"], sabor["ram_mb"], sabor["disco_gb"], MODO))
+                % (nombre, sabor["nombre_web"], sabor["vcpu"], sabor["ram_mb"], sabor["disco_gb"], modo))
 
     # 2. IP privada libre — RouterData en producción, barrido local en pruebas
     job.paso()
@@ -733,7 +748,7 @@ def flujo_crear(job, marca, sabor_slug, cliente, hostname, instalar_cpanel, modo
         pub_lista = marca_cfg.get("pub_lista", "Red107-0")
         rango = red.get("publica_rango_prueba")   # [lo, hi] para restringir en pruebas de prod
         publica, _rech = ip_publica_libre(pub_lista, rango, job)
-        crear_nat(ip, publica, pub_lista, fqdn, job)
+        crear_nat(ip, publica, pub_lista, fqdn, marca_cfg.get("nombre", marca), job)
         set_estado(nombre, "creando", publica=publica, pub_lista=pub_lista)
         job.detalle("pública %s ↔ privada %s (NAT 1:1 activo, entrada por %s)"
                     % (publica, ip, publica))
@@ -797,6 +812,16 @@ def flujo_crear(job, marca, sabor_slug, cliente, hostname, instalar_cpanel, modo
     job.paso()
     set_estado(nombre, "activo")
     destino = ("pública %s → %s" % (publica, ip)) if publica else ip
+    # datos de acceso para el panel del dashboard (demo)
+    acceso_ip = publica or ip
+    res = {"vm": nombre, "sabor": sabor_slug, "privada": ip, "usuario": "root",
+           "acceso_ip": acceso_ip, "ssh_cmd": "ssh -i id_ed25519 root@%s" % acceso_ip,
+           "publica": publica, "cpanel": bool(instalar_cpanel),
+           "whm": ("https://%s:2087" % acceso_ip) if instalar_cpanel else None}
+    if entrega and entrega.get("url"):
+        res["send_url"] = entrega["url"]
+        res["send_password"] = entrega.get("password")
+    job.set_resultado(res)
     job.ok("VPS %s activo (%s) — %s/%s" % (nombre, destino, marca, sabor_slug))
 
 # ── FLUJOS: suspender / reanudar / eliminar / editar / purga ─────────────────
@@ -943,6 +968,11 @@ def job_get(jid):
         return jsonify({"error": "job no existe"}), 404
     d = dict(row)
     d["pasos"] = json.loads(d["pasos"])
+    if d.get("resultado"):
+        try:
+            d["resultado"] = json.loads(d["resultado"])
+        except (ValueError, TypeError):
+            d["resultado"] = None
     return jsonify(d)
 
 @app.route("/jobs")

@@ -1,5 +1,6 @@
 {
   "marca": "hosting.cl",
+  "nombre": "Hosting.cl",
   "prefijo_vm": "vps-hcl",
   "activo": true,
   "pub_lista": "Red57-0",
