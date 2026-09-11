@@ -64,6 +64,11 @@ automática), dashboard propio, más marcas (Planeta Hosting, etc.), IPAM vía N
  └──────────────────────────────────────────────┘
 ```
 
+> **¿Dónde vive cada cosa?** El mapa completo de despliegue (qué corre dónde, con qué
+> archivos, qué alcanza y cómo moverlo) está en [docs/despliegue.md](docs/despliegue.md).
+> En corto: el motor vive en noc-monitor como **contenedor propio y separado**, y el
+> dashboard **solo lo invoca** — son cajas independientes.
+
 ### Componentes
 
 1. **vps-engine** — servicio API interna en noc-monitor (patrón calcado de
