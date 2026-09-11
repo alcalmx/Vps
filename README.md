@@ -95,10 +95,10 @@ dónde va la creación y en qué paso se atascó si falla. Spec de la UI en
 
 ### Crear
 1. Validar entrada: marca + sabor existen, hostname único.
-2. **IP privada libre** — lógica copiada de `/api/alta/privada` del NOC (NAT+ARP del
-   MikroTik RouterData 172.16.1.90; ocupadas = NAT ∪ ARP ∪ {.1}; el octeto libre más
-   alto desde .254). En **pruebas**: red 192.168.122.0/24; en producción: la subred
-   de la marca (hosting.cl: 10.100.48.0/24).
+2. **IP privada libre** — se elige preguntando al MikroTik RouterData; el detalle del
+   criterio está en la sección [Cómo se elige la IP del VPS](#cómo-se-elige-la-ip-del-vps-sin-conflictos).
+   En **pruebas**: red 192.168.122.0/24; en producción: la subred de la marca
+   (hosting.cl: 10.100.16.0/24, VLAN 81, portgroup `Vps_Hosting.cl`).
 3. **IP pública + NAT** — lógica copiada de `/api/alta/publica` y `/api/alta/crear`
    del NOC: elegir pública de la address-list de la marca (habilitada, sin comentario,
    sin NAT, sin ARP, sin otras listas, muda al ping) → crear `srcnat` + `dstnat` en
@@ -138,6 +138,57 @@ dónde va la creación y en qué paso se atascó si falla. Spec de la UI en
 - Disco: **solo crecer** (nunca reducir — corrompe). `vmkfstools -X` + growpart
   dentro del guest. La dorada llevará cloud-init con `growpart` automático al boot.
 - Cambio de sabor = aplicar deltas del sabor destino + registrar el cambio.
+
+---
+
+## Cómo se elige la IP del VPS (sin conflictos)
+
+> Es el **mismo criterio** que usa la sección **"Alta de Servicios"** del dashboard NOC
+> (`/api/alta/privada` y `/api/alta/publica`), reutilizado aquí. Se documenta con detalle
+> porque es la parte más delicada del alta: asignar una IP que ya está en uso rompería el
+> servicio de otro cliente.
+
+### IP privada (la que lleva la VM)
+
+La red de los VPS de hosting.cl es **`10.100.16.0/24`** (producción; VLAN 81, portgroup
+`Vps_Hosting.cl`). Para encontrar una IP libre sin conflicto, el sistema le pregunta al
+**MikroTik RouterData** (`172.16.1.90`) por dos tablas y cruza la información:
+
+1. **Tabla NAT** (`/ip firewall nat print terse`): toda IP `10.100.16.X` que aparezca como
+   `src-address` de una regla NAT se considera **ocupada** — está asignada a un servicio,
+   aunque su máquina esté apagada.
+2. **Tabla ARP** (`/ip arp print terse`): toda IP `10.100.16.X` que responde con una MAC
+   (entrada "viva") se considera **ocupada** — alguien la está usando ahora mismo. Las
+   entradas marcadas `failed` en ARP (nadie respondió) se consideran **libres**.
+3. El **gateway** `10.100.16.1` siempre queda reservado.
+
+Con eso: **`ocupadas = NAT ∪ ARP-vivo ∪ {.1}`**. El sistema recorre desde `.254` hacia
+abajo (`.254`, `.253`, `.252`…) y asigna **la primera IP que no esté ocupada** — es decir,
+la más alta que esté libre.
+
+La doble verificación (NAT **y** ARP) es lo que da la garantía de no chocar: NAT atrapa lo
+reservado aunque la máquina esté apagada; ARP atrapa lo que está vivo en el cable aunque no
+tenga una regla NAT.
+
+> **Nota de implementación:** en el entorno de **pruebas** (192.168.122.0/24) el motor usa
+> un barrido `ping` local desde noc-monitor, porque esa red sí la alcanza. Para
+> **producción** (10.100.16.0/24) usa el método MikroTik de arriba, porque noc-monitor no
+> alcanza esa red por ping — la fuente de verdad es RouterData.
+
+### IP pública + NAT 1:1 (solo producción)
+
+Un VPS de cliente además necesita una IP **pública**. El sistema:
+
+1. Elige una candidata de la **address-list** de la marca en RouterData, validándola cinco
+   veces: habilitada, sin comentario, sin NAT previo, sin ARP vivo, sin aparecer en otras
+   address-lists, y muda al ping desde el CCR de borde (`172.16.1.69`).
+2. Crea el **NAT 1:1** en RouterData: `srcnat` (privada → pública) + `dstnat`
+   (pública → privada), con etiqueta `[NOC]`.
+3. Deshabilita y comenta la entrada de la address-list (la IP queda marcada como en uso).
+4. Registra ambas IPs en **NetBox** (IPAM) y pausa el **Monitoreo Externo** hasta que el
+   servidor esté listo.
+
+En **pruebas** este paso de IP pública se omite: la VM queda solo con su IP privada.
 
 ---
 
