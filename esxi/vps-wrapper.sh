@@ -56,12 +56,18 @@ case "$cmd" in
     [ -e "$dst" ] && die "disco destino ya existe: $2"
     vmkfstools -i "$src" -d thin "$dst" && echo OK ;;
 
-  grow-disk)  # grow-disk <vps> <GB>  (solo crecer; vmkfstools -X rechaza achicar)
+  grow-disk)  # grow-disk <vps> <GB>  (solo crecer; idempotente: si ya está, OK)
     valid_vps "$1" || die "nombre inválido: $1"
     echo "$2" | grep -Eq '^[0-9]{1,4}$' || die "tamaño inválido: $2"
     [ "$2" -le 2000 ] || die "tamaño fuera de rango: $2"
     [ -f "$BASE/$1/$1.vmdk" ] || die "disco no existe: $1"
-    vmkfstools -X "${2}G" "$BASE/$1/$1.vmdk" && echo OK ;;
+    cur=$(grep -o 'RW [0-9]*' "$BASE/$1/$1.vmdk" | awk '{print $2}' | head -1)
+    want=$(( $2 * 2097152 ))   # GB → sectores de 512B
+    if [ -n "$cur" ] && [ "$cur" -ge "$want" ]; then
+      echo "OK (ya en tamaño >= ${2}G)"
+    else
+      vmkfstools -X "${2}G" "$BASE/$1/$1.vmdk" && echo OK
+    fi ;;
 
   trash-vm)  # trash-vm <vps>  → mueve a _papelera (NUNCA borra)
     valid_vps "$1" || die "solo se botan vps (nombre inválido): $1"
