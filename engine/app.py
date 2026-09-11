@@ -844,30 +844,59 @@ def flujo_crear(job, marca, sabor_slug, cliente, hostname, instalar_cpanel, modo
     job.ok("VPS %s activo (%s) — %s/%s" % (nombre, destino, marca, sabor_slug))
 
 # ── FLUJOS: suspender / reanudar / eliminar / editar / purga ─────────────────
+def set_bloqueo_publica(lista, publica, bloquear, job=None):
+    """Suspensión por address-list (como lo hace el usuario a mano): en RouterData hay
+    un drop `dst-address-list=<lista>` en raw. Habilitar la entrada = la IP entra al drop
+    = BLOQUEADA (suspendida). Deshabilitarla = fuera del drop = pasa (activa). El comentario
+    (cliente) se conserva siempre. La VM NO se toca — sigue corriendo."""
+    disabled = "no" if bloquear else "yes"   # habilitada(no) = bloquea · deshabilitada(yes) = pasa
+    ok, out = mikrotik('/ip firewall address-list set [find where list=%s and address="%s"] disabled=%s'
+                       % (lista, publica, disabled))
+    if not ok:
+        raise RuntimeError("MikroTik no aplicó el %s de %s: %s"
+                           % ("bloqueo" if bloquear else "desbloqueo", publica, out[:150]))
+    # verificar el estado real de la entrada
+    ok2, out2 = mikrotik('/ip firewall address-list print terse where list=%s and address="%s"'
+                         % (lista, publica))
+    esta_bloqueada = ok2 and not re.match(r"^\s*\d+\s+X", out2 or "")  # sin 'X' (no deshabilitada) = en el drop
+    if bloquear and not esta_bloqueada:
+        raise RuntimeError("la IP %s no quedó bloqueada tras el cambio" % publica)
+    if not bloquear and esta_bloqueada:
+        raise RuntimeError("la IP %s no quedó desbloqueada tras el cambio" % publica)
+    if job:
+        job.detalle("IP pública %s %s en %s (drop raw)"
+                    % (publica, "BLOQUEADA" if bloquear else "desbloqueada", lista))
+
+
 def flujo_suspender(job):
     vm = guardarraices(job.vm)
     job.paso()  # "Validar guardarraíles"
-    job.paso("VM %s en registro (estado %s)" % (job.vm, vm["estado"]))  # → apagar
-    apagar_graceful(job, job.vm)
-    job.paso("apagada")  # → marcar
+    if vm["estado"] == "suspendido":
+        job.ok("VPS %s ya estaba suspendido" % job.vm)
+        return
+    if not (vm.get("publica") and vm.get("pub_lista")):
+        raise RuntimeError("el VPS no tiene IP pública registrada — no se puede suspender por address-list")
+    job.paso("VM %s validada (estado %s) — no se apaga, sigue corriendo" % (job.vm, vm["estado"]))  # → bloquear
+    set_bloqueo_publica(vm["pub_lista"], vm["publica"], True, job)
+    job.paso("acceso público cortado")  # → marcar
     set_estado(job.vm, "suspendido")
-    job.ok("VPS %s suspendido (apagado + marcado)" % job.vm)
+    job.ok("VPS %s SUSPENDIDO — IP pública %s bloqueada; la VM sigue corriendo (datos intactos)"
+           % (job.vm, vm["publica"]))
+
 
 def flujo_reanudar(job):
-    guardarraices(job.vm)
-    job.paso()
-    job.paso()
-    govc("vm.power", "-on", job.vm)
-    job.paso("encendida")
-    t0 = time.time()
-    ip = ""
-    while time.time() - t0 < 300 and not ip:
-        try:
-            ip = govc("vm.ip", "-wait", "30s", job.vm, timeout=45)
-        except RuntimeError:
-            job.detalle("esperando que levante… (%ds)" % int(time.time() - t0))
+    vm = guardarraices(job.vm)
+    job.paso()  # "Validar guardarraíles"
+    if vm["estado"] != "suspendido":
+        job.ok("VPS %s no estaba suspendido (estado %s) — nada que reanudar" % (job.vm, vm["estado"]))
+        return
+    if not (vm.get("publica") and vm.get("pub_lista")):
+        raise RuntimeError("el VPS no tiene IP pública registrada")
+    job.paso("VM %s validada" % job.vm)  # → desbloquear
+    set_bloqueo_publica(vm["pub_lista"], vm["publica"], False, job)
+    job.paso("acceso público restaurado")  # → marcar
     set_estado(job.vm, "activo")
-    job.ok("VPS %s reanudado%s" % (job.vm, (" — IP %s" % ip) if ip else " (sin confirmación de IP)"))
+    job.ok("VPS %s REANUDADO — IP pública %s desbloqueada, servicio restablecido" % (job.vm, vm["publica"]))
 
 def flujo_eliminar(job):
     vm = guardarraices(job.vm)
@@ -1034,8 +1063,8 @@ def vms_list():
         r["power"] = power_state(r["nombre"])
     return jsonify({"vms": rows, "papelera": papelera})
 
-ACCIONES = {"suspender": (flujo_suspender, ["Validar guardarraíles", "Apagar (graceful, 60 s)", "Marcar suspendido"]),
-            "reanudar": (flujo_reanudar, ["Validar guardarraíles", "Encender", "Esperar que levante"]),
+ACCIONES = {"suspender": (flujo_suspender, ["Validar guardarraíles", "Bloquear IP pública (address-list)", "Marcar suspendido"]),
+            "reanudar": (flujo_reanudar, ["Validar guardarraíles", "Desbloquear IP pública", "Marcar activo"]),
             "eliminar": (flujo_eliminar, ["Validar guardarraíles", "Apagar", "Des-registrar del ESXi", "Liberar IP pública y NAT", "Cerrar enlace de entrega (Send)", "Mover a papelera"])}
 
 @app.route("/accion", methods=["POST"])

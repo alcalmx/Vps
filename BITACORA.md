@@ -5,6 +5,29 @@
 
 ---
 
+## 2026-09-11 (viernes, tarde) — Suspender/reanudar por address-list (capa 1) + decisión WHMCS
+
+**Diseño conversado con el usuario.** Su práctica real de suspensión por no-pago NO es
+apagar la VM: es **habilitar la entrada de la IP pública en la address-list** (hay un drop
+`dst-address-list` en firewall raw de RouterData → habilitada = bloqueada). Confirmado el
+mecanismo en el MikroTik.
+
+**Capa 1 CONSTRUIDA y desplegada** (`set_bloqueo_publica` + flujos reescritos):
+- Suspender = habilitar entrada (IP cae al drop) — VM sigue corriendo, NAT/IP se conservan.
+- Reanudar = deshabilitar entrada — instantáneo, sin boot.
+- Guardas de estado (solo activo→suspendido y viceversa), verificación del estado real de
+  la entrada tras el toggle, comentario del cliente se conserva.
+- Pasos del dashboard actualizados ("Bloquear IP pública (address-list)" etc.).
+- **PENDIENTE: probar E2E** (no hay VPS activo ahora; probar con la próxima creación).
+
+**Capas 2-3 (aviso + confirmación Telegram): decisión = esperar WHMCS** (no construir
+lector de correos interino). WHMCS avisa moroso/pagado → Telegram pide confirmación con
+botones → con el OK se aplica el toggle. Bots de Telegram ya existen en noc-monitor
+(reutilizables). Diseño completo en [docs/suspension.md](docs/suspension.md). Sin acceso
+a WHMCS todavía.
+
+---
+
 ## 2026-09-11 (viernes) — PRODUCCIÓN E2E: creación + IP pública/NAT + securización + login validados
 
 **Sesión grande: el flujo comercial completo quedó funcionando en la red real.**
