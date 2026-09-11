@@ -1,4 +1,31 @@
-# Construcción de la plantilla dorada (dorada-almalinux9.7)
+# Plantillas doradas — catálogo y construcción
+
+## Catálogo (decisión del usuario 2026-09-11)
+
+**Por cada versión de sistema operativo se mantienen DOS doradas:**
+
+| Dorada | Contenido | Para qué |
+|---|---|---|
+| `dorada-<so><ver>` | SO base + cloud-init + open-vm-tools + growpart + llave de gestión + sshd endurecido | VPS sin panel; y es la BASE desde la que se construye la variante cPanel |
+| `dorada-<so><ver>-cpanel` | Lo mismo + **cPanel última versión preinstalado** (sin licencia activada; se registra al primer boot con su IP/hostname) | VPS con cPanel: baja la entrega de ~45 min a ~7 min. Los 3 planes de hosting.cl lo incluyen |
+
+Catálogo actual:
+- `dorada-almalinux9.7` ✅ (v4, con growpart)
+- `dorada-almalinux9.7-cpanel` ⏳ pendiente de construir
+- Futuros SOs (almalinux8.10, ubuntu, …) siguen el mismo patrón de a pares.
+
+**Selección automática (motor):** al crear con "Instalar cPanel" marcado, el motor clona la
+variante `-cpanel` si existe (entrega rápida) y solo si no existe cae al plan B de instalar
+cPanel post-creación (30–60 min). Sin cPanel marcado → clona la base.
+
+**Mantenimiento:** las doradas se reconstruyen periódicamente (parches) con la fábrica
+automatizada (kickstart + OEMDRV, ~20 min solas). La variante cPanel se reconstruye a partir
+de la base: clonar → instalar cPanel → preparación para plantilla (limpiar identidad cPanel)
+→ sellar → mover a `_plantillas/`.
+
+---
+
+# Construcción de la plantilla dorada base (dorada-almalinux9.7)
 
 > Instalación **100 % desatendida** desde la ISO que ya está en el host, usando
 > kickstart en un mini-ISO con etiqueta **OEMDRV** (anaconda lo detecta y aplica
