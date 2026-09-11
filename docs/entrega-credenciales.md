@@ -53,6 +53,21 @@ llave. Las opciones y sus implicancias:
    que es el estándar del rubro. El email quedaría como aviso ("tu VPS está listo, entra a
    tu panel").
 
+## Modo BYO — "trae tu llave" (implementado 2026-09-11) ⭐
+
+El formulario de creación acepta la **llave PÚBLICA del cliente** (campo opcional). Si se
+entrega:
+- El sistema **no genera ni custodia ninguna llave** — instala esa pública en la VM y listo.
+  La privada **nunca toca nuestros sistemas** (el estándar más alto, "como los pros").
+- No hay ítem en la bóveda ni Bitwarden Send; el **fingerprint** queda en el registro del
+  motor (columna `byo_pubkey_fp`) para auditoría.
+- El panel de acceso lo indica ("Llave BYO del cliente") y el comando SSH apunta a
+  `TU_LLAVE_PRIVADA`.
+- Validación: formato ssh-ed25519 / ssh-rsa / ecdsa + verificación con `ssh-keygen -lf`.
+
+Si el campo va **vacío** → flujo gestionado de siempre (generar → bóveda → Send). Ambos
+modos conviven; con WHMCS, el campo del formulario del cliente alimentará esto mismo.
+
 ## Ciclo de vida de la credencial en la bóveda (política B — implementada 2026-09-11)
 
 - Al **crear** el VPS: se genera la llave, se guarda en la bóveda (`cliente-<nombre>`) y se

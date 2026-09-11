@@ -111,7 +111,8 @@ def init_db():
         """)
         # columnas de producción (IP pública/NAT + bóveda) — idempotente
         for col, decl in (("publica", "TEXT"), ("pub_lista", "TEXT"),
-                          ("vault_item", "TEXT"), ("send_url", "TEXT"), ("send_id", "TEXT")):
+                          ("vault_item", "TEXT"), ("send_url", "TEXT"), ("send_id", "TEXT"),
+                          ("byo_pubkey_fp", "TEXT")):
             try:
                 c.execute("ALTER TABLE vms ADD COLUMN %s %s" % (col, decl))
             except sqlite3.OperationalError:
@@ -428,15 +429,22 @@ def provision_post(path, payload, timeout=60):
         return json.loads(resp.read().decode())
 
 
-def securizar_vps(job, nombre, ip, cliente, hostname):
-    """Genera el par del cliente, instala su pública en la VM (SSH con la llave de
-    gestión) y delega en vps-provision guardar en la bóveda + crear el Send.
-    Devuelve el dict con el link de entrega, o None si no hay llave/token."""
-    if not (MGMT_PRIVKEY_PATH and PROVISION_TOKEN):
-        job.detalle("securización omitida (falta llave de gestión o token de vps-provision)")
-        return None
-    priv, pub, fp = gen_ed25519("cliente:%s %s" % (cliente, hostname))
-    # instalar la pública del cliente en la VM (además de la de gestión)
+PUBKEY_RE = re.compile(r"^(ssh-ed25519|ssh-rsa|ecdsa-sha2-nistp(256|384|521)) [A-Za-z0-9+/=]{40,3000}( [^\n\"']{0,120})?$")
+
+
+def fingerprint_pubkey(pub):
+    with tempfile.TemporaryDirectory() as tmp:
+        pf = os.path.join(tmp, "k.pub")
+        with open(pf, "w", newline="\n") as fh:
+            fh.write(pub.strip() + "\n")
+        r = subprocess.run(["ssh-keygen", "-lf", pf], capture_output=True, text=True)
+        if r.returncode:
+            raise RuntimeError("llave pública inválida: " + (r.stderr or r.stdout)[:120])
+        return r.stdout.split()[1]
+
+
+def instalar_pubkey_en_vm(ip, pub):
+    """Agrega una llave pública al authorized_keys de la VM (vía llave de gestión)."""
     cli = paramiko.SSHClient()
     cli.set_missing_host_key_policy(paramiko.AutoAddPolicy())
     cli.connect(ip, username="root", key_filename=MGMT_PRIVKEY_PATH, timeout=15,
@@ -447,6 +455,29 @@ def securizar_vps(job, nombre, ip, cliente, hostname):
     _, out, _ = cli.exec_command(script, timeout=30)
     out.channel.recv_exit_status()
     cli.close()
+
+
+def securizar_byo(job, nombre, ip, pubkey_cliente):
+    """Modo BYO ('trae tu llave'): instala la PÚBLICA que entregó el cliente.
+    No se genera nada, no se custodia nada — la privada nunca toca nuestros
+    sistemas (estándar más alto). El fingerprint queda en el registro."""
+    fp = fingerprint_pubkey(pubkey_cliente)
+    instalar_pubkey_en_vm(ip, pubkey_cliente)
+    with DB_LOCK, db() as c:
+        c.execute("UPDATE vms SET byo_pubkey_fp=? WHERE nombre=?", (fp, nombre))
+    job.detalle("llave PÚBLICA del cliente instalada (BYO, %s) — sin custodia: la privada la tiene solo el cliente" % fp)
+    return fp
+
+
+def securizar_vps(job, nombre, ip, cliente, hostname):
+    """Genera el par del cliente, instala su pública en la VM (SSH con la llave de
+    gestión) y delega en vps-provision guardar en la bóveda + crear el Send.
+    Devuelve el dict con el link de entrega, o None si no hay llave/token."""
+    if not (MGMT_PRIVKEY_PATH and PROVISION_TOKEN):
+        job.detalle("securización omitida (falta llave de gestión o token de vps-provision)")
+        return None
+    priv, pub, fp = gen_ed25519("cliente:%s %s" % (cliente, hostname))
+    instalar_pubkey_en_vm(ip, pub)
     job.detalle("llave del cliente instalada en la VM (%s)" % fp)
     # guardar en la bóveda + crear Send vía vps-provision
     import urllib.request
@@ -644,7 +675,7 @@ PASOS_CREAR = [
     "Registrar y finalizar",
 ]
 
-def flujo_crear(job, marca, sabor_slug, cliente, hostname, instalar_cpanel, modo):
+def flujo_crear(job, marca, sabor_slug, cliente, hostname, instalar_cpanel, modo, pubkey_cliente=None):
     marca_cfg = MARCAS[marca]
     sabor = SABORES[(marca, sabor_slug)]
     red = red_activa(marca_cfg, modo)
@@ -855,17 +886,23 @@ def flujo_crear(job, marca, sabor_slug, cliente, hostname, instalar_cpanel, modo
         job.detalle("omitido (instalar_cpanel=%s)" % instalar_cpanel)
 
     # 14. securizar y entregar la llave al cliente (solo producción)
+    #     Dos modos: BYO (el cliente trajo su pública — no se genera ni custodia
+    #     nada) o gestionado (generamos par → bóveda → Bitwarden Send).
     job.paso()
     entrega = None
+    byo_fp = None
     if modo == "produccion":
-        entrega = securizar_vps(job, nombre, ip, cliente, fqdn)
-        if entrega:
-            with DB_LOCK, db() as c:
-                c.execute("UPDATE vms SET vault_item=?, send_url=? WHERE nombre=?",
-                          (entrega.get("item_id"), entrega.get("url"), nombre))
-            job.detalle("ENTREGAR al cliente → %s%s" % (
-                entrega.get("url", ""),
-                (" · contraseña: " + entrega["password"]) if entrega.get("password") else ""))
+        if pubkey_cliente:
+            byo_fp = securizar_byo(job, nombre, ip, pubkey_cliente)
+        else:
+            entrega = securizar_vps(job, nombre, ip, cliente, fqdn)
+            if entrega:
+                with DB_LOCK, db() as c:
+                    c.execute("UPDATE vms SET vault_item=?, send_url=? WHERE nombre=?",
+                              (entrega.get("item_id"), entrega.get("url"), nombre))
+                job.detalle("ENTREGAR al cliente → %s%s" % (
+                    entrega.get("url", ""),
+                    (" · contraseña: " + entrega["password"]) if entrega.get("password") else ""))
     else:
         job.detalle("omitido (modo pruebas — la securización va en producción)")
 
@@ -876,8 +913,10 @@ def flujo_crear(job, marca, sabor_slug, cliente, hostname, instalar_cpanel, modo
     # datos de acceso para el panel del dashboard (demo)
     acceso_ip = publica or ip
     res = {"vm": nombre, "sabor": sabor_slug, "privada": ip, "usuario": "root",
-           "acceso_ip": acceso_ip, "ssh_cmd": "ssh -i id_ed25519 root@%s" % acceso_ip,
+           "acceso_ip": acceso_ip,
+           "ssh_cmd": ("ssh -i TU_LLAVE_PRIVADA root@%s" if byo_fp else "ssh -i id_ed25519 root@%s") % acceso_ip,
            "publica": publica, "cpanel": bool(instalar_cpanel),
+           "byo": bool(byo_fp), "byo_fp": byo_fp,
            "whm": ("https://%s:2087" % acceso_ip) if instalar_cpanel else None}
     if entrega and entrega.get("url"):
         res["send_url"] = entrega["url"]
@@ -885,7 +924,8 @@ def flujo_crear(job, marca, sabor_slug, cliente, hostname, instalar_cpanel, modo
         with DB_LOCK, db() as c:
             c.execute("UPDATE vms SET send_id=? WHERE nombre=?", (entrega.get("id"), nombre))
     job.set_resultado(res)
-    job.ok("VPS %s activo (%s) — %s/%s" % (nombre, destino, marca, sabor_slug))
+    job.ok("VPS %s activo (%s) — %s/%s%s" % (nombre, destino, marca, sabor_slug,
+                                             " · llave BYO del cliente" if byo_fp else ""))
 
 # ── FLUJOS: suspender / reanudar / eliminar / editar / purga ─────────────────
 def set_bloqueo_publica(lista, publica, bloquear, job=None):
@@ -1156,10 +1196,22 @@ def crear():
         cpanel = bool(d["instalar_cpanel"])
     else:
         cpanel = (SABORES[(marca, sabor)].get("extras", {}).get("cpanel_licencia_cuentas", 0) or 0) > 0
+    # BYO key (opcional): el cliente trae su llave PÚBLICA — no generamos ni custodiamos
+    pubkey_cliente = (d.get("pubkey_cliente") or "").strip().replace("\r", "").replace("\n", " ").strip()
+    if pubkey_cliente:
+        if not PUBKEY_RE.match(pubkey_cliente):
+            return jsonify({"error": "llave pública inválida — pega una línea tipo "
+                                     "'ssh-ed25519 AAAA… comentario' (ed25519, rsa o ecdsa)"}), 400
+        try:
+            fingerprint_pubkey(pubkey_cliente)
+        except RuntimeError as e:
+            return jsonify({"error": str(e)}), 400
     nombre = siguiente_nombre(MARCAS[marca], cliente)
     job = Job("crear", nombre, actor, PASOS_CREAR)
-    run_job(job, lambda j: flujo_crear(j, marca, sabor, cliente, hostname, cpanel, modo))
-    return jsonify({"ok": True, "job_id": job.id, "vm": nombre, "modo": modo})
+    run_job(job, lambda j: flujo_crear(j, marca, sabor, cliente, hostname, cpanel, modo,
+                                       pubkey_cliente or None))
+    return jsonify({"ok": True, "job_id": job.id, "vm": nombre, "modo": modo,
+                    "byo": bool(pubkey_cliente)})
 
 @app.route("/job/<jid>")
 def job_get(jid):
