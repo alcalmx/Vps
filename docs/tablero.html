@@ -230,10 +230,11 @@
   <div class="live">
     <div class="dot"></div>
     <div class="t">
-      <b>Ahora mismo:</b> Fase 1 <span class="mono">completa</span> — los 13 pasos de
-      creación pasaron en verde, cPanel incluido (WHM en <span class="mono">:2087</span>).
-      Entorno limpio y listo. Etapa de <b>validación en vivo</b>: repetir el ciclo
-      crear→borrar desde el dashboard antes de pasar a la Fase 2.
+      <b>Ahora mismo:</b> el <b>flujo de producción está construido y desplegado</b> —
+      IP privada y pública por RouterData, NAT 1:1 real, y securización que guarda la
+      llave del cliente en la bóveda y la entrega por Bitwarden Send. Listo para el
+      <b>primer test en la red real</b> (10.100.16.x + pública 38.19.57.x) eligiendo
+      "Producción" en el formulario.
     </div>
   </div>
 
@@ -377,15 +378,16 @@
         <span class="ph-tag tag-prog">En curso</span>
       </div>
       <div class="ph-status">
-        <div class="ph-pct" style="color:var(--prog)">30%</div>
-        <div class="ph-bar"><span style="width:30%;background:var(--prog)"></span></div>
+        <div class="ph-pct" style="color:var(--prog)">55%</div>
+        <div class="ph-bar"><span style="width:55%;background:var(--prog)"></span></div>
       </div>
     </div>
     <ul class="tasks">
       <li class="tk-done"><span class="tk-ic">✔</span><span class="tk-txt">Crear validado end-to-end, incluyendo cPanel</span></li>
       <li class="tk-done"><span class="tk-ic">✔</span><span class="tk-txt">Eliminar — a papelera con retención de 7 días</span><span class="tk-note">validado (0004 · 0005)</span></li>
-      <li class="tk-prog"><span class="tk-ic">◐</span><span class="tk-txt">Pasar a la red de producción 10.100.16.0/24 — cable directo al switch del rack</span><span class="tk-chip chip-prog">en curso</span></li>
-      <li class="tk-pend"><span class="tk-ic">①</span><span class="tk-txt"><b>Encadenar securización + bóveda</b> — llave del cliente a Vaultwarden (Bitwarden Send)</span><span class="tk-chip chip-prog">próximo</span></li>
+      <li class="tk-done"><span class="tk-ic">✔</span><span class="tk-txt">Red de producción 10.100.16.0/24 — cable, VLAN 81, portgroup Vps_Hosting.cl</span></li>
+      <li class="tk-prog"><span class="tk-ic">◐</span><span class="tk-txt"><b>IP privada/pública por RouterData + NAT 1:1</b> — construido y desplegado, a probar en vivo</span><span class="tk-chip chip-prog">a probar</span></li>
+      <li class="tk-prog"><span class="tk-ic">◐</span><span class="tk-txt"><b>Encadenar securización + bóveda</b> — llave del cliente a la bóveda + Bitwarden Send (construido)</span><span class="tk-chip chip-prog">a probar</span></li>
       <li class="tk-pend"><span class="tk-ic">②</span><span class="tk-txt">Suspender / reanudar cliente</span></li>
       <li class="tk-pend"><span class="tk-ic">③</span><span class="tk-txt">Editar plan — CPU y RAM (crecer disco)</span></li>
       <li class="tk-pend"><span class="tk-ic">④</span><span class="tk-txt">Notificaciones y auditoría afinadas</span></li>
