@@ -111,7 +111,7 @@ def init_db():
         """)
         # columnas de producción (IP pública/NAT + bóveda) — idempotente
         for col, decl in (("publica", "TEXT"), ("pub_lista", "TEXT"),
-                          ("vault_item", "TEXT"), ("send_url", "TEXT")):
+                          ("vault_item", "TEXT"), ("send_url", "TEXT"), ("send_id", "TEXT")):
             try:
                 c.execute("ALTER TABLE vms ADD COLUMN %s %s" % (col, decl))
             except sqlite3.OperationalError:
@@ -415,6 +415,17 @@ def gen_ed25519(comment):
         fp = subprocess.run(["ssh-keygen", "-lf", kf + ".pub"],
                             capture_output=True, text=True).stdout.split()[1]
     return priv, pub, fp
+
+
+def provision_post(path, payload, timeout=60):
+    """Llama a vps-provision (bóveda). Devuelve el dict de respuesta o lanza."""
+    import urllib.request
+    import urllib.error
+    req = urllib.request.Request(PROVISION_URL + path, data=json.dumps(payload).encode(),
+                                 method="POST", headers={"Content-Type": "application/json",
+                                                         "X-Auth-Token": PROVISION_TOKEN})
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        return json.loads(resp.read().decode())
 
 
 def securizar_vps(job, nombre, ip, cliente, hostname):
@@ -827,6 +838,8 @@ def flujo_crear(job, marca, sabor_slug, cliente, hostname, instalar_cpanel, modo
     if entrega and entrega.get("url"):
         res["send_url"] = entrega["url"]
         res["send_password"] = entrega.get("password")
+        with DB_LOCK, db() as c:
+            c.execute("UPDATE vms SET send_id=? WHERE nombre=?", (entrega.get("id"), nombre))
     job.set_resultado(res)
     job.ok("VPS %s activo (%s) — %s/%s" % (nombre, destino, marca, sabor_slug))
 
@@ -873,11 +886,20 @@ def flujo_eliminar(job):
                         % (vm.get("publica"), e))
     else:
         job.detalle("sin IP pública que liberar")
-    job.paso("NAT liberado")  # → papelera
+    job.paso("NAT liberado")  # → eliminar Send (política B: el link de entrega se va al borrar)
+    if vm.get("send_id") and PROVISION_TOKEN:
+        try:
+            provision_post("/send/delete", {"send_id": vm["send_id"]})
+            job.detalle("enlace de entrega (Send) eliminado")
+        except Exception as e:  # noqa: BLE001
+            job.detalle("aviso: no se pudo borrar el Send (%s)" % str(e)[:120])
+    else:
+        job.detalle("sin enlace de entrega que borrar")
+    job.paso("enlace de entrega cerrado")  # → papelera (la llave de la bóveda se conserva hasta la purga)
     out = esxi_ssh("trash-vm %s" % job.vm)
     entrada = out.replace("OK", "").strip()
     set_estado(job.vm, "papelera", papelera_entrada=entrada)
-    job.ok("VPS %s movido a papelera (%s) — purga automática a los 7 días" % (job.vm, entrada))
+    job.ok("VPS %s en papelera (%s) — Send cerrado; la llave sigue en la bóveda hasta la purga (7 días)" % (job.vm, entrada))
 
 def flujo_editar(job, sabor_slug):
     vm = guardarraices(job.vm)
@@ -916,12 +938,21 @@ def flujo_editar(job, sabor_slug):
 def flujo_purgar(job):
     job.paso()
     out = esxi_ssh("purge-trash", timeout=600)
-    purgadas = [l for l in out.splitlines() if l.startswith("purged:")]
+    purgadas = [l.split(":", 1)[1].strip() for l in out.splitlines() if l.startswith("purged:")]
+    llaves_borradas = 0
     with DB_LOCK, db() as c:
-        for l in purgadas:
-            entrada = l.split(":", 1)[1].strip()
+        for entrada in purgadas:
+            # política B: al purgar definitivo, borrar también la llave de la bóveda
+            for row in c.execute("SELECT vault_item FROM vms WHERE papelera_entrada=?", (entrada,)):
+                if row["vault_item"] and PROVISION_TOKEN:
+                    try:
+                        provision_post("/vault-borrar-item", {"item_id": row["vault_item"]})
+                        llaves_borradas += 1
+                    except Exception:  # noqa: BLE001 — no bloquear la purga por la bóveda
+                        pass
             c.execute("DELETE FROM vms WHERE papelera_entrada=?", (entrada,))
-    job.ok("papelera purgada: %d entradas con >7 días eliminadas" % len(purgadas))
+    job.ok("papelera purgada: %d VPS (>7 días) · %d llaves eliminadas de la bóveda"
+           % (len(purgadas), llaves_borradas))
 
 # ── API ──────────────────────────────────────────────────────────────────────
 def auth():
@@ -1005,7 +1036,7 @@ def vms_list():
 
 ACCIONES = {"suspender": (flujo_suspender, ["Validar guardarraíles", "Apagar (graceful, 60 s)", "Marcar suspendido"]),
             "reanudar": (flujo_reanudar, ["Validar guardarraíles", "Encender", "Esperar que levante"]),
-            "eliminar": (flujo_eliminar, ["Validar guardarraíles", "Apagar", "Des-registrar del ESXi", "Liberar IP pública y NAT", "Mover a papelera"])}
+            "eliminar": (flujo_eliminar, ["Validar guardarraíles", "Apagar", "Des-registrar del ESXi", "Liberar IP pública y NAT", "Cerrar enlace de entrega (Send)", "Mover a papelera"])}
 
 @app.route("/accion", methods=["POST"])
 def accion():

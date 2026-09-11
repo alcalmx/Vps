@@ -53,7 +53,18 @@ llave. Las opciones y sus implicancias:
    que es el estándar del rubro. El email quedaría como aviso ("tu VPS está listo, entra a
    tu panel").
 
-## ✅ Decisión tomada (usuario, 2026-09-11): Opción A + B
+## Ciclo de vida de la credencial en la bóveda (política B — implementada 2026-09-11)
+
+- Al **crear** el VPS: se genera la llave, se guarda en la bóveda (`cliente-<nombre>`) y se
+  crea el Bitwarden Send de entrega.
+- Al **eliminar** el VPS (→ papelera): se **borra el Send** (el link de entrega ya no sirve),
+  pero la **llave se conserva** en la bóveda mientras la VM está en papelera (por si se restaura).
+- Al **purgar** (definitivo, 7 días): se **borra también la llave** de la bóveda (endpoint
+  `/vault-borrar-item` de vps-provision, protegido: solo llaves SSH, nunca la de gestión).
+
+Así la custodia sigue el mismo ritmo que la papelera de la VM.
+
+## ✅ Decisión de entrega (usuario, 2026-09-11): Opción A + B
 
 Vamos por **enlaces públicos de nuestro propio vault**: un **subdominio público que sirve
 solo los Sends**, y se entrega el **link por email**. Se implementa **más adelante** (aún

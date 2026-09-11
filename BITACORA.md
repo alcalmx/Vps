@@ -5,6 +5,79 @@
 
 ---
 
+## 2026-09-11 (viernes) — PRODUCCIÓN E2E: creación + IP pública/NAT + securización + login validados
+
+**Sesión grande: el flujo comercial completo quedó funcionando en la red real.**
+
+**Deploy y validación del ciclo básico (mañana):**
+- Prueba manejada por el usuario desde el dashboard (crear + borrar varias veces). Se validó
+  crear (0004, 0005) y eliminar a papelera. Tiempos: ~6 min sin carga, ~9 con VMs activas
+  (cuello de botella = clonar disco). Se limpiaron las de ayer.
+- **Hallazgo mayor: el host 10.100.37.245 NO es standalone — lo administra un vCenter**
+  (192.168.200.107, VCENTER200107.DEDICADOS.CL, 10 hosts/54 VMs). El motor opera a nivel de
+  host, así que cada borrado deja una entrada HUÉRFANA en el vCenter → se quita a mano con
+  "Quitar del inventario" (NUNCA "Eliminar del disco", sobre todo la dorada). Se reinició
+  hostd para limpiar fantasmas. Pendiente: apuntar el motor al vCenter (necesita cuenta svc).
+
+**Arquitectura: dónde vive el sistema (pregunta del usuario):**
+- El motor `vps-engine` es un **contenedor propio y separado** del dashboard (que solo lo
+  invoca por API). Verificado que noc-monitor alcanza todo lo necesario (RouterData, red de
+  VPS producción 10.100.16.x, ESXi). Mapa completo en [docs/despliegue.md](docs/despliegue.md).
+  Decisión: es movible; noc-monitor es buen hogar por ahora.
+
+**Red de producción (cable + VLAN del usuario):**
+- El host se cableó directo al switch del rack1. Portgroup **`Vps_Hosting.cl`** (vSwitch4,
+  VLAN 81) para la red **10.100.16.0/24** (producción). Pública de pruebas: **38.19.57.0/24**
+  = address-list **Red57-0** del MikroTik (rango de prueba .100-.102).
+
+**MODO PRODUCCIÓN construido y desplegado:**
+- Motor: IP privada libre por RouterData (NAT+ARP, `mikrotik()` con llave `/keys/mikrotik_key`,
+  claude@2420), IP pública libre de la address-list (5 validaciones como el NOC), **NAT 1:1
+  real** (srcnat+dstnat), y **securización**: genera la llave del cliente, la instala en la
+  VM, y vps-provision la guarda en la bóveda + crea Bitwarden Send (endpoint nuevo
+  `/vault-guardar-enviar`). El entorno (pruebas/producción) se elige POR creación (selector
+  en el dashboard + param `modo`). Diseño en [docs/flujo-produccion.md](docs/flujo-produccion.md).
+- **Prueba E2E de producción (vps-hcl-0006-prueba2):** los 15 pasos OK — privada 10.100.16.247,
+  **pública 38.19.57.102 con NAT real**, securización con Send. **El usuario descargó la llave
+  del Send e inició sesión por SSH a la IP pública desde su PC** → `[root@prueba2 ~]#`.
+  **FLUJO COMERCIAL VALIDADO DE PUNTA A PUNTA.**
+
+**Panel de acceso en el dashboard (para demos):** al terminar una creación de producción,
+el dashboard muestra "Acceso al VPS — cómo iniciar sesión" con la IP pública, el link de
+descarga de la llave y el **comando SSH copiable** (+ variante Windows). El motor guarda un
+`resultado` estructurado en el job para poblarlo.
+
+**Bugs cazados y corregidos (gracias a las pruebas del usuario):**
+1. **borrar_nat no revertía el NAT:** los valores del `find` de RouterOS deben ir
+   ENTRECOMILLADOS (`src-address="X"`); sin comillas no matchea y el remove es un no-op
+   silencioso. Corregido (igual que /api/alta/baja del NOC) + verificación post-borrado.
+   La pública quedaba "ocupada" para siempre; ahora se libera y se reusa (verificado:
+   0007 reusó 38.19.57.102).
+2. **Formato del NAT:** el comentario debe ser `[NOC] <host> <ip-corta>, VPS <marca>` SOLO
+   en el srcnat; el dstnat SIN comentario (convención del NOC). Corregido.
+3. **Label "modo pruebas"** en el paso 1 aunque fuera producción (usaba variable global) — corregido.
+
+**Entrega de credenciales — decisiones del usuario:**
+- **Diseño final:** WHMCS con opción de que el cliente traiga su propia llave (BYO-key,
+  "como los pros" — la privada del cliente nunca toca nuestros sistemas).
+- **Interino (opción A+B):** enlaces públicos de nuestro vault vía **subdominio** que sirve
+  SOLO los Sends (nunca abrir el vault entero) + entrega del **link por email**. A futuro.
+  Plan técnico en [docs/entrega-credenciales.md](docs/entrega-credenciales.md). Por ahora se
+  descarga localmente.
+- Discusión de seguridad: el área de cliente WHMCS es más seguro que el link por email
+  (acceso atado a identidad autenticada vs secreto que viaja). Documentado.
+
+**Política de limpieza de la bóveda (opción B, implementada):** al **borrar** un VPS se
+elimina el **Send** (link de entrega); al **purgar** (7 días) se elimina también la **llave**
+de la bóveda. Endpoint nuevo en vps-provision `/vault-borrar-item` (protegido: solo sshKey,
+nunca la llave de gestión hosting-interno). Se limpiaron los 4 restos de prueba (bóveda vacía).
+
+**Estado:** Fase 2 al 70% — ① securización 100% validada; ciclo crear→borrar en producción
+sólido y repetible. Pendiente: ② suspender/reanudar, ③ editar plan, ④ notificaciones,
++ conectar el motor al vCenter.
+
+---
+
 ## 2026-09-10 (jueves, tarde-7) — Dorada OK, red estática resuelta, tablero web en la red interna
 
 **Dorada v3 (repos online) — CONSTRUIDA OK:** el ISO minimal NO trae cloud-init/open-vm-tools
