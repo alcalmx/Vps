@@ -221,7 +221,7 @@
     <div class="metrics">
       <div class="metric"><div class="n"><span class="accent">4</span></div><div class="l">Fases del proyecto</div></div>
       <div class="metric"><div class="n">Fase&nbsp;2</div><div class="l">En curso · 92%</div></div>
-      <div class="metric"><div class="n">65<span style="color:var(--faint)">%</span></div><div class="l">Avance global</div></div>
+      <div class="metric"><div class="n">67<span style="color:var(--faint)">%</span></div><div class="l">Avance global</div></div>
       <div class="metric"><div class="n">2<span style="color:var(--faint)">/2</span></div><div class="l">Servicios desplegados</div></div>
     </div>
   </header>
@@ -233,7 +233,8 @@
       <b>Ahora mismo:</b> <b>todo el catálogo validado por el usuario</b> — creación con
       cPanel preinstalado en <b>11 min</b> (WHM respondiendo, licencia solicitada) y
       <b>modo BYO</b> funcionando: el cliente pega su llave pública y el sistema no genera
-      ni custodia nada (login validado con PuTTY). Quedan: ④ notificaciones, vCenter y WHMCS.
+      ni custodia nada (login validado con PuTTY). Cada VPS que se crea queda registrado
+      solo en NetBox (IPAM). Quedan: ④ notificaciones, vCenter y WHMCS.
     </div>
   </div>
 
@@ -418,7 +419,7 @@
     </div>
     <ul class="tasks">
       <li class="tk-prog"><span class="tk-ic">◐</span><span class="tk-txt">WHMCS → creación automática al pagar — <b>diseño definido</b> (módulo de provisioning → API del motor); esperando accesos de Cristian</span><span class="tk-note">docs/integracion-whmcs.md</span></li>
-      <li class="tk-pend"><span class="tk-ic">○</span><span class="tk-txt">NetBox IPAM — reserva automática de IP</span></li>
+      <li class="tk-done"><span class="tk-ic">✔</span><span class="tk-txt"><b>NetBox IPAM (NETBOX2) — registro automático de IPs</b>: al crear un VPS se registran su IP privada y pública; al eliminarlo se borran. Validado E2E</span></li>
       <li class="tk-pend"><span class="tk-ic">○</span><span class="tk-txt">Multi-host + doradas distribuidas (una construcción, se reparte)</span></li>
       <li class="tk-pend"><span class="tk-ic">○</span><span class="tk-txt">Multi-marca — Planeta Hosting y otras</span></li>
       <li class="tk-pend"><span class="tk-ic">○</span><span class="tk-txt">Cupos de recursos por host</span></li>

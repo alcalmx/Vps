@@ -5,6 +5,43 @@
 
 ---
 
+## 2026-09-11 (viernes, tarde-4) — Integración con NetBox (NETBOX2 :8090): registro automático de IPs
+
+**Pedido del usuario:** "si registro un vps se registre alli tambien" — y explícito:
+**"para esto usaremos el netbox nuevo nada que ver el viejo"** (NETBOX2 :8090, el vigente;
+el viejo :8080 NO se toca).
+
+**Qué quedó:** el motor registra en NetBox ambas IPs de cada VPS al crearlo y las limpia
+(borrado real) al eliminarlo. Best-effort: si NetBox falla, la creación/borrado NO se
+bloquea (avisa "registrar a mano").
+- **Al crear** (tras el NAT): registra la privada `10.100.16.x/24` y la pública
+  `38.19.57.x/32` como `status=active`, con dns_name=fqdn y descripción completa
+  (marca, nombre VPS, el NAT 1:1, "alta vps-engine"). Guarda `nb_priv_id`/`nb_pub_id` en
+  el registro SQLite (2 columnas nuevas). El paso lo muestra: "NetBox: ambas IPs registradas".
+- **Al eliminar:** borra ambos registros con DELETE. Si el token no tuviera permiso de
+  borrado, hace fallback a marcar `deprecated` (implementado por si acaso, pero ya no hace
+  falta: el token nuevo sí borra).
+
+**Funciones nuevas en engine/app.py:** `netbox_req` (GET/POST/PATCH/DELETE con urllib),
+`netbox_ip_add` (idempotente: si la IP existe, la actualiza a active), `netbox_ip_del`
+(DELETE con fallback a deprecated). Config: `NETBOX_API_URL`/`NETBOX_API_TOKEN` en engine.env.
+
+**Detalle técnico resuelto (tokens v2 de NetBox 4.6):** el token del servicio daba
+"Invalid v1 token". NETBOX2 usa el esquema de tokens **v2** (peppered/HMAC): el valor que
+espera la API es `nbt_` + `key`(12) + `.` + `plaintext`(40) = 57 chars (igual que el token
+del dashboard). El `key` y el `plaintext` son independientes; el `plaintext` solo se ve al
+crear el token. Se creó un **usuario/token dedicado `vps-engine`** con ObjectPermission
+view/add/change/**delete** sobre `ipam.ipaddress`, y se armó el string v2 completo. La
+provisión del token quedó en un script (scratchpad, fuera del repo).
+
+**Validado E2E:** crear IP de prueba → borrado real → `registros que quedan: 0`. IPAM limpio.
+
+**Pendiente para el go-live real:** que una creación real de VPS aparezca sola en NETBOX2
+(lo probará el usuario). Antártida: idealmente asociar cada IP a su prefijo/VLAN y device
+en NetBox (hoy se registra la IP suelta con descripción; suficiente para IPAM).
+
+---
+
 ## 2026-09-11 (viernes, tarde-3) — Creación cPanel 11 min validada + modo BYO + borrón y cuenta nueva
 
 **Borrón y cuenta nueva (pedido del usuario):** limpieza TOTAL del entorno de pruebas —
