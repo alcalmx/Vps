@@ -23,6 +23,15 @@ automatizada (kickstart + OEMDRV, ~20 min solas). La variante cPanel se reconstr
 de la base: clonar → instalar cPanel → preparación para plantilla (limpiar identidad cPanel)
 → sellar → mover a `_plantillas/`.
 
+**Política de mantenimiento (usuario 2026-09-11):** el camino principal es SIEMPRE clonar
+doradas (rápido con y sin cPanel); la instalación post-creación de cPanel (30-60 min) es solo
+un fallback de emergencia y probablemente no sobreviva en el proyecto. Mantenimiento:
+- Los VPS clonados **se auto-actualizan** (cPanel trae `upcp` nocturno + dnf del SO) — la
+  dorada no necesita estar al día al minuto.
+- **Refrescar las doradas ~mensualmente** (o cuando cPanel salte de versión mayor): con la
+  fábrica automatizada es ~1 hora casi toda desatendida (base ~20 min + variante ~40 min).
+  A futuro puede programarse (reconstrucción automática periódica con notificación).
+
 **Licenciamiento cPanel (importante):** cPanel se licencia **por IP**. La dorada `-cpanel`
 lleva cPanel instalado pero SIN licencia amarrada (identidad limpiada al sellar); cada clon
 intenta activar la licencia con SU IP al primer boot (`cpkeyclt`). En pruebas corre con el
