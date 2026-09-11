@@ -949,49 +949,60 @@ def flujo_eliminar(job):
     job.ok("VPS %s en papelera (%s) — Send cerrado; la llave sigue en la bóveda hasta la purga (7 días)" % (job.vm, entrada))
 
 def flujo_editar(job, sabor_slug):
-    """Upgrade de plan (sabor) — SOLO hacia arriba (decisión 2026-09-11) y EN CALIENTE:
-    CPU/RAM suben por hot-add (la dorada trae vcpu/mem.hotadd) y el disco solo crece;
-    el filesystem se expande por SSH sin reiniciar. Cero corte para el cliente."""
+    """Cambio de plan (decisión 2026-09-11, v2):
+    - UPGRADE: CPU/RAM en caliente (hot-add) y el disco crece — sin corte.
+    - DOWNGRADE: CPU/RAM bajan con un REINICIO BREVE (~1-2 min; VMware no permite
+      quitar CPU/RAM en caliente). El disco NUNCA se achica (corrompería el
+      filesystem del cliente): se mantiene el tamaño actual."""
     vm = guardarraices(job.vm)
     sabor = SABORES[(vm["marca"], sabor_slug)]
 
-    # 1. validar que sea estrictamente un upgrade
+    # 1. calcular el cambio
     job.paso()
     if sabor_slug == vm["sabor"]:
         job.ok("la VM ya tiene el plan %s — nada que cambiar" % sabor_slug)
         return
-    bajas = []
-    if sabor["vcpu"] < vm["vcpu"]:
-        bajas.append("vCPU %d→%d" % (vm["vcpu"], sabor["vcpu"]))
-    if sabor["ram_mb"] < vm["ram_mb"]:
-        bajas.append("RAM %d→%d MB" % (vm["ram_mb"], sabor["ram_mb"]))
-    if sabor["disco_gb"] < vm["disco_gb"]:
-        bajas.append("disco %d→%d GB" % (vm["disco_gb"], sabor["disco_gb"]))
-    if bajas:
-        raise RuntimeError("el cambio a %s implica BAJAR recursos (%s) — solo se permiten upgrades"
-                           % (sabor_slug, ", ".join(bajas)))
-    cambios = []
-    if sabor["vcpu"] > vm["vcpu"]:
-        cambios.append("vCPU %d→%d" % (vm["vcpu"], sabor["vcpu"]))
-    if sabor["ram_mb"] > vm["ram_mb"]:
-        cambios.append("RAM %d→%d MB" % (vm["ram_mb"], sabor["ram_mb"]))
+    d_cpu = sabor["vcpu"] - vm["vcpu"]
+    d_ram = sabor["ram_mb"] - vm["ram_mb"]
     crecer = sabor["disco_gb"] > vm["disco_gb"]
+    disco_final = max(sabor["disco_gb"], vm["disco_gb"])
+    cambios = []
+    if d_cpu:
+        cambios.append("vCPU %d→%d" % (vm["vcpu"], sabor["vcpu"]))
+    if d_ram:
+        cambios.append("RAM %d→%d MB" % (vm["ram_mb"], sabor["ram_mb"]))
     if crecer:
         cambios.append("disco %d→%d GB" % (vm["disco_gb"], sabor["disco_gb"]))
-    if not cambios:
-        job.ok("el plan %s tiene los mismos recursos — solo se actualiza la etiqueta" % sabor_slug)
+    elif sabor["disco_gb"] < vm["disco_gb"]:
+        cambios.append("disco se MANTIENE en %d GB (achicarlo corrompería los datos)" % vm["disco_gb"])
+    if not (d_cpu or d_ram or crecer):
         with DB_LOCK, db() as c:
             c.execute("UPDATE vms SET sabor=? WHERE nombre=?", (sabor_slug, job.vm))
+        job.ok("plan actualizado a %s — %s" % (sabor_slug, "; ".join(cambios) or "recursos idénticos"))
         return
-    job.paso("upgrade validado: " + ", ".join(cambios))  # → aplicar CPU/RAM
+    requiere_reinicio = d_cpu < 0 or d_ram < 0
+    tipo = "DOWNGRADE (requiere reinicio breve)" if requiere_reinicio else "UPGRADE en caliente"
+    job.paso("%s: %s" % (tipo, ", ".join(cambios)))  # → aplicar CPU/RAM
 
-    # 2. CPU/RAM en caliente (hot-add; funciona también apagada)
-    if sabor["vcpu"] > vm["vcpu"] or sabor["ram_mb"] > vm["ram_mb"]:
-        govc("vm.change", "-vm", job.vm, "-c", str(sabor["vcpu"]), "-m", str(sabor["ram_mb"]))
-        job.detalle("CPU/RAM aplicados en caliente (hot-add), sin reinicio")
+    # 2. CPU/RAM: subir = hot-add sin corte; bajar = apagar→cambiar→encender
+    if d_cpu or d_ram:
+        if requiere_reinicio:
+            encendida = power_state(job.vm) == "poweredOn"
+            if encendida:
+                job.detalle("apagando para bajar CPU/RAM (no existe hot-remove)…")
+                apagar_graceful(job, job.vm)
+            govc("vm.change", "-vm", job.vm, "-c", str(sabor["vcpu"]), "-m", str(sabor["ram_mb"]))
+            if encendida:
+                govc("vm.power", "-on", job.vm)
+                job.detalle("CPU/RAM ajustados a la baja; VM encendida de nuevo (corte ~1-2 min)")
+            else:
+                job.detalle("CPU/RAM ajustados (la VM estaba apagada)")
+        else:
+            govc("vm.change", "-vm", job.vm, "-c", str(sabor["vcpu"]), "-m", str(sabor["ram_mb"]))
+            job.detalle("CPU/RAM aplicados en caliente (hot-add), sin reinicio")
     else:
         job.detalle("CPU/RAM sin cambios")
-    job.paso()  # → crecer disco
+    job.paso()  # → disco
 
     # 3. disco: intentar hot-extend por API; si el vCenter lo bloquea, ciclo breve
     #    apagar→crecer→encender. Luego expandir el filesystem del guest por SSH.
@@ -1052,11 +1063,12 @@ def flujo_editar(job, sabor_slug):
         job.detalle("disco sin cambios")
     job.paso()  # → registrar
 
-    # 4. registrar
-    set_estado(job.vm, vm["estado"], vcpu=sabor["vcpu"], ram_mb=sabor["ram_mb"], disco_gb=sabor["disco_gb"])
+    # 4. registrar (el disco registrado es el REAL: nunca baja)
+    set_estado(job.vm, vm["estado"], vcpu=sabor["vcpu"], ram_mb=sabor["ram_mb"], disco_gb=disco_final)
     with DB_LOCK, db() as c:
         c.execute("UPDATE vms SET sabor=? WHERE nombre=?", (sabor_slug, job.vm))
-    job.ok("VPS %s mejorado a %s (%s) — sin corte de servicio" % (job.vm, sabor_slug, ", ".join(cambios)))
+    cierre = "con un reinicio breve" if requiere_reinicio else "sin corte de servicio"
+    job.ok("VPS %s cambiado a %s (%s) — %s" % (job.vm, sabor_slug, ", ".join(cambios), cierre))
 
 def flujo_purgar(job):
     job.paso()
@@ -1200,8 +1212,8 @@ def editar():
     if (reg["marca"], sabor) not in SABORES:
         return jsonify({"error": "sabor desconocido para la marca %s" % reg["marca"]}), 400
     job = Job("editar", vm, actor,
-              ["Validar upgrade de plan (solo hacia arriba)", "Aplicar CPU/RAM en caliente",
-               "Crecer disco y expandir filesystem", "Actualizar registro"])
+              ["Calcular cambio de plan (upgrade/downgrade)", "Aplicar CPU/RAM",
+               "Ajustar disco (solo crece, nunca se achica)", "Actualizar registro"])
     run_job(job, lambda j: flujo_editar(j, sabor))
     return jsonify({"ok": True, "job_id": job.id})
 
