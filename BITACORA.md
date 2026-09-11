@@ -5,6 +5,40 @@
 
 ---
 
+## 2026-09-11 (viernes, tarde-3) — Creación cPanel 11 min validada + modo BYO + borrón y cuenta nueva
+
+**Borrón y cuenta nueva (pedido del usuario):** limpieza TOTAL del entorno de pruebas —
+papelera purgada (9 VMs), bóveda vaciada (3 llaves+Sends de prueba), registro y jobs en
+cero, NAT verificado sin restos, públicas .100-.102 libres. Numeración reiniciada.
+Doradas y plataforma intactas.
+
+**Creación con cPanel — VALIDADA (vps-hcl-0001-prueba7):** 15/15 pasos en **11 min**.
+Detalle estrella: "cPanel 138.0 PREINSTALADO — licencia solicitada con su IP; WHM
+responde (200)". Fixes que lo hicieron posible: espera de SSH hasta 4 min (el primer
+boot con cPanel tarda 2-3 min — el intento anterior 0011 falló por timeout de 60s) y
+activación de licencia + verificación de WHM tras el NAT (cuando ya hay internet).
+
+**Modo BYO implementado y VALIDADO:** el formulario acepta la llave PÚBLICA del cliente
+(campo opcional). Con llave → se instala, no se genera ni custodia nada (privada solo del
+cliente), fingerprint al registro (col. byo_pubkey_fp), panel de acceso adaptado, sin
+Send/bóveda. Vacío → flujo gestionado de siempre. Validación de formato + ssh-keygen.
+El usuario probó E2E: pegó su pública (de un .ppk PuTTY) y entró con PuTTY. Nota
+aprendida: el ssh de Windows no lee .ppk (convertir con PuTTYgen o usar PuTTY).
+
+**UX del dashboard:** botón "Limpiar" en Crear (resetea formulario y panel sin F5).
+
+**Relojes (pedido del usuario — cambio de hora en Chile):** ddos-monitor y containers2
+estaban en America/New_York (coincidía con Chile en invierno, el DST los delató) →
+corregidos a America/Santiago. ESXi tenía NTP DESHABILITADO y 5 min de atraso →
+habilitado con ntp.shoa.cl + pool.ntp.org (sincronizó al tiro). noc-monitor, rsyslogmk,
+containers01 y los 3 MikroTik (RouterData + CCRs) estaban correctos.
+
+**Estado Fase 2: ~92%.** Validado por el usuario: crear (sin y con cPanel), editar v2
+(upgrade caliente/downgrade), suspender/reanudar, eliminar, BYO. Queda: ④ notificaciones,
+conectar motor al vCenter (cuenta pendiente), integración WHMCS+Telegram.
+
+---
+
 ## 2026-09-11 (viernes, tarde-2) — Flujo entero validado por el usuario + catálogo de doradas completo + Editar v2
 
 **El usuario probó el flujo COMPLETO solo, desde el dashboard (vps-hcl-0010-prueba5):**
