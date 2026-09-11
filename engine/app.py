@@ -751,11 +751,13 @@ def flujo_crear(job, marca, sabor_slug, cliente, hostname, instalar_cpanel, modo
         job.detalle("VM arriba (IP DHCP transitoria %s); la estática %s se fija al "
                     "arranque y se confirma en el paso siguiente" % (ip_real, ip))
 
-    # 11. verificar ssh
+    # 11. verificar ssh (hasta ~4 min: el primer boot con cPanel preinstalado es
+    #     pesado — la IP estática y sshd pueden tardar 2-3 min en quedar arriba)
     job.paso()
     if MGMT_PRIVKEY_PATH:
         ultimo = None
-        for _ in range(10):
+        t0 = time.time()
+        for intento in range(25):
             try:
                 cli = paramiko.SSHClient()
                 cli.set_missing_host_key_policy(paramiko.AutoAddPolicy())
@@ -766,9 +768,12 @@ def flujo_crear(job, marca, sabor_slug, cliente, hostname, instalar_cpanel, modo
                 break
             except Exception as e:
                 ultimo = e
-                time.sleep(6)
+                job.detalle("esperando sshd en %s… (%ds; el primer boot con cPanel tarda 2-3 min)"
+                            % (ip, int(time.time() - t0)))
+                time.sleep(10)
         if ultimo:
-            raise RuntimeError("SSH con llave de gestión no entra: %s" % ultimo)
+            raise RuntimeError("SSH con llave de gestión no entra tras %ds: %s"
+                               % (int(time.time() - t0), ultimo))
         job.detalle("SSH root@%s con llave de gestión: OK" % ip)
     else:
         job.detalle("sin MGMT_PRIVKEY_PATH configurada — verificación omitida")
@@ -790,8 +795,29 @@ def flujo_crear(job, marca, sabor_slug, cliente, hostname, instalar_cpanel, modo
     # 13. cPanel
     job.paso()
     if cpanel_preinstalado:
-        job.detalle("cPanel PREINSTALADO en la dorada — el clon activa su licencia con su IP "
-                    "al primer boot (WHM en https://%s:2087)" % (publica or ip))
+        # ya hay NAT (paso anterior) → la VM tiene internet: activar licencia y verificar WHM
+        if MGMT_PRIVKEY_PATH:
+            try:
+                cli = paramiko.SSHClient()
+                cli.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+                cli.connect(ip, username="root", key_filename=MGMT_PRIVKEY_PATH, timeout=15,
+                            allow_agent=False, look_for_keys=False)
+                _, out, _ = cli.exec_command(
+                    "/usr/local/cpanel/scripts/mainipcheck >/dev/null 2>&1; "
+                    "/usr/local/cpanel/cpkeyclt >/dev/null 2>&1; "
+                    "/usr/local/cpanel/cpanel -V 2>/dev/null | head -1; "
+                    "curl -sk -o /dev/null -w '%{http_code}' https://127.0.0.1:2087/ || true", timeout=180)
+                res = out.read().decode().strip().splitlines()
+                cli.close()
+                ver = res[0] if res else "?"
+                whm_http = res[-1] if len(res) > 1 else "?"
+                job.detalle("cPanel %s PREINSTALADO — licencia solicitada con su IP; WHM responde (%s) en https://%s:2087"
+                            % (ver, whm_http, publica or ip))
+            except Exception as e:  # noqa: BLE001 — no bloquear por la activación
+                job.detalle("cPanel PREINSTALADO (WHM en https://%s:2087); activación de licencia "
+                            "quedó para el ciclo automático (%s)" % (publica or ip, str(e)[:80]))
+        else:
+            job.detalle("cPanel PREINSTALADO en la dorada (WHM en https://%s:2087)" % (publica or ip))
     elif instalar_cpanel and MGMT_PRIVKEY_PATH:
         cli = paramiko.SSHClient()
         cli.set_missing_host_key_policy(paramiko.AutoAddPolicy())
