@@ -53,9 +53,42 @@ llave. Las opciones y sus implicancias:
    que es el estándar del rubro. El email quedaría como aviso ("tu VPS está listo, entra a
    tu panel").
 
-## Decisión pendiente del usuario
+## ✅ Decisión tomada (usuario, 2026-09-11): Opción A + B
 
-- ¿Vamos por el **subdominio público de Sends** (`entrega.hosting.cl`) + email con el link?
-- ¿O esperamos a WHMCS y entregamos por el **área de cliente**?
-- Mientras tanto (pocos clientes, manual): seguimos entregando nosotros la llave por el
-  canal seguro que ya usemos, descargándola desde el vault interno.
+Vamos por **enlaces públicos de nuestro propio vault**: un **subdominio público que sirve
+solo los Sends**, y se entrega el **link por email**. Se implementa **más adelante** (aún
+no hay clientes externos en la mira).
+
+**Mientras tanto:** durante las pruebas seguimos **descargando la llave localmente** desde
+el vault interno (tenemos acceso). El subdominio se monta cuando vayamos a probar con un
+cliente real desde afuera.
+
+---
+
+## 📌 PENDIENTE (a futuro) — montar el subdominio público de Sends
+
+> Anotado para no olvidarlo. NO se hace ahora; se hace cuando toque entregar a un cliente externo.
+
+**Objetivo:** que el cliente pueda abrir el enlace del Send desde internet, **sin exponer
+el login ni el admin de la bóveda**.
+
+**Plan técnico (a afinar al construirlo):**
+1. **DNS + cert:** crear `entrega.hosting.cl` (o `send.hosting.cl`) apuntando al borde
+   público; certificado Let's Encrypt propio para ese subdominio.
+2. **nginx — server block nuevo** para ese subdominio que proxee a Vaultwarden
+   (`127.0.0.1:8222`) pero con **allowlist estricta: solo las rutas de acceso a Send**
+   (la SPA estática + `POST /api/sends/access/...` + la descarga del archivo del Send).
+   **Bloquear** todo lo demás: `/admin`, `/identity`, `/api/accounts`, login del vault, etc.
+   (Nunca exponer el vault completo — eso es la opción C descartada.)
+3. **URL del Send:** Vaultwarden arma el `accessUrl` a partir de su `DOMAIN`
+   (hoy `https://noc.hosting.cl/vault`). Hay que resolver que los Sends usen el dominio
+   público — opciones a evaluar al construirlo: ajustar `DOMAIN`/config, o reescribir el
+   host del link en el motor/vps-provision antes de entregarlo. **Gotcha conocido a probar.**
+4. **Entrega por email:** enviar el **link** (no la llave), con **expiración** (48 h) y
+   **contraseña por canal aparte** (SMS/WhatsApp). El motor ya crea el Send con estos
+   parámetros; faltaría el envío del correo (SMTP o vía WHMCS).
+5. **Seguridad:** el subdominio solo sirve Sends efímeros; el resto de la bóveda sigue
+   segmentado por IP como hoy.
+
+**Cuando llegue WHMCS (Fase 3):** evaluar además entregar la credencial en el **área de
+cliente** y dejar el email como aviso — puede convivir con o reemplazar al subdominio.
