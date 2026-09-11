@@ -23,6 +23,13 @@ automatizada (kickstart + OEMDRV, ~20 min solas). La variante cPanel se reconstr
 de la base: clonar → instalar cPanel → preparación para plantilla (limpiar identidad cPanel)
 → sellar → mover a `_plantillas/`.
 
+**Licenciamiento cPanel (importante):** cPanel se licencia **por IP**. La dorada `-cpanel`
+lleva cPanel instalado pero SIN licencia amarrada (identidad limpiada al sellar); cada clon
+intenta activar la licencia con SU IP al primer boot (`cpkeyclt`). En pruebas corre con el
+trial (15 días); en producción la **IP pública del VPS debe estar en el pool de licencias**
+de hosting.cl (las "30 Licencia cPanel" de los planes). El formulario ya no pregunta por
+cPanel: **lo decide el plan** (extras.cpanel_licencia_cuentas > 0 → usa la dorada -cpanel).
+
 ---
 
 # Construcción de la plantilla dorada base (dorada-almalinux9.7)

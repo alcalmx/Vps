@@ -680,8 +680,23 @@ def flujo_crear(job, marca, sabor_slug, cliente, hostname, instalar_cpanel, modo
     # 4. clonar
     job.paso("IP %s reservada" % ip)
     esxi_ssh("mkdir-vm %s" % nombre)
-    job.detalle("clonando %s → %s (thin)…" % (DORADA_DEFAULT, nombre))
-    esxi_ssh("clone-disk %s %s" % (DORADA_DEFAULT, nombre), timeout=900)
+    # catálogo de doradas: 2 por SO — base y '-cpanel' (preinstalado). Si el plan
+    # lleva cPanel se clona la variante (entrega ~7 min); si aún no existe, se cae
+    # al plan B: base + instalación post-creación (30-60 min).
+    cpanel_preinstalado = False
+    if instalar_cpanel:
+        try:
+            job.detalle("clonando %s-cpanel → %s (thin, cPanel preinstalado)…" % (DORADA_DEFAULT, nombre))
+            esxi_ssh("clone-disk %s-cpanel %s" % (DORADA_DEFAULT, nombre), timeout=900)
+            cpanel_preinstalado = True
+        except RuntimeError as e:
+            if "plantilla no existe" in str(e):
+                job.detalle("dorada -cpanel no disponible → se usará la base e instalación post-creación")
+            else:
+                raise
+    if not cpanel_preinstalado:
+        job.detalle("clonando %s → %s (thin)…" % (DORADA_DEFAULT, nombre))
+        esxi_ssh("clone-disk %s %s" % (DORADA_DEFAULT, nombre), timeout=900)
 
     # 5. crecer disco
     job.paso()
@@ -774,7 +789,10 @@ def flujo_crear(job, marca, sabor_slug, cliente, hostname, instalar_cpanel, modo
 
     # 13. cPanel
     job.paso()
-    if instalar_cpanel and MGMT_PRIVKEY_PATH:
+    if cpanel_preinstalado:
+        job.detalle("cPanel PREINSTALADO en la dorada — el clon activa su licencia con su IP "
+                    "al primer boot (WHM en https://%s:2087)" % (publica or ip))
+    elif instalar_cpanel and MGMT_PRIVKEY_PATH:
         cli = paramiko.SSHClient()
         cli.set_missing_host_key_policy(paramiko.AutoAddPolicy())
         cli.connect(ip, username="root", key_filename=MGMT_PRIVKEY_PATH, timeout=15,
@@ -1082,7 +1100,6 @@ def crear():
     sabor = (d.get("sabor") or "").strip()
     cliente = (d.get("cliente") or "").strip()
     hostname = (d.get("hostname") or "").strip().lower()
-    cpanel = bool(d.get("instalar_cpanel", True))
     actor = (d.get("actor") or "dashboard").strip()
     modo = (d.get("modo") or MODO).strip()   # pruebas | produccion (default = env)
     if modo not in ("pruebas", "produccion"):
@@ -1095,6 +1112,12 @@ def crear():
         return jsonify({"error": "hostname inválido (minúsculas, dígitos, puntos, guiones)"}), 400
     if not SABORES[(marca, sabor)].get("activo", True):
         return jsonify({"error": "el sabor %s no está activo" % sabor}), 400
+    # cPanel: lo decide el PLAN (todos los de hosting.cl lo incluyen). El parámetro
+    # explícito instalar_cpanel queda como override para API/pruebas.
+    if "instalar_cpanel" in d:
+        cpanel = bool(d["instalar_cpanel"])
+    else:
+        cpanel = (SABORES[(marca, sabor)].get("extras", {}).get("cpanel_licencia_cuentas", 0) or 0) > 0
     nombre = siguiente_nombre(MARCAS[marca], cliente)
     job = Job("crear", nombre, actor, PASOS_CREAR)
     run_job(job, lambda j: flujo_crear(j, marca, sabor, cliente, hostname, cpanel, modo))
