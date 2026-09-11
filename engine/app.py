@@ -26,6 +26,7 @@ import os
 import re
 import sqlite3
 import subprocess
+import tempfile
 import threading
 import time
 import uuid
@@ -43,6 +44,18 @@ GOVC = os.environ.get("GOVC_BIN", "/usr/local/bin/govc")
 DATASTORE = os.environ.get("GOVC_DATASTORE", "DiscoA37245")
 MGMT_PUBKEY = os.environ["MGMT_PUBKEY"].strip()
 MGMT_PRIVKEY_PATH = os.environ.get("MGMT_PRIVKEY_PATH", "")  # para verificar ssh + cPanel
+# MikroTik (producción): elegir IP privada/pública y crear NAT — mismo acceso que el NOC
+MIKROTIK_KEY = os.environ.get("MIKROTIK_KEY", "/keys/mikrotik_key")
+MIKROTIK_USER = os.environ.get("MIKROTIK_USER", "claude")
+MIKROTIK_PORT = os.environ.get("MIKROTIK_PORT", "2420")
+ROUTERDATA = os.environ.get("ROUTERDATA_HOST", "172.16.1.90")   # decide/rutea
+CCR_BORDE = os.environ.get("CCR_BORDE_HOST", "172.16.1.69")     # ping de verificación
+# address-list de RouterData por red pública (igual que ALTA_PUB_REDES del NOC)
+PUB_REDES = {"Red57-0": "38.19.57", "Red104-0": "201.148.104", "Red105-0": "201.148.105",
+             "Red106-0": "201.148.106", "Red107-0": "201.148.107"}
+# vps-provision (bóveda) para guardar la llave del cliente y crear el Bitwarden Send
+PROVISION_URL = os.environ.get("PROVISION_URL", "http://127.0.0.1:8223")
+PROVISION_TOKEN = os.environ.get("PROVISION_TOKEN", "")
 DB_PATH = os.environ.get("DB_PATH", "/data/registry.db")
 CONFIG_DIR = os.environ.get("CONFIG_DIR", "/app/config")
 MODO = os.environ.get("MODO", "pruebas")  # pruebas | produccion
@@ -96,6 +109,13 @@ def init_db():
           id INTEGER PRIMARY KEY AUTOINCREMENT, ts TEXT DEFAULT (datetime('now','localtime')),
           actor TEXT, accion TEXT, vm TEXT, detalle TEXT, resultado TEXT);
         """)
+        # columnas de producción (IP pública/NAT + bóveda) — idempotente
+        for col, decl in (("publica", "TEXT"), ("pub_lista", "TEXT"),
+                          ("vault_item", "TEXT"), ("send_url", "TEXT")):
+            try:
+                c.execute("ALTER TABLE vms ADD COLUMN %s %s" % (col, decl))
+            except sqlite3.OperationalError:
+                pass  # ya existe
 
 def audit(actor, accion, vm, detalle, resultado):
     with DB_LOCK, db() as c:
@@ -223,6 +243,198 @@ def ip_libre_pruebas(subred, gateway, job=None):
             return ip
     raise RuntimeError("sin IPs libres en %s" % subred)
 
+
+# ── Producción: MikroTik RouterData (IP privada/pública + NAT) ────────────────
+def mikrotik(cmd, host=None, timeout=25):
+    """Corre un comando en el MikroTik por SSH (mismo acceso claude@2420 del NOC)."""
+    host = host or ROUTERDATA
+    r = subprocess.run(
+        ["ssh", "-i", MIKROTIK_KEY, "-o", "StrictHostKeyChecking=no", "-o", "BatchMode=yes",
+         "-o", "LogLevel=ERROR", "-o", "ConnectTimeout=10", "-p", MIKROTIK_PORT,
+         "%s@%s" % (MIKROTIK_USER, host), cmd],
+        capture_output=True, text=True, timeout=timeout)
+    return r.returncode == 0, r.stdout
+
+
+def _octs(texto, red):
+    """Octetos donde aparece red.X en el texto (NAT: src-address y to-addresses)."""
+    return set(int(m.group(1)) for m in re.finditer(re.escape(red) + r"\.(\d+)\b", texto))
+
+
+def _octs_arp_vivo(out_arp, red):
+    """Octetos con ARP REALMENTE vivo (failed/incomplete = libre). El barrido de IPs
+    deja entradas failed de todo el /24; sin este filtro parecería todo ocupado."""
+    octs = set()
+    for line in out_arp.splitlines():
+        if "status=failed" in line or "status=incomplete" in line:
+            continue
+        m = re.search(r"address=" + re.escape(red) + r"\.(\d+)\b", line)
+        if m:
+            octs.add(int(m.group(1)))
+    return octs
+
+
+def ip_libre_produccion(subred, gateway, job=None):
+    """IP privada libre por RouterData (NAT+ARP), no por ping — noc-monitor no
+    barre la 10.100.16.x pero RouterData es la fuente de verdad. ocupadas =
+    NAT ∪ ARP-vivo ∪ {.1} ∪ registro; octeto más alto libre desde .254."""
+    red = ".".join(subred.split("/")[0].split(".")[:3])
+    ok_nat, out_nat = mikrotik("/ip firewall nat print terse")
+    ok_arp, out_arp = mikrotik("/ip arp print terse")
+    if not ok_nat or not ok_arp:
+        raise RuntimeError("no pude consultar RouterData (NAT/ARP) para la IP privada")
+    en_nat, en_arp = _octs(out_nat, red), _octs_arp_vivo(out_arp, red)
+    ocupadas = en_nat | en_arp | {int(gateway.split(".")[-1])}
+    with DB_LOCK, db() as c:
+        for row in c.execute("SELECT ip FROM vms WHERE ip LIKE ? AND estado!='papelera'", (red + ".%",)):
+            try:
+                ocupadas.add(int(row["ip"].split(".")[-1]))
+            except (ValueError, AttributeError):
+                pass
+    if job:
+        job.detalle("RouterData %s: %d en NAT · %d vivas en ARP · %d ocupadas"
+                    % (red, len(en_nat), len(en_arp), len(ocupadas)))
+    for o in range(254, 1, -1):
+        if o not in ocupadas:
+            return "%s.%d" % (red, o)
+    raise RuntimeError("sin IPs privadas libres en %s" % subred)
+
+
+def ip_publica_libre(lista, rango=None, job=None):
+    """IP pública libre de la address-list (mismo criterio que /api/alta/publica del
+    NOC): candidata habilitada y sin comentario, sin NAT previo, sin ARP vivo, sin
+    otras address-lists, y muda al ping desde el CCR de borde. Si `rango` = [lo, hi],
+    se restringe a ese rango (para pruebas). Devuelve (ip, rechazadas)."""
+    red = PUB_REDES.get(lista)
+    if not red:
+        raise RuntimeError("lista pública desconocida: %s" % lista)
+    ok_l, out_l = mikrotik("/ip firewall address-list print terse where list=" + lista)
+    ok_nat, out_nat = mikrotik("/ip firewall nat print terse")
+    ok_arp, out_arp = mikrotik("/ip arp print terse")
+    if not (ok_l and ok_nat and ok_arp):
+        raise RuntimeError("no pude consultar RouterData para la IP pública")
+    candidatas = []
+    for line in out_l.splitlines():
+        m = re.search(r"address=" + re.escape(red) + r"\.(\d+)\b", line)
+        if not m:
+            continue
+        oct_ = int(m.group(1))
+        if rango and not (rango[0] <= oct_ <= rango[1]):
+            continue
+        deshab = bool(re.match(r"^\s*\d+\s+X", line))   # X = deshabilitada = en uso
+        if not deshab and "comment=" not in line:       # habilitada y sin comentario = libre
+            candidatas.append(oct_)
+    candidatas.sort(reverse=True)
+    en_nat, en_arp = _octs(out_nat, red), _octs_arp_vivo(out_arp, red)
+    rechazadas = []
+    for oct_ in candidatas:
+        ip = "%s.%d" % (red, oct_)
+        if oct_ in en_nat:
+            rechazadas.append("%s (NAT)" % ip); continue
+        if oct_ in en_arp:
+            rechazadas.append("%s (ARP viva)" % ip); continue
+        ok_o, out_o = mikrotik("/ip firewall address-list print terse where address=" + ip)
+        otras = [l for l in (out_o or "").splitlines() if l.strip() and ("list=" + lista) not in l]
+        if otras:
+            rechazadas.append("%s (otras listas)" % ip); continue
+        ok_p, out_p = mikrotik("/ping %s count=3" % ip, host=CCR_BORDE)
+        if not ok_p or "received=0" not in out_p:
+            rechazadas.append("%s (responde ping)" % ip); continue
+        if job:
+            job.detalle("pública %s libre (validada: lista/NAT/ARP/otras/ping)" % ip)
+        return ip, rechazadas
+    raise RuntimeError("sin IP pública libre en %s. Rechazadas: %s" % (lista, ", ".join(rechazadas) or "ninguna candidata"))
+
+
+def crear_nat(privada, publica, lista, etiqueta, job=None):
+    """NAT 1:1 en RouterData: srcnat + dstnat + marcar la pública como usada en la
+    address-list (deshabilitada + comentada). Igual que /api/alta/crear del NOC."""
+    # re-chequeo anti-carrera: ninguna de las 2 IPs debe tener NAT ya
+    ok, out = mikrotik("/ip firewall nat print terse")
+    if ok and re.search(r"=(?:%s|%s)\b" % (re.escape(privada), re.escape(publica)), out):
+        raise RuntimeError("una de las IPs ya tiene NAT (¿carrera?) — abortado")
+    ok1, o1 = mikrotik('/ip firewall nat add chain=srcnat src-address=%s action=src-nat '
+                       'to-addresses=%s comment="[VPS] %s"' % (privada, publica, etiqueta))
+    if not ok1:
+        raise RuntimeError("srcnat falló: %s" % o1[:200])
+    ok2, o2 = mikrotik('/ip firewall nat add chain=dstnat dst-address=%s action=dst-nat '
+                       'to-addresses=%s comment="[VPS] %s"' % (publica, privada, etiqueta))
+    if not ok2:
+        mikrotik('/ip firewall nat remove [find where comment="[VPS] %s"]' % etiqueta)  # rollback
+        raise RuntimeError("dstnat falló (srcnat revertido): %s" % o2[:200])
+    mikrotik('/ip firewall address-list set [find where list=%s and address=%s] '
+             'comment="[VPS] %s" disabled=yes' % (lista, publica, etiqueta))
+    if job:
+        job.detalle("NAT 1:1 creado: %s ↔ %s (srcnat+dstnat, pública marcada en %s)"
+                    % (privada, publica, lista))
+
+
+def borrar_nat(privada, publica, lista, job=None):
+    """Revierte el NAT y libera la pública en la address-list (al borrar el VPS)."""
+    r1 = mikrotik('/ip firewall nat remove [find where src-address=%s and to-addresses=%s]'
+                  % (privada, publica))
+    r2 = mikrotik('/ip firewall nat remove [find where dst-address=%s and to-addresses=%s]'
+                  % (publica, privada))
+    r3 = mikrotik('/ip firewall address-list set [find where list=%s and address=%s] '
+                  'comment="" disabled=no' % (lista, publica))
+    if job:
+        job.detalle("NAT removido y pública %s liberada en %s" % (publica, lista))
+    return r1[0] and r2[0] and r3[0]
+
+
+# ── Securización: llave del cliente → bóveda → Bitwarden Send ─────────────────
+def gen_ed25519(comment):
+    """Genera un par ed25519; devuelve (privada, pública, fingerprint)."""
+    with tempfile.TemporaryDirectory() as tmp:
+        kf = os.path.join(tmp, "key")
+        subprocess.run(["ssh-keygen", "-t", "ed25519", "-N", "", "-C", comment, "-f", kf],
+                       check=True, capture_output=True)
+        priv = open(kf).read()
+        pub = open(kf + ".pub").read().strip()
+        fp = subprocess.run(["ssh-keygen", "-lf", kf + ".pub"],
+                            capture_output=True, text=True).stdout.split()[1]
+    return priv, pub, fp
+
+
+def securizar_vps(job, nombre, ip, cliente, hostname):
+    """Genera el par del cliente, instala su pública en la VM (SSH con la llave de
+    gestión) y delega en vps-provision guardar en la bóveda + crear el Send.
+    Devuelve el dict con el link de entrega, o None si no hay llave/token."""
+    if not (MGMT_PRIVKEY_PATH and PROVISION_TOKEN):
+        job.detalle("securización omitida (falta llave de gestión o token de vps-provision)")
+        return None
+    priv, pub, fp = gen_ed25519("cliente:%s %s" % (cliente, hostname))
+    # instalar la pública del cliente en la VM (además de la de gestión)
+    cli = paramiko.SSHClient()
+    cli.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+    cli.connect(ip, username="root", key_filename=MGMT_PRIVKEY_PATH, timeout=15,
+                allow_agent=False, look_for_keys=False)
+    script = ('mkdir -p /root/.ssh && chmod 700 /root/.ssh && touch /root/.ssh/authorized_keys '
+              '&& chmod 600 /root/.ssh/authorized_keys && grep -qF "%s" /root/.ssh/authorized_keys '
+              '|| echo "%s" >> /root/.ssh/authorized_keys' % (pub, pub))
+    _, out, _ = cli.exec_command(script, timeout=30)
+    out.channel.recv_exit_status()
+    cli.close()
+    job.detalle("llave del cliente instalada en la VM (%s)" % fp)
+    # guardar en la bóveda + crear Send vía vps-provision
+    import urllib.request
+    import urllib.error
+    item_name = "%s (%s) - %s" % (hostname, ip, cliente)
+    notes = "Cliente: %s\nVPS: %s %s\nGenerada por vps-engine al crear el VPS." % (cliente, hostname, ip)
+    payload = json.dumps({"cliente": cliente, "item_name": item_name, "notes": notes,
+                          "priv": priv, "pub": pub, "fingerprint": fp, "days": 2}).encode()
+    req = urllib.request.Request(PROVISION_URL + "/vault-guardar-enviar", data=payload,
+                                 method="POST", headers={"Content-Type": "application/json",
+                                                         "X-Auth-Token": PROVISION_TOKEN})
+    try:
+        with urllib.request.urlopen(req, timeout=120) as resp:
+            r = json.loads(resp.read().decode())
+    except urllib.error.HTTPError as e:
+        raise RuntimeError("bóveda/Send falló: HTTP %s %s" % (e.code, e.read().decode()[:200]))
+    job.detalle("guardada en la bóveda (%s) y Send de entrega creado" % item_name)
+    return r
+
+
 # ── Plantilla VMX ────────────────────────────────────────────────────────────
 VMX_TEMPLATE = """.encoding = "UTF-8"
 config.version = "8"
@@ -349,8 +561,8 @@ def siguiente_nombre(marca_cfg, cliente):
     base = "%s-%04d" % (pref, nxt)
     return ("%s-%s" % (base, slug)) if slug else base
 
-def red_activa(marca_cfg):
-    return marca_cfg["red_pruebas"] if MODO == "pruebas" else marca_cfg["red_default"]
+def red_activa(marca_cfg, modo):
+    return marca_cfg["red_pruebas"] if modo == "pruebas" else marca_cfg["red_default"]
 
 def power_state(nombre):
     try:
@@ -394,14 +606,16 @@ PASOS_CREAR = [
     "Encender la VM",
     "Esperar IP por VMware Tools",
     "Verificar acceso SSH con la llave de gestión",
+    "Elegir IP pública y crear NAT",
     "Instalar cPanel (última versión)",
+    "Securizar y entregar llave al cliente",
     "Registrar y finalizar",
 ]
 
-def flujo_crear(job, marca, sabor_slug, cliente, hostname, instalar_cpanel):
+def flujo_crear(job, marca, sabor_slug, cliente, hostname, instalar_cpanel, modo):
     marca_cfg = MARCAS[marca]
     sabor = SABORES[(marca, sabor_slug)]
-    red = red_activa(marca_cfg)
+    red = red_activa(marca_cfg, modo)
     prefijo = ipaddress.ip_network(red["subred"]).prefixlen
     nombre = job.vm
 
@@ -417,11 +631,14 @@ def flujo_crear(job, marca, sabor_slug, cliente, hostname, instalar_cpanel):
     job.detalle("%s · %s (%d vCPU / %d MB / %d GB) · modo %s"
                 % (nombre, sabor["nombre_web"], sabor["vcpu"], sabor["ram_mb"], sabor["disco_gb"], MODO))
 
-    # 2. IP libre
+    # 2. IP privada libre — RouterData en producción, barrido local en pruebas
     job.paso()
-    ip = ip_libre_pruebas(red["subred"], red["gateway"], job)
+    if modo == "produccion":
+        ip = ip_libre_produccion(red["subred"], red["gateway"], job)
+    else:
+        ip = ip_libre_pruebas(red["subred"], red["gateway"], job)
     set_estado(nombre, "creando", ip=ip)
-    job.detalle("IP asignada: %s (gw %s)" % (ip, red["gateway"]))
+    job.detalle("IP privada asignada: %s (gw %s)" % (ip, red["gateway"]))
 
     # 3. espacio
     job.paso()
@@ -509,7 +726,21 @@ def flujo_crear(job, marca, sabor_slug, cliente, hostname, instalar_cpanel):
     else:
         job.detalle("sin MGMT_PRIVKEY_PATH configurada — verificación omitida")
 
-    # 12. cPanel
+    # 12. IP pública + NAT 1:1 (solo producción)
+    job.paso()
+    publica = pub_lista = None
+    if modo == "produccion":
+        pub_lista = marca_cfg.get("pub_lista", "Red107-0")
+        rango = red.get("publica_rango_prueba")   # [lo, hi] para restringir en pruebas de prod
+        publica, _rech = ip_publica_libre(pub_lista, rango, job)
+        crear_nat(ip, publica, pub_lista, fqdn, job)
+        set_estado(nombre, "creando", publica=publica, pub_lista=pub_lista)
+        job.detalle("pública %s ↔ privada %s (NAT 1:1 activo, entrada por %s)"
+                    % (publica, ip, publica))
+    else:
+        job.detalle("omitido (modo pruebas — la VM queda solo con IP privada)")
+
+    # 13. cPanel
     job.paso()
     if instalar_cpanel and MGMT_PRIVKEY_PATH:
         cli = paramiko.SSHClient()
@@ -547,10 +778,26 @@ def flujo_crear(job, marca, sabor_slug, cliente, hostname, instalar_cpanel):
     else:
         job.detalle("omitido (instalar_cpanel=%s)" % instalar_cpanel)
 
-    # 13. finalizar
+    # 14. securizar y entregar la llave al cliente (solo producción)
+    job.paso()
+    entrega = None
+    if modo == "produccion":
+        entrega = securizar_vps(job, nombre, ip, cliente, fqdn)
+        if entrega:
+            with DB_LOCK, db() as c:
+                c.execute("UPDATE vms SET vault_item=?, send_url=? WHERE nombre=?",
+                          (entrega.get("item_id"), entrega.get("url"), nombre))
+            job.detalle("ENTREGAR al cliente → %s%s" % (
+                entrega.get("url", ""),
+                (" · contraseña: " + entrega["password"]) if entrega.get("password") else ""))
+    else:
+        job.detalle("omitido (modo pruebas — la securización va en producción)")
+
+    # 15. finalizar
     job.paso()
     set_estado(nombre, "activo")
-    job.ok("VPS %s activo en %s — %s/%s" % (nombre, ip, marca, sabor_slug))
+    destino = ("pública %s → %s" % (publica, ip)) if publica else ip
+    job.ok("VPS %s activo (%s) — %s/%s" % (nombre, destino, marca, sabor_slug))
 
 # ── FLUJOS: suspender / reanudar / eliminar / editar / purga ─────────────────
 def flujo_suspender(job):
@@ -586,7 +833,16 @@ def flujo_eliminar(job):
         apagar_graceful(job, job.vm)
     job.paso("apagada")  # → unregister
     govc("vm.unregister", job.vm)
-    job.paso("des-registrada del ESXi")  # → papelera
+    job.paso("des-registrada del ESXi")  # → liberar NAT
+    if vm.get("publica") and vm.get("pub_lista"):
+        try:
+            borrar_nat(vm["ip"], vm["publica"], vm["pub_lista"], job)
+        except Exception as e:  # noqa: BLE001 — no bloquear el borrado por el NAT
+            job.detalle("aviso: no se pudo revertir el NAT de %s (%s) — revisar a mano"
+                        % (vm.get("publica"), e))
+    else:
+        job.detalle("sin IP pública que liberar")
+    job.paso("NAT liberado")  # → papelera
     out = esxi_ssh("trash-vm %s" % job.vm)
     entrada = out.replace("OK", "").strip()
     set_estado(job.vm, "papelera", papelera_entrada=entrada)
@@ -661,6 +917,9 @@ def crear():
     hostname = (d.get("hostname") or "").strip().lower()
     cpanel = bool(d.get("instalar_cpanel", True))
     actor = (d.get("actor") or "dashboard").strip()
+    modo = (d.get("modo") or MODO).strip()   # pruebas | produccion (default = env)
+    if modo not in ("pruebas", "produccion"):
+        return jsonify({"error": "modo inválido (pruebas | produccion)"}), 400
     if marca not in MARCAS:
         return jsonify({"error": "marca desconocida: %s" % marca}), 400
     if (marca, sabor) not in SABORES:
@@ -671,8 +930,8 @@ def crear():
         return jsonify({"error": "el sabor %s no está activo" % sabor}), 400
     nombre = siguiente_nombre(MARCAS[marca], cliente)
     job = Job("crear", nombre, actor, PASOS_CREAR)
-    run_job(job, lambda j: flujo_crear(j, marca, sabor, cliente, hostname, cpanel))
-    return jsonify({"ok": True, "job_id": job.id, "vm": nombre})
+    run_job(job, lambda j: flujo_crear(j, marca, sabor, cliente, hostname, cpanel, modo))
+    return jsonify({"ok": True, "job_id": job.id, "vm": nombre, "modo": modo})
 
 @app.route("/job/<jid>")
 def job_get(jid):
@@ -710,7 +969,7 @@ def vms_list():
 
 ACCIONES = {"suspender": (flujo_suspender, ["Validar guardarraíles", "Apagar (graceful, 60 s)", "Marcar suspendido"]),
             "reanudar": (flujo_reanudar, ["Validar guardarraíles", "Encender", "Esperar que levante"]),
-            "eliminar": (flujo_eliminar, ["Validar guardarraíles", "Apagar", "Des-registrar del ESXi", "Mover a papelera"])}
+            "eliminar": (flujo_eliminar, ["Validar guardarraíles", "Apagar", "Des-registrar del ESXi", "Liberar IP pública y NAT", "Mover a papelera"])}
 
 @app.route("/accion", methods=["POST"])
 def accion():

@@ -2,6 +2,8 @@
   "marca": "hosting.cl",
   "prefijo_vm": "vps-hcl",
   "activo": true,
+  "pub_lista": "Red57-0",
+  "_pub_lista_nota": "Address-list del MikroTik para la IP pública. Red57-0 = 38.19.57.0/24 (rango de PRUEBAS 2026-09-11). En producción real de hosting.cl sería Red107-0 (201.148.107).",
   "red_default": {
     "subred": "10.100.16.0/24",
     "gateway": "10.100.16.1",
@@ -10,7 +12,8 @@
     "portgroup": "Vps_Hosting.cl",
     "vlan": 81,
     "vswitch": "vSwitch4",
-    "nota": "Red de PRODUCCIÓN 'Vps Hosting' (usuario 2026-09-11): portgroup 'Vps_Hosting.cl' en vSwitch4, VLAN 81, uplink vmnic0 por cable directo al switch del rack1. AQUÍ deben quedar los VPS reales de los 3 sabores. La VM se crea en este portgroup y toma la IP que asigna el patrón de búsqueda (ver ip_libre). Confirmar gateway .1."
+    "publica_rango_prueba": [100, 102],
+    "nota": "Red de PRODUCCIÓN 'Vps Hosting' (usuario 2026-09-11): portgroup 'Vps_Hosting.cl' en vSwitch4, VLAN 81, uplink vmnic0 por cable directo al switch del rack1. La VM se crea en este portgroup y toma la IP del patrón de búsqueda (ver ip_libre). 'publica_rango_prueba' [100,102] restringe la IP pública a 38.19.57.100-102 SOLO para pruebas (quitar para producción real → toma la más alta libre). Confirmar gateway .1."
   },
   "red_pruebas": {
     "subred": "192.168.122.0/24",
