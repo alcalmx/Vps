@@ -33,6 +33,13 @@ corregidos a America/Santiago. ESXi tenía NTP DESHABILITADO y 5 min de atraso �
 habilitado con ntp.shoa.cl + pool.ntp.org (sincronizó al tiro). noc-monitor, rsyslogmk,
 containers01 y los 3 MikroTik (RouterData + CCRs) estaban correctos.
 
+**Contraseña de WHM — decisión de entrega:** los VPS nacen con root sin contraseña y WHM
+la necesita. Decisión del usuario: **la entrega INSTRUYE al cliente** a definirla él mismo
+(`passwd root` por SSH → entrar a WHM con root+esa clave). No custodiamos contraseñas; la
+clave NO habilita SSH (PasswordAuthentication no). Implementado YA como "paso 3" en el
+panel de acceso del dashboard; el mismo texto irá en el correo/área de cliente de WHMCS.
+Documentado en docs/entrega-credenciales.md.
+
 **Estado Fase 2: ~92%.** Validado por el usuario: crear (sin y con cPanel), editar v2
 (upgrade caliente/downgrade), suspender/reanudar, eliminar, BYO. Queda: ④ notificaciones,
 conectar motor al vCenter (cuenta pendiente), integración WHMCS+Telegram.
