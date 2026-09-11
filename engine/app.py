@@ -374,10 +374,10 @@ def crear_nat(privada, publica, lista, hostname, marca_nombre, job=None):
     ok2, o2 = mikrotik('/ip firewall nat add chain=dstnat dst-address=%s action=dst-nat '
                        'to-addresses=%s' % (publica, privada))   # dstnat SIN comment
     if not ok2:
-        mikrotik('/ip firewall nat remove [find where chain=srcnat and src-address=%s and to-addresses=%s]'
-                 % (privada, publica))  # rollback del srcnat
+        mikrotik('/ip firewall nat remove [find where chain=srcnat and src-address="%s" and to-addresses="%s"]'
+                 % (privada, publica))  # rollback del srcnat (valores ENTRECOMILLADOS: RouterOS no matchea sin comillas)
         raise RuntimeError("dstnat falló (srcnat revertido): %s" % o2[:200])
-    mikrotik('/ip firewall address-list set [find where list=%s and address=%s] '
+    mikrotik('/ip firewall address-list set [find where list=%s and address="%s"] '
              'comment="%s - VPS %s" disabled=yes' % (lista, publica, hostname, marca_nombre))
     if job:
         job.detalle("NAT 1:1 creado: %s ↔ %s (srcnat con comentario [NOC], dstnat sin comentario)"
@@ -385,16 +385,22 @@ def crear_nat(privada, publica, lista, hostname, marca_nombre, job=None):
 
 
 def borrar_nat(privada, publica, lista, job=None):
-    """Revierte el NAT y libera la pública en la address-list (al borrar el VPS)."""
-    r1 = mikrotik('/ip firewall nat remove [find where src-address=%s and to-addresses=%s]'
-                  % (privada, publica))
-    r2 = mikrotik('/ip firewall nat remove [find where dst-address=%s and to-addresses=%s]'
-                  % (publica, privada))
-    r3 = mikrotik('/ip firewall address-list set [find where list=%s and address=%s] '
-                  'comment="" disabled=no' % (lista, publica))
+    """Revierte el NAT y libera la pública en la address-list (al borrar el VPS).
+    Igual que /api/alta/baja del NOC: los valores del `find` van ENTRECOMILLADOS —
+    sin comillas RouterOS no matchea y el remove no borra nada (bug detectado 2026-09-11)."""
+    mikrotik('/ip firewall nat remove [find where chain=srcnat and src-address="%s" and to-addresses="%s"]'
+             % (privada, publica))
+    mikrotik('/ip firewall nat remove [find where chain=dstnat and dst-address="%s" and to-addresses="%s"]'
+             % (publica, privada))
+    mikrotik('/ip firewall address-list set [find where list=%s and address="%s"] '
+             'comment="" disabled=no' % (lista, publica))
+    # verificar que realmente no quedó NAT de esa privada
+    ok, out = mikrotik("/ip firewall nat print terse")
+    quedo = ok and re.search(r'=%s\b' % re.escape(privada), out)
     if job:
-        job.detalle("NAT removido y pública %s liberada en %s" % (publica, lista))
-    return r1[0] and r2[0] and r3[0]
+        job.detalle(("⚠ quedó NAT de %s — revisar" % privada) if quedo
+                    else "NAT removido y pública %s liberada en %s" % (publica, lista))
+    return not quedo
 
 
 # ── Securización: llave del cliente → bóveda → Bitwarden Send ─────────────────
