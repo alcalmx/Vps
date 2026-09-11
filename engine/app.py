@@ -56,6 +56,9 @@ PUB_REDES = {"Red57-0": "38.19.57", "Red104-0": "201.148.104", "Red105-0": "201.
 # vps-provision (bóveda) para guardar la llave del cliente y crear el Bitwarden Send
 PROVISION_URL = os.environ.get("PROVISION_URL", "http://127.0.0.1:8223")
 PROVISION_TOKEN = os.environ.get("PROVISION_TOKEN", "")
+# NetBox (IPAM vigente = NETBOX2 :8090): registro automático de las IPs de cada VPS
+NETBOX_URL = os.environ.get("NETBOX_API_URL", "").rstrip("/")
+NETBOX_TOKEN = os.environ.get("NETBOX_API_TOKEN", "")
 DB_PATH = os.environ.get("DB_PATH", "/data/registry.db")
 CONFIG_DIR = os.environ.get("CONFIG_DIR", "/app/config")
 MODO = os.environ.get("MODO", "pruebas")  # pruebas | produccion
@@ -112,7 +115,7 @@ def init_db():
         # columnas de producción (IP pública/NAT + bóveda) — idempotente
         for col, decl in (("publica", "TEXT"), ("pub_lista", "TEXT"),
                           ("vault_item", "TEXT"), ("send_url", "TEXT"), ("send_id", "TEXT"),
-                          ("byo_pubkey_fp", "TEXT")):
+                          ("byo_pubkey_fp", "TEXT"), ("nb_priv_id", "TEXT"), ("nb_pub_id", "TEXT")):
             try:
                 c.execute("ALTER TABLE vms ADD COLUMN %s %s" % (col, decl))
             except sqlite3.OperationalError:
@@ -416,6 +419,57 @@ def gen_ed25519(comment):
         fp = subprocess.run(["ssh-keygen", "-lf", kf + ".pub"],
                             capture_output=True, text=True).stdout.split()[1]
     return priv, pub, fp
+
+
+# ── NetBox (IPAM): registrar/limpiar las IPs de cada VPS — best effort ───────
+def netbox_req(method, path, payload=None, timeout=10):
+    import urllib.request
+    req = urllib.request.Request(
+        NETBOX_URL + path, method=method,
+        data=json.dumps(payload).encode() if payload is not None else None,
+        headers={"Authorization": "Token " + NETBOX_TOKEN,
+                 "Content-Type": "application/json", "Accept": "application/json"})
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        body = resp.read().decode()
+        return json.loads(body) if body.strip() else {}
+
+
+def netbox_ip_add(address_cidr, dns_name, descripcion):
+    """Registra una IP en NetBox (status active). Devuelve el id, o None si falla
+    (best-effort: nunca bloquea la creación). Si la IP ya existe, devuelve su id."""
+    if not (NETBOX_URL and NETBOX_TOKEN):
+        return None
+    try:
+        r = netbox_req("GET", "/api/ipam/ip-addresses/?address=" + address_cidr.split("/")[0])
+        if r.get("count"):
+            nb_id = r["results"][0]["id"]
+            netbox_req("PATCH", "/api/ipam/ip-addresses/%d/" % nb_id,
+                       {"status": "active", "dns_name": dns_name, "description": descripcion})
+            return nb_id
+        r = netbox_req("POST", "/api/ipam/ip-addresses/",
+                       {"address": address_cidr, "status": "active",
+                        "dns_name": dns_name, "description": descripcion})
+        return r.get("id")
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def netbox_ip_del(nb_id):
+    """Limpia un registro de IP en NetBox (best-effort). Intenta DELETE; si el token
+    no tiene permiso de borrado (403), lo marca como 'deprecated' (liberada)."""
+    if not (NETBOX_URL and NETBOX_TOKEN and nb_id):
+        return False
+    try:
+        netbox_req("DELETE", "/api/ipam/ip-addresses/%d/" % int(nb_id))
+        return True
+    except Exception:  # noqa: BLE001 — fallback: marcar liberada
+        try:
+            netbox_req("PATCH", "/api/ipam/ip-addresses/%d/" % int(nb_id),
+                       {"status": "deprecated", "dns_name": "",
+                        "description": "LIBERADA (VPS eliminado por vps-engine)"})
+            return True
+        except Exception:  # noqa: BLE001
+            return False
 
 
 def provision_post(path, payload, timeout=60):
@@ -818,8 +872,19 @@ def flujo_crear(job, marca, sabor_slug, cliente, hostname, instalar_cpanel, modo
         publica, _rech = ip_publica_libre(pub_lista, rango, job)
         crear_nat(ip, publica, pub_lista, fqdn, marca_cfg.get("nombre", marca), job)
         set_estado(nombre, "creando", publica=publica, pub_lista=pub_lista)
-        job.detalle("pública %s ↔ privada %s (NAT 1:1 activo, entrada por %s)"
-                    % (publica, ip, publica))
+        # registrar ambas IPs en NetBox (IPAM vigente) — best effort, no bloquea
+        desc_base = "%s - VPS %s (%s)" % (fqdn, marca_cfg.get("nombre", marca), nombre)
+        nb_priv = netbox_ip_add(ip + "/24", fqdn, desc_base + " · NAT 1:1 a %s · alta vps-engine" % publica)
+        nb_pub = netbox_ip_add(publica + "/32", fqdn, desc_base + " · NAT 1:1 a %s (RouterData) · alta vps-engine" % ip)
+        if nb_priv or nb_pub:
+            with DB_LOCK, db() as c:
+                c.execute("UPDATE vms SET nb_priv_id=?, nb_pub_id=? WHERE nombre=?",
+                          (nb_priv, nb_pub, nombre))
+        job.detalle("pública %s ↔ privada %s (NAT 1:1 activo) · NetBox: %s"
+                    % (publica, ip,
+                       "ambas IPs registradas" if (nb_priv and nb_pub) else
+                       "registro parcial/omitido (revisar IPAM)" if (nb_priv or nb_pub) else
+                       "no disponible — registrar a mano"))
     else:
         job.detalle("omitido (modo pruebas — la VM queda solo con IP privada)")
 
@@ -999,6 +1064,12 @@ def flujo_eliminar(job):
                         % (vm.get("publica"), e))
     else:
         job.detalle("sin IP pública que liberar")
+    # limpiar el registro de IPs en NetBox (best-effort)
+    nb1 = netbox_ip_del(vm.get("nb_priv_id"))
+    nb2 = netbox_ip_del(vm.get("nb_pub_id"))
+    if vm.get("nb_priv_id") or vm.get("nb_pub_id"):
+        job.detalle((job.pasos[job._i]["detalle"] + " · NetBox: " +
+                     ("IPs eliminadas del IPAM" if (nb1 or nb2) else "no se pudo limpiar — revisar")).strip(" ·"))
     job.paso("NAT liberado")  # → eliminar Send (política B: el link de entrega se va al borrar)
     if vm.get("send_id") and PROVISION_TOKEN:
         try:
