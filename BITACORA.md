@@ -5,6 +5,31 @@
 
 ---
 
+## 2026-09-14 (domingo) — 🏆 WHMCS Fase 3 VALIDADO E2E: las 4 operaciones desde el panel
+
+**HITO:** el ciclo de vida COMPLETO se disparó y validó desde WHMCS (producción real),
+con el cliente de pruebas alcadio (28875) y el producto oculto gratis "PRUEBA VPS Estándar"
+(grupo ZZZ-PRUEBAS, sabor vps-estandar, modo produccion, sin cPanel, setup manual).
+Se creó la orden (Active, gratis) y se dispararon los botones de Module Commands:
+- **Create** → módulo → canal → motor → **VPS real `vps-hcl-0008-alcadio`** (4vCPU/4096MB/103GB,
+  priv 10.100.16.247, púb 38.19.57.102, NAT real, NetBox ambas IPs). WHMCS mostró "Service
+  Created Successfully" y el módulo escribió solo en la ficha **Dedicated IP** (la pública) y
+  **Username** (el nombre de la VM). ✅
+- **Suspend** → IP pública bloqueada (address-list), VM viva, estado suspendido. ✅
+- **Unsuspend** → IP desbloqueada, estado activo. ✅
+- **Terminate** → papelera 7 días + IP/NAT liberados + **NetBox borrado real** (ambas IPs
+  desaparecieron). ✅
+Todo visible EN VIVO en el NOC: se le agregó al dashboard (dashboard.py, contenedor
+hosting-dashboard) que el job en curso se auto-despliega con sus pasos y que la pestaña "Jobs"
+se enciende (spinner + "N en curso") desde cualquier tab — así aparecen también las creaciones
+disparadas por WHMCS. **Detalle conocido:** CreateAccount hace polling bloqueante; con este
+create rápido (~2 min sin cPanel) PHP aguantó y devolvió OK, pero con cPanel (~11 min)
+superaría el límite de PHP → pendiente pasar a "no bloqueante + sincronizar" antes de la fase
+cPanel. **Próximas features pedidas por el usuario:** (1) Username=root + password de WHMCS
+inyectada como clave de root vía cloud-init en el primer boot (SSH sigue key-only; sirve para
+WHM sin passwd manual); (2) panel de estado en área de cliente WHMCS (solo estado simple);
+(3) crear los productos PRUEBA Empresas y Cyber Black (calcar, cambiando sabor).
+
 ## 2026-09-14 (domingo) — WHMCS Fase 3: canal seguro OK + módulo hostingcl_vps escrito
 
 **Etapa 1 — CANAL SEGURO funcionando (validado E2E):** el WHMCS (201.148.105.100) llama al
