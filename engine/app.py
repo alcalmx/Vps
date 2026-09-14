@@ -37,6 +37,8 @@ from flask import Flask, jsonify, request
 
 # ── Configuración ────────────────────────────────────────────────────────────
 TOKEN = os.environ["ENGINE_TOKEN"]
+# Token dedicado para el conector WHMCS (revocable aparte del dashboard). Opcional.
+WHMCS_TOKEN = os.environ.get("WHMCS_TOKEN", "")
 ESXI_HOST = os.environ.get("ESXI_HOST", "10.100.37.245")
 ESXI_SSH_PORT = int(os.environ.get("ESXI_SSH_PORT", "22"))
 ESXI_SSH_KEY = os.environ.get("ESXI_SSH_KEY", "/keys/vps_engine_esxi")
@@ -1231,7 +1233,10 @@ def flujo_purgar(job):
 
 # ── API ──────────────────────────────────────────────────────────────────────
 def auth():
-    return request.headers.get("X-Auth-Token") == TOKEN
+    tok = request.headers.get("X-Auth-Token")
+    if not tok:
+        return False
+    return tok == TOKEN or (WHMCS_TOKEN and tok == WHMCS_TOKEN)
 
 @app.route("/health")
 def health():

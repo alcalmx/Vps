@@ -5,6 +5,33 @@
 
 ---
 
+## 2026-09-14 (domingo) — WHMCS Fase 3: canal seguro OK + módulo hostingcl_vps escrito
+
+**Etapa 1 — CANAL SEGURO funcionando (validado E2E):** el WHMCS (201.148.105.100) llama al
+motor por `https://noc.hosting.cl/vps-api/` → nginx de noc-monitor proxya a `127.0.0.1:8224`.
+Dos cerrojos: **allowlist nginx** (201.148.105.100 + 10.100.36.241) + **X-Auth-Token**. El
+motor sigue cerrado al mundo. Diagnóstico de red que costó: noc-monitor es interno puro
+(192.168.122.252 + 10.255.0.253, sin IP pública); el WHMCS resolvía noc.hosting.cl a la
+interna pero el **firewalld de noc-monitor rechazaba el 443** desde la pública del WHMCS
+(solo abría 443 a redes internas). Fix: regla rich runtime+permanente para 201.148.105.100
+(SIN `--reload` para no romper puertos de contenedores). El WHMCS sale con su **pública
+201.148.105.100** hacia noc-monitor (confirmado en el log). `curl /vps-api/health` desde el
+WHMCS devuelve el JSON de sabores. ✅
+
+**Token dedicado WHMCS:** el motor ahora acepta `WHMCS_TOKEN` además de `ENGINE_TOKEN`
+(auth() en app.py) — revocable aparte del dashboard. Generado e instalado en engine.env,
+verificado (200 con token, 401 sin). El token va en el Access Hash del "Server" de WHMCS.
+
+**Etapa 2 — Módulo `hostingcl_vps` escrito** (`whmcs-modulo/hostingcl_vps/hostingcl_vps.php`,
+versionado en el repo; se sube a `<whmcs>/modules/servers/`). Funciones: MetaData,
+ConfigOptions (Sabor/Marca/Modo/cPanel), CreateAccount→/crear, Suspend/Unsuspend→/accion,
+Terminate→/accion eliminar (con confirmación), ChangePackage→/editar, TestConnection→/health.
+Guarda el nombre de la VM en tblhosting.username y la IP pública en dedicatedip. CreateAccount
+hace polling bloqueante del job (~2 min sin cPanel) — suficiente para el harness manual;
+producción a escala se pasaría a pending+cron. **Cliente de pruebas:** alcadio almarza (WHMCS
+id 28875). **Pendiente:** subir el módulo, crear el "Server" WHMCS con el token, crear los 3
+productos de prueba (grupo oculto, gratis, modo=produccion, sin cPanel) y disparar la secuencia.
+
 ## 2026-09-14 (domingo) — Ajuste de disco (+3 GiB) para que el guest muestre el tamaño neto
 
 Fabián/usuario notaron que las VMs muestran "menos" RAM y disco de lo asignado. Se investigó
