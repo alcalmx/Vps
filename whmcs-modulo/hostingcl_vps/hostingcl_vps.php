@@ -190,14 +190,17 @@ function hostingcl_vps_CreateAccount(array $params)
             Capsule::table('tblhosting')->where('id', $params['serviceid'])->update(['username' => 'root']);
         } catch (\Exception $e) { /* no bloquear */ }
 
-        // Esperar a que el job termine (la creación sin cPanel tarda ~2 min)
-        $estado = hostingcl_vps_poll($params, $jobid, 240);
+        // Poll CORTO (~25s): solo caza fallos inmediatos y, si fue rápido, trae la IP.
+        // NO se bloquea los 2-11 min de la creación (con cPanel eso supera el límite de PHP).
+        // El progreso se ve en el NOC; la IP se completa aquí si alcanza, o con el botón
+        // "Sincronizar datos" cuando el VPS termine.
+        $estado = hostingcl_vps_poll($params, $jobid, 25);
 
         if ($estado === 'error') {
             return 'El motor reportó error creando el VPS (job ' . $jobid . ')';
         }
 
-        // Guardar la IP pública en la ficha (dedicatedip)
+        // Guardar la IP pública en la ficha (dedicatedip) si ya está disponible
         $ip = hostingcl_vps_ip_publica($params, $vm);
         if ($ip !== '') {
             try {
@@ -275,6 +278,42 @@ function hostingcl_vps_ChangePackage(array $params)
         return 'success';
     } catch (\Exception $e) {
         return 'Excepción ChangePackage: ' . $e->getMessage();
+    }
+}
+
+/** Botones extra en la ficha de admin del servicio. */
+function hostingcl_vps_AdminCustomButtonArray()
+{
+    return [
+        'Sincronizar datos' => 'Sync',
+    ];
+}
+
+/**
+ * Trae del motor los datos del VPS (por serviceid) y los escribe en la ficha:
+ * la IP pública en "Dedicated IP". Útil cuando la creación terminó después de que
+ * CreateAccount devolvió (flujo no-bloqueante).
+ */
+function hostingcl_vps_Sync(array $params)
+{
+    try {
+        $sid = (string) $params['serviceid'];
+        $r = hostingcl_vps_api($params, 'GET', '/vms');
+        if (empty($r['vms']) || !is_array($r['vms'])) {
+            return 'No se pudo leer el motor (HTTP ' . ($r['_http'] ?? '?') . ')';
+        }
+        foreach ($r['vms'] as $v) {
+            if ((string) ($v['whmcs_serviceid'] ?? '') === $sid) {
+                $ip = $v['publica'] ?? '';
+                if ($ip !== '') {
+                    Capsule::table('tblhosting')->where('id', $params['serviceid'])->update(['dedicatedip' => $ip]);
+                }
+                return 'success';
+            }
+        }
+        return 'El VPS aún no aparece activo (puede estar creándose o en papelera)';
+    } catch (\Exception $e) {
+        return 'Excepción Sync: ' . $e->getMessage();
     }
 }
 
