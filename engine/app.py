@@ -579,6 +579,7 @@ scsi0.virtualDev = "pvscsi"
 scsi0:0.present = "TRUE"
 scsi0:0.fileName = "{name}.vmdk"
 scsi0:0.deviceType = "scsi-hardDisk"
+scsi0:0.ctkEnabled = "TRUE"
 ethernet0.present = "TRUE"
 ethernet0.virtualDev = "vmxnet3"
 ethernet0.networkName = "{portgroup}"
@@ -588,6 +589,7 @@ tools.syncTime = "TRUE"
 mem.hotadd = "TRUE"
 vcpu.hotadd = "TRUE"
 disk.EnableUUID = "TRUE"
+ctkEnabled = "TRUE"
 powerType.powerOff = "soft"
 powerType.reset = "soft"
 """
@@ -797,6 +799,7 @@ def flujo_crear(job, marca, sabor_slug, cliente, hostname, instalar_cpanel, modo
     govc("datastore.upload", "-ds", DATASTORE, "/tmp/%s.vmx" % nombre,
          "VPS/%s/%s.vmx" % (nombre, nombre))
     os.unlink("/tmp/%s.vmx" % nombre)
+    job.detalle("VM con CBT activo (ctkEnabled) — lista para backups incrementales")
 
     # 7. registrar en ESXi
     job.paso()

@@ -5,6 +5,19 @@
 
 ---
 
+## 2026-09-14 (domingo) — CBT activado en cada VPS (backups incrementales, pedido de Fabián)
+
+Fabián pidió (KB Broadcom 320557) que las VMs nazcan con **CBT (Changed Block Tracking)**
+activo para permitir backups incrementales. Implementado en la plantilla VMX del motor
+(`VMX_TEMPLATE` en engine/app.py): se agregaron **`ctkEnabled = "TRUE"`** (punto 3, CBT a
+nivel de toda la VM) y **`scsi0:0.ctkEnabled = "TRUE"`** (punto 4, CBT en el disco). Así
+cada VPS nace listo para respaldo incremental sin tocar nada después (se activa limpio
+porque la VM nace sin snapshots). Nota en el paso del .vmx: "VM con CBT activo — lista para
+backups incrementales". Si un VPS tuviera varios discos, habría que sumar una línea
+`scsiX:Y.ctkEnabled` por disco (hoy son de 1 disco → basta scsi0:0). Motor reconstruido y
+reiniciado en noc-monitor. En el flujo, la perilla 💾 backups pasó de "Off hoy" a "Preparado"
+(VM lista; falta definir software/retención/addon comercial con Fabián). Fabián de acuerdo.
+
 ## 2026-09-14 (domingo) — Página "Flujo final esperado" + decisiones de diseño WHMCS
 
 Se creó la página **Flujo final esperado** (`docs/flujo-final.html`, servida en
