@@ -15,6 +15,15 @@ dispara la creación al pagar; no puede apagar ni eliminar** (lo destructivo pas
 equipo con confirmación Telegram + papelera 7 días). La opción de que el cliente elimine
 solo existe pero queda OFF (anotada por si el equipo la quiere activar).
 
+**DETALLE — licencia cPanel es SHARED (pool):** el diagrama del flujo se corrigió al orden
+real del motor (clona la dorada con cPanel ya preinstalado → enciende → SSH por privada →
+IP pública+NAT → recién ahí licencia → securiza). La licencia cPanel es **por IP pública**
+(inherente), por eso va después del NAT y se difiere con él si no hay pública. **NUEVO dato
+del usuario:** usan **licencia compartida (shared/pool)**, no standalone: al crear se asigna
+una licencia del pool a la IP pública; **al eliminar hay que LIBERARLA** y devolverla al pool
+(hoy el borrado libera IP/NAT/NetBox pero NO la licencia → PENDIENTE agregarlo). Pregunta
+abierta: cómo se asigna/libera (¿manage2 API de cPanel u otro mecanismo?) para automatizarlo.
+
 **ACLARACIÓN — multi-marca:** hosting.cl tiene **un WHMCS por marca** (no uno multimarca).
 El **piloto es solo hosting.cl** (un WHMCS, una marca). Cada instancia de WHMCS se configura
 fija con su marca y el motor la recibe por parámetro (ya soportado, sin cambios). A futuro,

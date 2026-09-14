@@ -193,15 +193,19 @@
       <div class="lane">
         <div class="who eng"><span class="em">⚙️</span>Motor Vps</div>
         <div class="steps">
-          <span class="step"><span class="n">🌐</span>IP privada + pública + NAT</span>
+          <span class="step"><span class="n">🌐</span>IP privada</span>
           <span class="arrow">→</span>
-          <span class="step"><span class="n">💽</span>Clona la dorada</span>
+          <span class="step"><span class="n">💽</span>Clona la dorada <span class="mono" style="font-size:.72rem; color:var(--faint)">(cPanel ya viene)</span></span>
           <span class="arrow">→</span>
-          <span class="step"><span class="n">🎛️</span>cPanel + licencia</span>
+          <span class="step"><span class="n">⚡</span>Enciende + cloud-init</span>
           <span class="arrow">→</span>
-          <span class="step"><span class="n">🔐</span>Securiza + llave</span>
+          <span class="step"><span class="n">🔑</span>SSH por la privada</span>
           <span class="arrow">→</span>
-          <span class="step"><span class="n">🗂️</span>Registra en NetBox</span>
+          <span class="step"><span class="n">🌍</span>IP pública + NAT + NetBox</span>
+          <span class="arrow">→</span>
+          <span class="step" style="border-color:var(--prog)"><span class="n">🎛️</span>Asigna licencia cPanel <span class="mono" style="font-size:.72rem; color:var(--prog)">(shared, por su IP)</span></span>
+          <span class="arrow">→</span>
+          <span class="step"><span class="n">🔐</span>Securiza + entrega llave</span>
         </div>
       </div>
       <div class="lane">
@@ -428,10 +432,12 @@
           configura fija con su marca y el motor la recibe por parámetro (ya soportado). A futuro, cada nueva
           marca = otro WHMCS con su <b>propio token + allowlist</b> hacia el mismo motor.</p>
       </div>
-      <div class="case ok">
-        <div class="h"><span class="em">📜</span>Licencia cPanel por IP</div>
-        <p>La licencia va atada a la IP pública. El VPS nace con su IP y su licencia; si la IP cambiara, la
-          licencia debe moverse con ella.</p>
+      <div class="case q">
+        <div class="h"><span class="em">📜</span>Licencia cPanel (shared / pool)</div>
+        <p>Se usa <b>licencia compartida</b>: al crear, se <b>asigna una del pool a la IP pública</b> del VPS
+          (cPanel siempre licencia por IP) y la VM la toma. <b>Al eliminar hay que liberarla</b> y devolverla
+          al pool para reutilizarla — hoy el borrado libera IP/NAT/NetBox pero <b>aún no la licencia</b>.
+          <b>Pendiente:</b> automatizar asignar/liberar (¿manage2 API u otro?).</p>
       </div>
     </div>
   </section>
