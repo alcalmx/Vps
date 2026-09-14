@@ -5,6 +5,24 @@
 
 ---
 
+## 2026-09-14 (domingo) — Ajuste de disco (+3 GiB) para que el guest muestre el tamaño neto
+
+Fabián/usuario notaron que las VMs muestran "menos" RAM y disco de lo asignado. Se investigó
+con datos reales (prueba10 = Cyber Black 8192 MB / 150 GiB, y ddos-monitor viejo):
+- **RAM:** asignado 8192 MB → guest ve 7648-7696 MB (`free -g` muestra 7). Reserva del
+  hipervisor ~500 MB, **overhead normal de virtualización, NO un tema de MB vs GB** (el VMX
+  ya usa `memSize` en MB; vSphere solo lo *muestra* como "8 GB" por ser múltiplo redondo).
+  **Decisión: la RAM se deja igual** (valores nominales 4096/6144/8192) — es el estándar de la
+  industria y sobreasignar cuesta RAM real (solo ~59 GiB libres en el host).
+- **Disco:** de 150 GiB asignados, `/` mostraba 147 GiB. Desglose exacto (lsblk): /boot 1 GiB
+  + swap 2 GiB + / 147 GiB = 150. La pérdida es **exactamente 3 GiB fijos** (boot+swap),
+  confirmado también en prueba9 (100→97). La dorada nueva ya es lean (swap 2 GiB, partición
+  única con growpart) vs. las VMs viejas con LVM+swap 4 GiB.
+  **Decisión del usuario: "al disco dale más".** Se sumaron **+3 GiB** a cada sabor para que
+  `/` muestre el tamaño anunciado: **Estándar 100→103**, **Empresas 150→153**, **Cyber Black
+  150→153**. Como el disco es **thin**, el extra NO ocupa espacio real hasta usarse (costo ~0).
+  Documentado en cada sabor con el campo `_nota_disco`. Motor reconstruido y verificado.
+
 ## 2026-09-14 (domingo) — Acceso al WHMCS real: exploración y mapeo de productos (Fase 3 arranca)
 
 El usuario consiguió acceso admin al **WHMCS de hosting.cl** (`panel.hosting.cl/admin`,

@@ -4,7 +4,8 @@
   "nombre_web": "VPS Cyber Black",
   "vcpu": 6,
   "ram_mb": 8192,
-  "disco_gb": 150,
+  "disco_gb": 153,
+  "_nota_disco": "Se asignan 153 GiB (no 150) para que el guest muestre 150 GB netos en / — se descuentan /boot (1 GiB) + swap (2 GiB). El disco es thin: el extra no ocupa espacio real hasta usarse. La RAM se deja en el valor nominal (overhead de virtualización se acepta).",
   "so_default": "almalinux9",
   "red": {
     "portgroup": null,
