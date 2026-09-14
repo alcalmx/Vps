@@ -5,6 +5,18 @@
 
 ---
 
+## 2026-09-14 (domingo) — NetBox validado E2E en producción (alta y baja) + host de pruebas
+
+**NetBox VALIDADO en producción real (vps-hcl-0003-prueba9):** el usuario corrió el flujo
+completo. **Creación en 1 min 57 s** (13:28:02 → 13:29:59), modo producción + BYO (llave
+pública del cliente, sin custodia), sin cPanel. En el paso del NAT el motor registró solo
+las dos IPs en NETBOX2: privada `10.100.16.247/24` y pública `38.19.57.102/32` (status
+active, dns_name=prueba9.cl, descripción con marca+nombre+NAT). Confirmado por API. Al
+**eliminar**, ambas **desaparecieron del IPAM** (borrado real, verificado por API). Ciclo
+alta/baja de NetBox cerrado. También se verificó que el disco quedó bien: VMDK de 100 GB
+(107374182400 B, thin) y dentro del guest `/dev/sda3` a 97 G (growpart OK) — la diferencia
+100→97 es normal (GiB + /boot + overhead XFS). Marcado hecho en el tablero.
+
 ## 2026-09-14 (domingo) — Pendiente: host VMware de pruebas (pedir a Fabián)
 
 El usuario probará el flujo para validar en vivo lo de NetBox (avisará para actualizar el
