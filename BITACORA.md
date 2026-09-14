@@ -15,6 +15,13 @@ dispara la creación al pagar; no puede apagar ni eliminar** (lo destructivo pas
 equipo con confirmación Telegram + papelera 7 días). La opción de que el cliente elimine
 solo existe pero queda OFF (anotada por si el equipo la quiere activar).
 
+**DECISIÓN DE DISEÑO — "pagos no instantáneos":** confirmada por el usuario. El motor
+**nunca crea antes de confirmar el pago**. Instantáneo (tarjeta/webpay) → crea al toque;
+transferencia/depósito → espera a que WHMCS marque el pago recibido o un admin apruebe la
+orden. Nunca "crear al hacer el pedido" (antes de pagar). En WHMCS = Auto-Setup del producto
+"al recibir el primer pago" (o "al aceptar la orden" para revisión manual) — ya está en el
+checklist para Cristian (punto 3).
+
 **DECISIÓN DE DISEÑO — "sin IP pública libre":** si el rango público se agota, el motor
 **NO revierte** lo construido. Crea todo **menos el NAT** y deja el VPS en estado
 `pendiente-ip-pública` (VM viva por su privada, securización lista). Se difieren junto al

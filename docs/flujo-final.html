@@ -396,10 +396,12 @@
           <b>"Completar NAT"</b> retoma solo la cola faltante y ahí sí activa y manda el correo.
           Malla preventiva: alerta cuando queden pocas IPs libres, para no llegar a este caso.</p>
       </div>
-      <div class="case q">
-        <div class="h"><span class="em">💳</span>Pagos que no son al instante</div>
-        <p>Transferencia/depósito no confirman solos. La creación se dispara cuando WHMCS marca el pago
-          confirmado (o lo aprueba un admin). <b>Confirmar política.</b></p>
+      <div class="case ok">
+        <div class="h"><span class="em">💳</span>Pagos que no son al instante <span class="mono" style="font-size:.72rem; color:var(--done); font-weight:700">· DECIDIDO</span></div>
+        <p><b>Nunca se crea antes de confirmar el dinero.</b> Pago instantáneo (tarjeta/webpay) → crea al toque.
+          Transferencia/depósito → espera a que WHMCS marque el pago recibido o un admin apruebe la orden.
+          Nada "al fiado". En WHMCS = Auto-Setup <span class="mono">"al recibir el primer pago"</span>
+          (o "al aceptar la orden" para revisión manual).</p>
       </div>
       <div class="case ok">
         <div class="h"><span class="em">🔁</span>Renovación</div>
