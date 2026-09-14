@@ -1378,6 +1378,24 @@ def vm_por_serviceid(sid):
                         "ORDER BY created_at DESC LIMIT 1", (str(sid),)).fetchone()
     return row["nombre"] if row else None
 
+@app.route("/vm-por-servicio")
+def vm_por_servicio_get():
+    """Consulta LIVIANA (solo BD, sin tocar el ESXi) de la VM de un serviceid de WHMCS:
+    devuelve estado, IP privada y pública. Para que el módulo pueble la ficha rápido."""
+    if not auth():
+        return jsonify({"error": "unauthorized"}), 401
+    sid = (request.args.get("serviceid") or "").strip()
+    if not sid:
+        return jsonify({"error": "falta serviceid"}), 400
+    with DB_LOCK, db() as c:
+        row = c.execute("SELECT nombre,estado,ip,publica,hostname FROM vms WHERE whmcs_serviceid=? "
+                        "ORDER BY created_at DESC LIMIT 1", (str(sid),)).fetchone()
+    if not row:
+        return jsonify({"ok": True, "encontrada": False})
+    d = dict(row)
+    d.update({"ok": True, "encontrada": True})
+    return jsonify(d)
+
 @app.route("/accion", methods=["POST"])
 def accion():
     if not auth():
