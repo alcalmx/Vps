@@ -227,8 +227,8 @@
 
     <div class="metrics">
       <div class="metric"><div class="n"><span class="accent">4</span></div><div class="l">Fases del proyecto</div></div>
-      <div class="metric"><div class="n">Fase&nbsp;2</div><div class="l">En curso · 92%</div></div>
-      <div class="metric"><div class="n">67<span style="color:var(--faint)">%</span></div><div class="l">Avance global</div></div>
+      <div class="metric"><div class="n">Fase&nbsp;3</div><div class="l">En curso · 55%</div></div>
+      <div class="metric"><div class="n">78<span style="color:var(--faint)">%</span></div><div class="l">Avance global</div></div>
       <div class="metric"><div class="n">2<span style="color:var(--faint)">/2</span></div><div class="l">Servicios desplegados</div></div>
     </div>
   </header>
@@ -237,11 +237,12 @@
   <div class="live">
     <div class="dot"></div>
     <div class="t">
-      <b>Ahora mismo:</b> <b>todo el catálogo validado por el usuario</b> — creación con
-      cPanel preinstalado en <b>11 min</b> (WHM respondiendo, licencia solicitada) y
-      <b>modo BYO</b> funcionando: el cliente pega su llave pública y el sistema no genera
-      ni custodia nada (login validado con PuTTY). Cada VPS que se crea queda registrado
-      solo en NetBox (IPAM). Quedan: ④ notificaciones, vCenter y WHMCS.
+      <b>Ahora mismo:</b> <b>WHMCS ya dispara el motor</b> — las 4 operaciones (crear/suspender/
+      reanudar/eliminar) se probaron <b>desde los botones del panel de WHMCS</b> creando y
+      gestionando <b>VPS reales</b>, con el flujo visible en vivo en el NOC y los datos de
+      vuelta a la ficha. El canal seguro (allowlist + token) y el módulo <span class="mono">hostingcl_vps</span>
+      están instalados. Falta la <b>automatización de la licencia cPanel</b> antes de la 2ª
+      prueba (con cPanel). Fase 2 completa; catálogo, BYO, CBT y NetBox validados.
     </div>
   </div>
 
@@ -419,16 +420,21 @@
       <div class="ph-title">
         <h3>Automatización y escala</h3>
         <p>Que el alta de un servicio dispare la creación sola, y crecer a varios hosts y marcas.</p>
-        <span class="ph-tag tag-pend">Futuro</span>
+        <span class="ph-tag tag-prog">En curso</span>
       </div>
       <div class="ph-status">
-        <div class="ph-pct" style="color:var(--pend)">0%</div>
-        <div class="ph-bar"><span style="width:0%"></span></div>
+        <div class="ph-pct" style="color:var(--prog)">55%</div>
+        <div class="ph-bar"><span style="width:55%;background:var(--prog)"></span></div>
       </div>
     </div>
     <ul class="tasks">
-      <li class="tk-prog"><span class="tk-ic">◐</span><span class="tk-txt">WHMCS → creación automática al pagar — <b>diseño definido</b> (módulo de provisioning → API del motor); esperando accesos de Cristian</span><span class="tk-note">docs/integracion-whmcs.md</span></li>
-      <li class="tk-done"><span class="tk-ic">✔</span><span class="tk-txt"><b>NetBox IPAM (NETBOX2) — registro automático de IPs</b>: al crear un VPS se registran su IP privada y pública; al eliminarlo se borran. <b>Validado E2E en producción</b> (prueba9: alta y baja confirmadas en el IPAM)</span></li>
+      <li class="tk-done"><span class="tk-ic">✔</span><span class="tk-txt"><b>WHMCS → ciclo de vida completo, VALIDADO E2E desde el panel</b>: las 4 operaciones (Crear/Suspender/Reanudar/Eliminar) disparadas con los botones del servicio en WHMCS crearon/gestionaron <b>VPS reales</b> (cliente de pruebas, sin tocar producción)</span><span class="tk-note">docs/whmcs-hallazgos.md</span></li>
+      <li class="tk-done"><span class="tk-ic">✔</span><span class="tk-txt"><b>Canal seguro WHMCS↔motor</b> — nginx (allowlist a la IP del WHMCS) + firewalld + token dedicado; el motor sigue cerrado al mundo</span></li>
+      <li class="tk-done"><span class="tk-ic">✔</span><span class="tk-txt"><b>Módulo <span class="mono">hostingcl_vps</span></b> instalado en WHMCS (mapea productos→sabores; pago→crear, mora→suspender, etc.)</span></li>
+      <li class="tk-done"><span class="tk-ic">✔</span><span class="tk-txt"><b>Visibilidad</b>: panel en vivo en el NOC (creaciones se auto-despliegan, incl. las disparadas por WHMCS) + panel de estado simple en el área de cliente</span></li>
+      <li class="tk-done"><span class="tk-ic">✔</span><span class="tk-txt">Mejoras: <b>Username=root</b> + clave de root aplicada sola (para WHM, SSH sigue key-only); CreateAccount no-bloqueante + botón "Sincronizar"; 3 productos de prueba por sabor</span></li>
+      <li class="tk-prog"><span class="tk-ic">◐</span><span class="tk-txt"><b>Automatización de licencia cPanel</b> — asignar del pool a la IP al crear y liberar al eliminar</span><span class="tk-note">pendiente: método de asignación</span></li>
+      <li class="tk-done"><span class="tk-ic">✔</span><span class="tk-txt"><b>NetBox IPAM (NETBOX2) — registro automático de IPs</b>: alta y baja de IPs en el IPAM al crear/eliminar. <b>Validado E2E en producción</b></span></li>
       <li class="tk-pend"><span class="tk-ic">○</span><span class="tk-txt">Multi-host + doradas distribuidas (una construcción, se reparte)</span></li>
       <li class="tk-pend"><span class="tk-ic">○</span><span class="tk-txt">Multi-marca — Planeta Hosting y otras</span></li>
       <li class="tk-pend"><span class="tk-ic">○</span><span class="tk-txt">Cupos de recursos por host</span></li>
