@@ -5,6 +5,33 @@
 
 ---
 
+## 2026-09-14 (domingo) — WHMCS Fase 3, mejoras 1-4 (root pw, no-bloqueante, productos, panel cliente)
+
+Tras validar el ciclo E2E, se abordaron los 5 puntos pendientes 1 por 1:
+- **#1 Clave root:** el motor aplica la password de WHMCS a **root** por SSH (helper
+  `set_root_password`, chpasswd vía stdin — no queda en el VMX). SSH sigue key-only; esa
+  clave sirve para **WHM/consola**, no para SSH. Username de la ficha = **root**. Para
+  trackear la VM sin depender del Username, el motor guarda `whmcs_serviceid` (columna nueva)
+  y `/accion`+`/editar` resuelven la VM por serviceid. Módulo manda `root_password` +
+  `whmcs_serviceid`. **Se probará bien con cPanel** (donde luce el WHM).
+- **#2 CreateAccount no-bloqueante:** el módulo ya no espera los 2-11 min (poll corto 25s,
+  luego devuelve success — el progreso se ve en el NOC). Botón admin **"Sincronizar datos"**
+  (`hostingcl_vps_Sync`) trae la IP por serviceid cuando el VPS termina. Necesario para cPanel
+  (~11 min supera el límite de PHP).
+- **#3 Productos:** creados PRUEBA VPS Empresas (vps-empresas) y Cyber Black (vps-cyber-black)
+  duplicando el Estándar y cambiando el Sabor. Los 3 gratis, ocultos, setup manual.
+- **#4 Panel de cliente:** `hostingcl_vps_ClientArea` + `clientarea.tpl` — tarjeta simple en
+  el área de cliente (estado + IP + acceso root/WHM), sin tripas internas; "aprovisionando…"
+  mientras no hay IP. Usa datos que WHMCS ya tiene (no llama al motor).
+- **cPanel = checkbox por producto** ("Instalar cPanel" en Module Settings): OFF clona la
+  dorada base, ON clona `dorada-almalinux9.7-cpanel`. En producción los planes reales incluyen
+  cPanel (checkbox ON). Para la 2ª prueba (con cPanel): crear un producto extra "PRUEBA VPS
+  Estándar cPanel" con el checkbox marcado (no hacen falta 3 más).
+- **#5 licencia cPanel — PENDIENTE, se resuelve al ÚLTIMO:** automatizar asignar/liberar la
+  licencia compartida (pool) a la IP. Falta que el usuario diga cómo la asigna hoy (¿Manage2
+  API con usuario+access hash? ¿portal? ¿addon WHMCS?). La 2ª prueba con cPanel se lanza
+  después de esto (para que el WHM nazca licenciado).
+
 ## 2026-09-14 (domingo) — 🏆 WHMCS Fase 3 VALIDADO E2E: las 4 operaciones desde el panel
 
 **HITO:** el ciclo de vida COMPLETO se disparó y validó desde WHMCS (producción real),
