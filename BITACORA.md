@@ -5,6 +5,29 @@
 
 ---
 
+## 2026-09-14 (domingo) — Acceso al WHMCS real: exploración y mapeo de productos (Fase 3 arranca)
+
+El usuario consiguió acceso admin al **WHMCS de hosting.cl** (`panel.hosting.cl/admin`,
+servidor `201.148.105.100`, mismo datacenter, noc-monitor lo alcanza a 0.35 ms vía
+192.168.122.1). Exploración guiada, todo READ-ONLY (WHMCS en producción real: 1149 órdenes
+pendientes). Hallazgos completos en **docs/whmcs-hallazgos.md**. Resumen:
+- **API disponible** (Setup → Staff Management → Manage API Credentials); se pueden generar
+  credenciales+roles. Falta crear una dedicada al motor.
+- **Catálogo VPS = grupo "VPS 2026"**, tipo Server/VPS, módulo actual **Auto Release**,
+  Auto Setup "al recibir primer pago" (coincide con nuestra política). **Mapeo id→sabor:**
+  **VPS Estandar=335 → Estándar**, **VPS Empresas=336 → Empresas**, **VPS Cyber Black=338 →
+  Cyber Black**. VPS Premium (~337) NO está en la web → fuera del piloto. Descripción de
+  Estandar calza exacto con el sabor (4GB/100GB/4vCPU/cPanel/VMware).
+- **Proceso manual actual confirmado:** Create/Suspend/Unsuspend/Terminate Action =
+  `Create Support Ticket` (cada evento abre un ticket para hacerlo a mano). Server Group
+  `VPS OpenVZ - VMWARE`. Welcome Email `Dedicated/VPS Server Welcome Email`. Admin ID de la
+  API: `4 | Jose Miguel Gutierrez (pepe)`.
+- **Al entrar nuestro módulo:** en 335/336/338 se cambia Module Name Auto Release →
+  `hostingcl_vps`, y las Actions dejan de abrir ticket y llaman al motor.
+- **Pendientes:** (Q3) quién tiene acceso FTP/SSH a `modules/servers/` del WHMCS; construir
+  el canal seguro (nginx /vps-api/ → allowlist 201.148.105.100 + token); crear credencial API
+  del motor; revisar el Server "VPS OpenVZ - VMWARE"; decidir Premium.
+
 ## 2026-09-14 (domingo) — CBT activado en cada VPS (backups incrementales, pedido de Fabián)
 
 Fabián pidió (KB Broadcom 320557) que las VMs nazcan con **CBT (Changed Block Tracking)**
