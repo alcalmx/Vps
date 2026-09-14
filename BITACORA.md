@@ -15,6 +15,12 @@ dispara la creación al pagar; no puede apagar ni eliminar** (lo destructivo pas
 equipo con confirmación Telegram + papelera 7 días). La opción de que el cliente elimine
 solo existe pero queda OFF (anotada por si el equipo la quiere activar).
 
+**ACLARACIÓN — multi-marca:** hosting.cl tiene **un WHMCS por marca** (no uno multimarca).
+El **piloto es solo hosting.cl** (un WHMCS, una marca). Cada instancia de WHMCS se configura
+fija con su marca y el motor la recibe por parámetro (ya soportado, sin cambios). A futuro,
+cada marca nueva (Planeta Hosting, etc.) = otro WHMCS que se conecta al mismo motor con su
+**propio token + allowlist** (se enlaza con la seguridad del canal, pendiente).
+
 **DECISIÓN DE DISEÑO — "pagos no instantáneos":** confirmada por el usuario. El motor
 **nunca crea antes de confirmar el pago**. Instantáneo (tarjeta/webpay) → crea al toque;
 transferencia/depósito → espera a que WHMCS marque el pago recibido o un admin apruebe la
