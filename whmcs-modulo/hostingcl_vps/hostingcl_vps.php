@@ -317,6 +317,22 @@ function hostingcl_vps_Sync(array $params)
     }
 }
 
+/**
+ * Panel en el área de CLIENTE: estado simple del VPS (sin tripas internas).
+ * Usa los datos que WHMCS ya tiene (status + dedicatedip) — no llama al motor.
+ */
+function hostingcl_vps_ClientArea(array $params)
+{
+    return [
+        'tabOverviewModuleOutputTemplate' => 'clientarea',
+        'templateVariables' => [
+            'estado' => $params['status'],
+            'ip' => $params['dedicatedip'],
+            'hostname' => $params['domain'],
+        ],
+    ];
+}
+
 /** Botón "Test Connection" del Server en WHMCS. */
 function hostingcl_vps_TestConnection(array $params)
 {
