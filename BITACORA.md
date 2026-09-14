@@ -5,6 +5,21 @@
 
 ---
 
+## 2026-09-14 (domingo) — Pendiente: host VMware de pruebas (pedir a Fabián)
+
+El usuario probará el flujo para validar en vivo lo de NetBox (avisará para actualizar el
+avance). Además pidió dejar anotado en el tablero **lo que debe solicitar a Fabián**: un
+**host VMware dedicado a pruebas**, para no seguir probando sobre `10.100.37.245` (que es
+el ESXi de PRODUCCIÓN). Se agregó al tablero un bloque tipo checklist (igual estilo que el
+de Cristian/WHMCS) con 6 ítems: (1) host ESXi 7.0.3 dedicado, (2) SSH + usuario acotado
+para el motor, (3) datastore con espacio, (4) red/portgroup de pruebas aislada, (5)
+recursos para 2-3 VPS a la vez, (6) si lo gobierna un vCenter, la cuenta de servicio (que
+además resuelve el pendiente de huérfanos). Con el host listo se le aplica el mismo
+checklist técnico de puesta en marcha ya documentado. Sirve además para validar el flujo
+multi-host de Fase 3. Ítem también agregado a las tareas de Fase 2.
+
+---
+
 ## 2026-09-11 (viernes, tarde-4) — Integración con NetBox (NETBOX2 :8090): registro automático de IPs
 
 **Pedido del usuario:** "si registro un vps se registre alli tambien" — y explícito:

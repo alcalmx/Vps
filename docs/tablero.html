@@ -400,6 +400,7 @@
       <li class="tk-pend"><span class="tk-ic">○</span><span class="tk-txt">Aviso WHMCS + confirmación Telegram para suspender — decidido: esperar acceso a WHMCS</span><span class="tk-note">docs/suspension.md</span></li>
       <li class="tk-pend"><span class="tk-ic">④</span><span class="tk-txt">Notificaciones y auditoría afinadas</span></li>
       <li class="tk-pend"><span class="tk-ic">○</span><span class="tk-txt">Conectar el motor al vCenter — que el borrado no deje huérfanos (hoy se quitan a mano)</span><span class="tk-note">requiere cuenta vCenter</span></li>
+      <li class="tk-pend"><span class="tk-ic">○</span><span class="tk-txt"><b>Host VMware de pruebas</b> — dejar de probar sobre producción (10.100.37.245); checklist de lo que se le pide a Fabián abajo</span><span class="tk-note">pedir a Fabián</span></li>
     </ul>
   </section>
 
@@ -467,6 +468,41 @@
         manejador de botones de Telegram para confirmar suspensiones/cancelaciones ·
         escribir el módulo PHP (con los accesos 1-4 listos).
         Detalle completo en <span class="mono">docs/integracion-whmcs.md</span>.</p>
+    </div>
+  </div>
+
+  <!-- Host de pruebas: lo que debo pedir a Fabián -->
+  <div class="hostreq">
+    <div class="hostreq-head">
+      <h3>Host VMware de pruebas — qué pedir a Fabián</h3>
+      <p><b>Por qué:</b> hoy las pruebas del motor corren sobre <span class="mono">10.100.37.245</span>,
+        que es el ESXi de <b>producción</b> (ahí viven noc-monitor, el VPS de IA, xrp-node…).
+        Un host dedicado a pruebas permite crear/borrar/romper sin ningún riesgo sobre producción,
+        y de paso valida el flujo <b>multi-host</b> de Fase 3 (el motor apuntando a un ESXi distinto).</p>
+    </div>
+    <div class="scroll">
+      <table>
+        <thead><tr><th>#</th><th>Qué pedir a Fabián (host de pruebas)</th><th>Para qué</th></tr></thead>
+        <tbody>
+          <tr><td>1</td><td class="comp">Un host ESXi dedicado a pruebas<span class="mono">ESXi 7.0.3 (igual que producción)</span></td>
+            <td>Aislar las pruebas de producción. Misma versión → govc/API se comportan idénticos a lo ya validado.</td></tr>
+          <tr><td>2</td><td class="comp">SSH habilitado + credenciales<span class="mono">usuario para el motor (idealmente svc-vps, sin root)</span></td>
+            <td>El motor opera vía SSH/govc. Con un usuario acotado se replican los guardarraíles de SEGURIDAD.md.</td></tr>
+          <tr><td>3</td><td class="comp">Datastore con espacio</td>
+            <td>Alojar las doradas (base + cPanel) y varios clones de prueba simultáneos. ~100-200 GB holgado.</td></tr>
+          <tr><td>4</td><td class="comp">Red de pruebas<span class="mono">portgroup/VLAN aislada</span></td>
+            <td>Un segmento propio para los VPS de prueba, sin tocar la VLAN 81 de producción. Si se prueba público, definir NAT/salida de laboratorio.</td></tr>
+          <tr><td>5</td><td class="comp">Recursos mínimos<span class="mono">CPU/RAM para 2-3 VPS a la vez</span></td>
+            <td>Poder correr varias creaciones en paralelo (incl. una con cPanel, que pide más RAM).</td></tr>
+          <tr><td>6</td><td class="comp">¿Lo gobierna un vCenter?</td>
+            <td>Si sí, pedir también la <b>cuenta de servicio del vCenter</b> — resuelve de paso el pendiente de VMs huérfanas al borrar.</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="hostreq-head" style="border-top:1px solid var(--line-soft); border-bottom:none">
+      <p style="margin:0"><b>Nota:</b> con el host listo, se le aplica el mismo
+        <b>checklist técnico de puesta en marcha</b> de más abajo (carpetas <span class="mono">VPS/</span>,
+        ISO, doradas, usuario svc-vps, wrapper SSH). Es exactamente lo que ya se hizo en el host actual.</p>
     </div>
   </div>
 
