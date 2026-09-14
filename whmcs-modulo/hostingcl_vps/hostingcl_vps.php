@@ -173,6 +173,8 @@ function hostingcl_vps_CreateAccount(array $params)
             'modo' => $modo,
             'instalar_cpanel' => $cpanel,
             'actor' => 'whmcs:' . $params['serviceid'],
+            'whmcs_serviceid' => (string) $params['serviceid'],   // trackea la VM sin usar el Username
+            'root_password' => $params['password'],               // clave de root (WHM/consola)
         ];
 
         $r = hostingcl_vps_api($params, 'POST', '/crear', $payload);
@@ -183,9 +185,9 @@ function hostingcl_vps_CreateAccount(array $params)
         $vm = $r['vm'];
         $jobid = $r['job_id'];
 
-        // Guardar el nombre de la VM en el servicio (para Suspend/Terminate/Change)
+        // El usuario de acceso del VPS es root (WHM/SSH). El motor trackea la VM por serviceid.
         try {
-            Capsule::table('tblhosting')->where('id', $params['serviceid'])->update(['username' => $vm]);
+            Capsule::table('tblhosting')->where('id', $params['serviceid'])->update(['username' => 'root']);
         } catch (\Exception $e) { /* no bloquear */ }
 
         // Esperar a que el job termine (la creación sin cPanel tarda ~2 min)
@@ -213,12 +215,9 @@ function hostingcl_vps_CreateAccount(array $params)
 function hostingcl_vps_SuspendAccount(array $params)
 {
     try {
-        $vm = $params['username'];
-        if ($vm === '') {
-            return 'No hay VM asociada al servicio';
-        }
+        $sid = (string) $params['serviceid'];
         $r = hostingcl_vps_api($params, 'POST', '/accion',
-            ['vm' => $vm, 'accion' => 'suspender', 'actor' => 'whmcs:' . $params['serviceid']]);
+            ['serviceid' => $sid, 'accion' => 'suspender', 'actor' => 'whmcs:' . $sid]);
         if (($r['_http'] ?? 0) !== 200 || empty($r['ok'])) {
             return 'Error suspendiendo: ' . ($r['error'] ?? $r['_error'] ?? ('HTTP ' . ($r['_http'] ?? '?')));
         }
@@ -232,12 +231,9 @@ function hostingcl_vps_SuspendAccount(array $params)
 function hostingcl_vps_UnsuspendAccount(array $params)
 {
     try {
-        $vm = $params['username'];
-        if ($vm === '') {
-            return 'No hay VM asociada al servicio';
-        }
+        $sid = (string) $params['serviceid'];
         $r = hostingcl_vps_api($params, 'POST', '/accion',
-            ['vm' => $vm, 'accion' => 'reanudar', 'actor' => 'whmcs:' . $params['serviceid']]);
+            ['serviceid' => $sid, 'accion' => 'reanudar', 'actor' => 'whmcs:' . $sid]);
         if (($r['_http'] ?? 0) !== 200 || empty($r['ok'])) {
             return 'Error reanudando: ' . ($r['error'] ?? $r['_error'] ?? ('HTTP ' . ($r['_http'] ?? '?')));
         }
@@ -251,13 +247,10 @@ function hostingcl_vps_UnsuspendAccount(array $params)
 function hostingcl_vps_TerminateAccount(array $params)
 {
     try {
-        $vm = $params['username'];
-        if ($vm === '') {
-            return 'No hay VM asociada al servicio';
-        }
-        // eliminar exige confirmación = nombre exacto de la VM
+        $sid = (string) $params['serviceid'];
+        // eliminar exige confirmación: cuando se identifica por serviceid, el propio serviceid confirma
         $r = hostingcl_vps_api($params, 'POST', '/accion',
-            ['vm' => $vm, 'accion' => 'eliminar', 'confirmacion' => $vm, 'actor' => 'whmcs:' . $params['serviceid']]);
+            ['serviceid' => $sid, 'accion' => 'eliminar', 'confirmacion' => $sid, 'actor' => 'whmcs:' . $sid]);
         if (($r['_http'] ?? 0) !== 200 || empty($r['ok'])) {
             return 'Error eliminando: ' . ($r['error'] ?? $r['_error'] ?? ('HTTP ' . ($r['_http'] ?? '?')));
         }
@@ -271,13 +264,10 @@ function hostingcl_vps_TerminateAccount(array $params)
 function hostingcl_vps_ChangePackage(array $params)
 {
     try {
-        $vm = $params['username'];
+        $sid = (string) $params['serviceid'];
         $sabor = $params['configoption1']; // sabor del producto destino
-        if ($vm === '') {
-            return 'No hay VM asociada al servicio';
-        }
         $r = hostingcl_vps_api($params, 'POST', '/editar',
-            ['vm' => $vm, 'sabor' => $sabor, 'actor' => 'whmcs:' . $params['serviceid']]);
+            ['serviceid' => $sid, 'sabor' => $sabor, 'actor' => 'whmcs:' . $sid]);
         if (($r['_http'] ?? 0) !== 200 || empty($r['ok'])) {
             return 'Error editando plan: ' . ($r['error'] ?? $r['_error'] ?? ('HTTP ' . ($r['_http'] ?? '?')));
         }

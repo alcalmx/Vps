@@ -117,7 +117,8 @@ def init_db():
         # columnas de producción (IP pública/NAT + bóveda) — idempotente
         for col, decl in (("publica", "TEXT"), ("pub_lista", "TEXT"),
                           ("vault_item", "TEXT"), ("send_url", "TEXT"), ("send_id", "TEXT"),
-                          ("byo_pubkey_fp", "TEXT"), ("nb_priv_id", "TEXT"), ("nb_pub_id", "TEXT")):
+                          ("byo_pubkey_fp", "TEXT"), ("nb_priv_id", "TEXT"), ("nb_pub_id", "TEXT"),
+                          ("whmcs_serviceid", "TEXT")):
             try:
                 c.execute("ALTER TABLE vms ADD COLUMN %s %s" % (col, decl))
             except sqlite3.OperationalError:
@@ -733,7 +734,27 @@ PASOS_CREAR = [
     "Registrar y finalizar",
 ]
 
-def flujo_crear(job, marca, sabor_slug, cliente, hostname, instalar_cpanel, modo, pubkey_cliente=None):
+def set_root_password(ip, password):
+    """Aplica la contraseña de root en la VM por SSH (chpasswd vía stdin — sin problemas
+    de escape, y NO queda en el VMX). SSH sigue solo con llave: esta clave sirve para WHM/
+    consola, no para SSH (PasswordAuthentication no lo permite). Best-effort."""
+    if not (MGMT_PRIVKEY_PATH and ip and password):
+        return False
+    cli = paramiko.SSHClient()
+    cli.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+    cli.connect(ip, username="root", key_filename=MGMT_PRIVKEY_PATH, timeout=15,
+                allow_agent=False, look_for_keys=False)
+    try:
+        stdin, _out, _err = cli.exec_command("chpasswd")
+        stdin.write("root:%s\n" % password)
+        stdin.channel.shutdown_write()
+        _out.channel.recv_exit_status()
+    finally:
+        cli.close()
+    return True
+
+def flujo_crear(job, marca, sabor_slug, cliente, hostname, instalar_cpanel, modo,
+                pubkey_cliente=None, root_password=None, whmcs_serviceid=None):
     marca_cfg = MARCAS[marca]
     sabor = SABORES[(marca, sabor_slug)]
     red = red_activa(marca_cfg, modo)
@@ -745,10 +766,10 @@ def flujo_crear(job, marca, sabor_slug, cliente, hostname, instalar_cpanel, modo
     if vm_registrada(nombre):
         raise RuntimeError("colisión de nombre: %s ya registrado" % nombre)
     with DB_LOCK, db() as c:
-        c.execute("INSERT INTO vms(nombre,marca,sabor,cliente,hostname,estado,vcpu,ram_mb,disco_gb) "
-                  "VALUES(?,?,?,?,?,'creando',?,?,?)",
+        c.execute("INSERT INTO vms(nombre,marca,sabor,cliente,hostname,estado,vcpu,ram_mb,disco_gb,whmcs_serviceid) "
+                  "VALUES(?,?,?,?,?,'creando',?,?,?,?)",
                   (nombre, marca, sabor_slug, cliente, hostname,
-                   sabor["vcpu"], sabor["ram_mb"], sabor["disco_gb"]))
+                   sabor["vcpu"], sabor["ram_mb"], sabor["disco_gb"], whmcs_serviceid))
     job.detalle("%s · %s (%d vCPU / %d MB / %d GB) · modo %s"
                 % (nombre, sabor["nombre_web"], sabor["vcpu"], sabor["ram_mb"], sabor["disco_gb"], modo))
 
@@ -865,6 +886,14 @@ def flujo_crear(job, marca, sabor_slug, cliente, hostname, instalar_cpanel, modo
             raise RuntimeError("SSH con llave de gestión no entra tras %ds: %s"
                                % (int(time.time() - t0), ultimo))
         job.detalle("SSH root@%s con llave de gestión: OK" % ip)
+        # clave de root (opcional, viene de WHMCS): se aplica por SSH; SSH sigue key-only,
+        # esta clave sirve para WHM/consola, no para login SSH.
+        if root_password:
+            try:
+                set_root_password(ip, root_password)
+                job.detalle("contraseña de root aplicada (para WHM/consola; SSH sigue solo con llave)")
+            except Exception as e:  # noqa: BLE001 — no bloquear la creación por esto
+                job.detalle("aviso: no se pudo aplicar la contraseña de root (%s)" % e)
     else:
         job.detalle("sin MGMT_PRIVKEY_PATH configurada — verificación omitida")
 
@@ -1285,10 +1314,14 @@ def crear():
             fingerprint_pubkey(pubkey_cliente)
         except RuntimeError as e:
             return jsonify({"error": str(e)}), 400
+    # clave de root opcional (la genera WHMCS) → se aplica en la VM para WHM/consola
+    root_password = (d.get("root_password") or "").strip() or None
+    # id del servicio en WHMCS (para trackear la VM sin depender del Username)
+    whmcs_serviceid = (str(d.get("whmcs_serviceid")).strip() if d.get("whmcs_serviceid") else None)
     nombre = siguiente_nombre(MARCAS[marca], cliente)
     job = Job("crear", nombre, actor, PASOS_CREAR)
     run_job(job, lambda j: flujo_crear(j, marca, sabor, cliente, hostname, cpanel, modo,
-                                       pubkey_cliente or None))
+                                       pubkey_cliente or None, root_password, whmcs_serviceid))
     return jsonify({"ok": True, "job_id": job.id, "vm": nombre, "modo": modo,
                     "byo": bool(pubkey_cliente)})
 
@@ -1335,25 +1368,46 @@ ACCIONES = {"suspender": (flujo_suspender, ["Validar guardarraíles", "Bloquear 
             "reanudar": (flujo_reanudar, ["Validar guardarraíles", "Desbloquear IP pública", "Marcar activo"]),
             "eliminar": (flujo_eliminar, ["Validar guardarraíles", "Apagar", "Des-registrar del ESXi", "Liberar IP pública y NAT", "Cerrar enlace de entrega (Send)", "Mover a papelera"])}
 
+def vm_por_serviceid(sid):
+    """Resuelve el nombre de la VM activa asociada a un serviceid de WHMCS (para poder
+    suspender/eliminar sin depender del Username de la ficha)."""
+    if not sid:
+        return None
+    with DB_LOCK, db() as c:
+        row = c.execute("SELECT nombre FROM vms WHERE whmcs_serviceid=? AND estado != 'papelera' "
+                        "ORDER BY created_at DESC LIMIT 1", (str(sid),)).fetchone()
+    return row["nombre"] if row else None
+
 @app.route("/accion", methods=["POST"])
 def accion():
     if not auth():
         return jsonify({"error": "unauthorized"}), 401
     d = request.get_json(force=True)
     vm, acc = (d.get("vm") or "").strip(), (d.get("accion") or "").strip()
+    serviceid = (str(d.get("serviceid")).strip() if d.get("serviceid") else "")
     actor = (d.get("actor") or "dashboard").strip()
     if acc not in ACCIONES:
         return jsonify({"error": "acción desconocida"}), 400
+    # caso WHMCS: si no vino el nombre, se resuelve por el serviceid
+    por_sid = False
+    if not vm and serviceid:
+        vm = vm_por_serviceid(serviceid) or ""
+        por_sid = True
+        if not vm:
+            return jsonify({"error": "no hay VM activa para el serviceid %s" % serviceid}), 404
     try:
         guardarraices(vm)
     except RuntimeError as e:
         return jsonify({"error": str(e)}), 400
-    if acc == "eliminar" and d.get("confirmacion") != vm:
-        return jsonify({"error": "confirmación requerida: reescribe el nombre exacto de la VM"}), 400
+    # eliminar exige confirmación = nombre de la VM (o el serviceid si se identificó por él)
+    if acc == "eliminar":
+        conf = d.get("confirmacion")
+        if not (conf == vm or (por_sid and conf == serviceid)):
+            return jsonify({"error": "confirmación requerida: reescribe el nombre exacto de la VM"}), 400
     fn, pasos = ACCIONES[acc]
     job = Job(acc, vm, actor, pasos)
     run_job(job, fn)
-    return jsonify({"ok": True, "job_id": job.id})
+    return jsonify({"ok": True, "job_id": job.id, "vm": vm})
 
 @app.route("/editar", methods=["POST"])
 def editar():
@@ -1361,7 +1415,12 @@ def editar():
         return jsonify({"error": "unauthorized"}), 401
     d = request.get_json(force=True)
     vm, sabor = (d.get("vm") or "").strip(), (d.get("sabor") or "").strip()
+    serviceid = (str(d.get("serviceid")).strip() if d.get("serviceid") else "")
     actor = (d.get("actor") or "dashboard").strip()
+    if not vm and serviceid:
+        vm = vm_por_serviceid(serviceid) or ""
+        if not vm:
+            return jsonify({"error": "no hay VM activa para el serviceid %s" % serviceid}), 404
     try:
         reg = guardarraices(vm)
     except RuntimeError as e:
