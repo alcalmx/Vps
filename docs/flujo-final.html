@@ -377,18 +377,24 @@
       </div>
       <div class="case risk">
         <div class="h"><span class="em">💥</span>Falla a mitad de creación</div>
-        <p>Si algo revienta, el motor <b>limpia lo parcial</b> y avisa al equipo; el servicio no queda
-          "activo pero roto". Regla: crear es atómico o se revierte.</p>
+        <p>Política <b>por paso</b>, no todo-o-nada: si falla algo sin lo cual no hay VPS usable (clon, boot)
+          → <b>revierte y limpia</b>. Si falla algo externo y resoluble aparte (ej. el NAT, ver 📉)
+          → <b>difiere</b> y deja el resto listo. Siempre avisa al equipo; nunca queda "activo pero roto".</p>
       </div>
       <div class="case q">
         <div class="h"><span class="em">🌐</span>¿Dominio = hostname del VPS?</div>
         <p>El cliente pone un dominio en el checkout. ¿Ese es el hostname, o generamos
           <span class="mono">vpsNNN.hosting.cl</span> y el dominio se apunta después? <b>Definir con Cristian.</b></p>
       </div>
-      <div class="case risk">
-        <div class="h"><span class="em">📉</span>Sin IP pública libre</div>
-        <p>Si el rango público se agota, el motor <b>falla con aviso</b> (no entrega a medias). Vigilar
-          capacidad del address-list y planear ampliación.</p>
+      <div class="case ok">
+        <div class="h"><span class="em">📉</span>Sin IP pública libre <span class="mono" style="font-size:.72rem; color:var(--done); font-weight:700">· DECIDIDO</span></div>
+        <p><b>No se revierte nada.</b> El NAT vive en el MikroTik (externo a VMware), así que el motor
+          <b>crea todo igual menos el NAT</b> y deja el VPS en <span class="mono">pendiente-ip-pública</span>:
+          VM viva por su privada, securización lista. Quedan diferidos junto al NAT la <b>licencia cPanel</b>,
+          el <b>correo de bienvenida</b> y el estado <b>Activo</b> en WHMCS (no se avisa "listo" si el cliente
+          aún no puede conectarse). Avisa al equipo por Telegram → se resuelve la IP a mano → botón
+          <b>"Completar NAT"</b> retoma solo la cola faltante y ahí sí activa y manda el correo.
+          Malla preventiva: alerta cuando queden pocas IPs libres, para no llegar a este caso.</p>
       </div>
       <div class="case q">
         <div class="h"><span class="em">💳</span>Pagos que no son al instante</div>

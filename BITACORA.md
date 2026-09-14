@@ -5,6 +5,29 @@
 
 ---
 
+## 2026-09-14 (domingo) — Página "Flujo final esperado" + decisiones de diseño WHMCS
+
+Se creó la página **Flujo final esperado** (`docs/flujo-final.html`, servida en
+`/vps-flujo`, link arriba a la derecha del tablero): diagrama de carriles del happy path,
+mapa 1:1 de eventos, matriz de "quién puede hacer qué", opcionales (perillas a decidir con
+el equipo) y 12 casos borde. Decisión ganadora confirmada por el usuario: **el cliente solo
+dispara la creación al pagar; no puede apagar ni eliminar** (lo destructivo pasa por el
+equipo con confirmación Telegram + papelera 7 días). La opción de que el cliente elimine
+solo existe pero queda OFF (anotada por si el equipo la quiere activar).
+
+**DECISIÓN DE DISEÑO — "sin IP pública libre":** si el rango público se agota, el motor
+**NO revierte** lo construido. Crea todo **menos el NAT** y deja el VPS en estado
+`pendiente-ip-pública` (VM viva por su privada, securización lista). Se difieren junto al
+NAT: **licencia cPanel** (se activa por IP pública), **correo de bienvenida** y estado
+**Activo** en WHMCS (no avisar "listo" si el cliente no puede conectarse). Avisa por
+Telegram; se resuelve la IP a mano y un botón **"Completar NAT"** retoma solo la cola
+faltante (asigna pública+NAT → licencia → verifica WHM → NetBox pública → activa → correo).
+Razón del usuario: el NAT vive en el MikroTik, es externo a VMware y resoluble aparte.
+Malla preventiva: alertar cuando queden pocas públicas libres. Esto generaliza la política
+de fallas: **rollback por paso, no global** (revertir lo que no deja VPS usable; diferir lo
+externo/resoluble como el NAT). Pendiente implementar: estado `pendiente-ip-pública`,
+acción "Completar NAT" y alerta de capacidad.
+
 ## 2026-09-14 (domingo) — NetBox validado E2E en producción (alta y baja) + host de pruebas
 
 **NetBox VALIDADO en producción real (vps-hcl-0003-prueba9):** el usuario corrió el flujo
