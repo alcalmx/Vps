@@ -5,6 +5,40 @@
 
 ---
 
+## 2026-09-14 (domingo, cierre) — Flujo web→WHMCS mapeado + checklist de go-live a producción
+
+Cerrando el día, se investigó (sin preguntar a Cristian, todo self-service) **cómo entra una
+orden real** desde la web hosting.cl:
+- El botón "Contratar" de la web apunta a **`www.hosting.cl/contratar?pid=335&cycle=monthly`**
+  (checkout PROPIO de la web, no el carrito nativo de WHMCS). Lleva el **pid del producto
+  WHMCS** (335=VPS Estandar, 336=Empresas, 338=Cyber Black) y el precio ($99.900). 
+- Confirmado por la API: la credencial **"nuevas contrataciones"** (Manage API Credentials)
+  tenía **Last Access hace ~17 min** — o sea la web **crea las órdenes por la API de WHMCS**
+  (opción B1: checkout propio → WHMCS API). Ese WHMCS tiene MUCHAS integraciones API activas
+  (triage IA de tickets, notificación de pago, análisis de tráfico, dominios, etc.).
+- **Flujo completo:** web `/contratar` (pid) → API "nuevas contrataciones" → WHMCS crea
+  cliente+orden+servicio (producto 335) → pago → CreateAccount (nuestro módulo) → motor. La
+  cadena **web pid ↔ WHMCS producto ↔ sabor** cuadra 1:1. **Para el motor no cambia nada** —
+  se cuelga de la activación tras el pago, sin importar cómo se creó la orden.
+- Distinción aclarada al usuario: **área de cliente** (portal del cliente: ordenar/pagar/ver,
+  NO botones de módulo) vs **área admin** (staff, con Create/Suspend/Terminate). El checkout
+  crea **cuenta+orden+servicio**. Nuestro panel #4 se ve al entrar el cliente a su servicio.
+
+**CHECKLIST DE GO-LIVE agregado al tablero** (sección "Go-live: pasar los productos REALES a
+la automatización"): 1) automatizar licencia cPanel (#5), 2) quitar el límite de IPs de prueba
+(.100-.102 → pool completo Red57-0, config del motor), 3) definir clientes actuales (quedan
+manuales; solo nuevos se automatizan, o migrarlos registrándolos en el motor), 4) cambiar el
+módulo en cada producto real (SOLO pestaña Module Settings → Motor Vps + grupo Motor VPS +
+sabor + Instalar cPanel; Details y Pricing NO se tocan), 5) Auto Setup manual → 1 orden real
+de prueba → luego "al pagar". El usuario ABRIÓ el VPS Estandar 335 real, llenó la config
+correcta y le dio **Cancel Changes** (no se tocó producción). Auto Setup "al recibir el primer
+pago" = nunca crea sin pago confirmado.
+
+**Estado para mañana:** #1-#4 hechos y validados (incl. cPanel + WHM login con la clave de la
+ficha). Falta **#5 (licencia cPanel)** — pendiente que el usuario diga cómo asigna la licencia
+compartida (Manage2 API / portal / addon). Limpieza: revisar si quedó vps-hcl-0010 activo (.102).
+Tablero al 78% global, Fase 3 al 55%.
+
 ## 2026-09-14 (domingo) — 🔑 2ª prueba con cPanel: login a WHM con la clave de la ficha (Feature #1 validada E2E)
 
 El usuario creó desde WHMCS un producto con **"Instalar cPanel" marcado** (PRUEBA VPS
