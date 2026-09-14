@@ -1,0 +1,442 @@
+<title>Flujo final esperado</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  /* ─────────── Tokens: mismos que el tablero (consola NOC / blueprint) ─────────── */
+  :root{
+    --ground:#eef1f6; --panel:#ffffff; --panel-2:#f4f7fb; --inset:#eaeef4;
+    --line:#d2dae5; --line-soft:#e2e8f0;
+    --ink:#182231; --muted:#586579; --faint:#8b96a7;
+    --accent:#0e9c8c; --accent-deep:#0b7d70; --accent-soft:rgba(14,156,140,.12);
+    --done:#1a8a3a; --done-bg:rgba(26,138,58,.12);
+    --prog:#b0730a; --prog-bg:rgba(176,115,10,.13);
+    --pend:#8894a6; --pend-bg:rgba(136,148,166,.12);
+    --user:#8a5bd6; --user-bg:rgba(138,91,214,.13);
+    --danger:#c0392b; --danger-bg:rgba(192,57,43,.12);
+    --shadow:0 1px 2px rgba(20,30,48,.06),0 8px 24px rgba(20,30,48,.06);
+    --mono:ui-monospace,"Cascadia Code","SF Mono",Menlo,Consolas,monospace;
+    --sans:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  }
+  :root:not([data-theme="light"]){ color-scheme:dark; }
+  @media (prefers-color-scheme:dark){
+    :root:not([data-theme="light"]){
+      --ground:#0a0f17; --panel:#111a27; --panel-2:#15202f; --inset:#0d1521;
+      --line:#243044; --line-soft:#1b2635;
+      --ink:#d7e0ee; --muted:#8695a9; --faint:#5c6b80;
+      --accent:#4fd8c6; --accent-deep:#2bb6a5; --accent-soft:rgba(79,216,198,.11);
+      --done:#46c65b; --done-bg:rgba(70,198,91,.13);
+      --prog:#f0b429; --prog-bg:rgba(240,180,41,.13);
+      --pend:#66748a; --pend-bg:rgba(102,116,138,.14);
+      --user:#b48bf0; --user-bg:rgba(180,139,240,.15);
+      --danger:#ff6b5b; --danger-bg:rgba(255,107,91,.14);
+      --shadow:0 1px 2px rgba(0,0,0,.4),0 10px 30px rgba(0,0,0,.35);
+    }
+  }
+  [data-theme="dark"]{
+    color-scheme:dark;
+    --ground:#0a0f17; --panel:#111a27; --panel-2:#15202f; --inset:#0d1521;
+    --line:#243044; --line-soft:#1b2635;
+    --ink:#d7e0ee; --muted:#8695a9; --faint:#5c6b80;
+    --accent:#4fd8c6; --accent-deep:#2bb6a5; --accent-soft:rgba(79,216,198,.11);
+    --done:#46c65b; --done-bg:rgba(70,198,91,.13);
+    --prog:#f0b429; --prog-bg:rgba(240,180,41,.13);
+    --pend:#66748a; --pend-bg:rgba(102,116,138,.14);
+    --user:#b48bf0; --user-bg:rgba(180,139,240,.15);
+    --danger:#ff6b5b; --danger-bg:rgba(255,107,91,.14);
+    --shadow:0 1px 2px rgba(0,0,0,.4),0 10px 30px rgba(0,0,0,.35);
+  }
+
+  *{box-sizing:border-box}
+  body{margin:0; background:var(--ground); color:var(--ink); font-family:var(--sans); line-height:1.55; -webkit-font-smoothing:antialiased}
+  .wrap{max-width:1060px; margin:0 auto; padding:clamp(20px,4vw,56px) clamp(16px,4vw,40px) 72px}
+  .mono{font-family:var(--mono)}
+  a{color:var(--accent-deep); text-decoration:none}
+  @media (prefers-color-scheme:dark){ :root:not([data-theme="light"]) a{color:var(--accent)} }
+  [data-theme="dark"] a{color:var(--accent)}
+
+  .eyebrow{font-family:var(--mono); font-size:.72rem; letter-spacing:.22em; text-transform:uppercase; color:var(--accent-deep); font-weight:600}
+  @media (prefers-color-scheme:dark){ :root:not([data-theme="light"]) .eyebrow{color:var(--accent)} }
+  [data-theme="dark"] .eyebrow{color:var(--accent)}
+
+  header{border-bottom:1px solid var(--line); padding-bottom:26px; margin-bottom:34px}
+  .back{display:inline-flex; align-items:center; gap:6px; font-family:var(--mono); font-size:.8rem; margin-bottom:14px}
+  h1{font-size:clamp(2rem,5.2vw,3rem); line-height:1.03; margin:.2em 0 .28em; letter-spacing:-.02em; font-weight:680; text-wrap:balance}
+  h1 .dim{color:var(--faint); font-weight:400}
+  .lede{font-size:1.04rem; color:var(--muted); max-width:64ch; margin:0}
+  .tag-draft{display:inline-flex; align-items:center; gap:7px; margin-top:16px; font-family:var(--mono); font-size:.74rem; letter-spacing:.04em;
+    color:var(--prog); background:var(--prog-bg); border:1px solid var(--prog); border-radius:20px; padding:5px 12px}
+
+  /* secciones */
+  section{margin:38px 0}
+  h2.sec{font-size:1.35rem; letter-spacing:-.01em; margin:0 0 4px; display:flex; align-items:center; gap:10px}
+  h2.sec .ic{font-size:1.15em}
+  .sub{color:var(--muted); font-size:.95rem; margin:0 0 20px; max-width:70ch}
+
+  /* ─────────── FLUJO GANADOR: carriles ─────────── */
+  .lanes{background:var(--panel); border:1px solid var(--line); border-radius:16px; box-shadow:var(--shadow); overflow:hidden}
+  .lane{display:grid; grid-template-columns:120px 1fr; border-top:1px solid var(--line-soft)}
+  .lane:first-child{border-top:none}
+  .lane .who{background:var(--panel-2); padding:16px 14px; font-weight:600; font-size:.86rem; display:flex; flex-direction:column; gap:4px; justify-content:center; border-right:1px solid var(--line-soft)}
+  .lane .who .em{font-size:1.5rem}
+  .lane .who.cli{color:var(--user)}
+  .lane .who.whm{color:var(--accent-deep)}
+  .lane .who.eng{color:var(--prog)}
+  @media (prefers-color-scheme:dark){ :root:not([data-theme="light"]) .lane .who.whm{color:var(--accent)} }
+  [data-theme="dark"] .lane .who.whm{color:var(--accent)}
+  .lane .steps{padding:14px; display:flex; align-items:center; gap:9px; flex-wrap:wrap}
+  .step{display:inline-flex; align-items:center; gap:8px; background:var(--inset); border:1px solid var(--line-soft); border-radius:11px; padding:9px 13px; font-size:.86rem; font-weight:500}
+  .step .n{font-size:1.15rem; line-height:1}
+  .arrow{color:var(--faint); font-size:1.2rem; font-weight:700}
+  .clockbar{display:flex; align-items:center; gap:10px; padding:14px 18px; background:var(--accent-soft); border-top:1px solid var(--line-soft); font-size:.9rem}
+  .clockbar b{font-family:var(--mono)}
+
+  /* ─────────── MAPA DE EVENTOS ─────────── */
+  .evmap{display:grid; grid-template-columns:repeat(auto-fit,minmax(240px,1fr)); gap:12px}
+  .ev{background:var(--panel); border:1px solid var(--line); border-radius:14px; padding:16px; box-shadow:var(--shadow); position:relative; overflow:hidden}
+  .ev::before{content:""; position:absolute; inset:0 auto 0 0; width:4px; background:var(--rail,var(--accent))}
+  .ev .top{display:flex; align-items:center; gap:10px; font-weight:650; font-size:.98rem}
+  .ev .top .to{color:var(--faint)}
+  .ev .em{font-size:1.4rem}
+  .ev .note{font-size:.82rem; color:var(--muted); margin:8px 0 0}
+  .ev.c-crear{--rail:var(--done)} .ev.c-susp{--rail:var(--prog)} .ev.c-rea{--rail:var(--done)}
+  .ev.c-edit{--rail:var(--user)} .ev.c-elim{--rail:var(--danger)}
+
+  /* ─────────── MATRIZ DE PERMISOS ─────────── */
+  .scroll{overflow-x:auto; border:1px solid var(--line); border-radius:14px; box-shadow:var(--shadow)}
+  table{border-collapse:collapse; width:100%; min-width:560px; background:var(--panel); font-size:.9rem}
+  thead th{background:var(--panel-2); text-align:center; padding:13px 12px; font-size:.82rem; color:var(--muted); border-bottom:1px solid var(--line); font-weight:600}
+  thead th:first-child{text-align:left}
+  tbody td{padding:13px 12px; text-align:center; border-top:1px solid var(--line-soft)}
+  tbody td:first-child{text-align:left; font-weight:600}
+  td .yes{color:var(--done); font-weight:700} td .no{color:var(--danger); font-weight:700}
+  td .opt{color:var(--prog); font-weight:700} td .auto{color:var(--accent-deep); font-weight:700}
+  @media (prefers-color-scheme:dark){ :root:not([data-theme="light"]) td .auto{color:var(--accent)} }
+  [data-theme="dark"] td .auto{color:var(--accent)}
+  .mtx-note{font-size:.78rem; color:var(--faint); display:block; margin-top:2px; font-weight:400}
+  .keyrow{display:flex; gap:16px; flex-wrap:wrap; margin-top:12px; font-family:var(--mono); font-size:.78rem; color:var(--muted)}
+  .keyrow span{display:inline-flex; align-items:center; gap:6px}
+
+  /* ─────────── OPCIONALES (interruptores) ─────────── */
+  .opts{display:grid; grid-template-columns:repeat(auto-fit,minmax(260px,1fr)); gap:12px}
+  .opt-card{background:var(--panel); border:1px solid var(--line); border-radius:14px; padding:16px; box-shadow:var(--shadow); display:flex; flex-direction:column; gap:10px}
+  .opt-card .h{display:flex; align-items:flex-start; justify-content:space-between; gap:10px}
+  .opt-card .h .ttl{font-weight:650; font-size:.98rem}
+  .opt-card .h .em{font-size:1.3rem}
+  .sw{flex:none; display:inline-flex; align-items:center; gap:7px; font-family:var(--mono); font-size:.7rem; font-weight:700; letter-spacing:.06em; border-radius:20px; padding:4px 10px; text-transform:uppercase}
+  .sw::before{content:""; width:9px; height:9px; border-radius:50%}
+  .sw.on{color:var(--done); background:var(--done-bg)} .sw.on::before{background:var(--done)}
+  .sw.off{color:var(--pend); background:var(--pend-bg)} .sw.off::before{background:var(--pend)}
+  .sw.dec{color:var(--prog); background:var(--prog-bg)} .sw.dec::before{background:var(--prog)}
+  .opt-card p{margin:0; font-size:.84rem; color:var(--muted)}
+  .opt-card .rec{font-size:.78rem; font-family:var(--mono)}
+  .opt-card .rec b{color:var(--ink)}
+
+  /* ─────────── CASOS BORDE ─────────── */
+  .cases{display:grid; grid-template-columns:repeat(auto-fit,minmax(250px,1fr)); gap:12px}
+  .case{background:var(--panel); border:1px solid var(--line); border-radius:14px; padding:15px 16px; box-shadow:var(--shadow)}
+  .case .h{display:flex; align-items:center; gap:9px; font-weight:640; font-size:.92rem; margin-bottom:6px}
+  .case .h .em{font-size:1.2rem}
+  .case p{margin:0; font-size:.83rem; color:var(--muted)}
+  .case.q{border-left:4px solid var(--prog)}
+  .case.risk{border-left:4px solid var(--danger)}
+  .case.ok{border-left:4px solid var(--done)}
+
+  .callout{background:var(--accent-soft); border:1px solid var(--accent); border-radius:14px; padding:16px 18px; margin:22px 0; font-size:.95rem}
+  .callout b{color:var(--accent-deep)}
+  @media (prefers-color-scheme:dark){ :root:not([data-theme="light"]) .callout b{color:var(--accent)} }
+  [data-theme="dark"] .callout b{color:var(--accent)}
+
+  footer{margin-top:44px; padding-top:22px; border-top:1px solid var(--line); color:var(--faint); font-size:.82rem; font-family:var(--mono)}
+
+  @media (max-width:560px){
+    .lane{grid-template-columns:84px 1fr}
+    .lane .who{font-size:.76rem; padding:12px 8px}
+  }
+</style>
+
+<div class="wrap">
+
+  <header>
+    <a class="back" href="/vps">← Volver al avance del proyecto</a>
+    <div class="eyebrow">Proyecto Vps · diseño para discutir</div>
+    <h1>Flujo final esperado <span class="dim">— del pago al VPS operando</span></h1>
+    <p class="lede">Cómo quedará el ciclo de vida completo cuando WHMCS dispare todo solo,
+      qué puede hacer cada quién, y las piezas <b>opcionales</b> que hay que decidir en equipo.
+      Todo el trabajo del motor ya está construido y validado — esto es el "cableado" comercial.</p>
+    <span class="tag-draft">◆ Borrador · propuesta ganadora + opcionales a conversar</span>
+  </header>
+
+  <!-- ══════════ 1. EL FLUJO GANADOR ══════════ -->
+  <section>
+    <h2 class="sec"><span class="ic">🏁</span>El flujo ganador (lo que pasa al pagar)</h2>
+    <p class="sub">Tres actores, una sola dirección. El cliente paga y no vuelve a intervenir:
+      WHMCS avisa, el motor construye, y el cliente recibe su correo con todo listo.</p>
+
+    <div class="lanes">
+      <div class="lane">
+        <div class="who cli"><span class="em">🧑‍💻</span>Cliente</div>
+        <div class="steps">
+          <span class="step"><span class="n">🛒</span>Contrata en la web</span>
+          <span class="arrow">→</span>
+          <span class="step"><span class="n">💳</span>Paga</span>
+        </div>
+      </div>
+      <div class="lane">
+        <div class="who whm"><span class="em">🧾</span>WHMCS</div>
+        <div class="steps">
+          <span class="step"><span class="n">✅</span>Pago confirmado</span>
+          <span class="arrow">→</span>
+          <span class="step"><span class="n">🔌</span>Llama al motor <span class="mono">(módulo)</span></span>
+          <span class="arrow">→</span>
+          <span class="step"><span class="n">📡</span>Consulta el avance</span>
+        </div>
+      </div>
+      <div class="lane">
+        <div class="who eng"><span class="em">⚙️</span>Motor Vps</div>
+        <div class="steps">
+          <span class="step"><span class="n">🌐</span>IP privada + pública + NAT</span>
+          <span class="arrow">→</span>
+          <span class="step"><span class="n">💽</span>Clona la dorada</span>
+          <span class="arrow">→</span>
+          <span class="step"><span class="n">🎛️</span>cPanel + licencia</span>
+          <span class="arrow">→</span>
+          <span class="step"><span class="n">🔐</span>Securiza + llave</span>
+          <span class="arrow">→</span>
+          <span class="step"><span class="n">🗂️</span>Registra en NetBox</span>
+        </div>
+      </div>
+      <div class="lane">
+        <div class="who whm"><span class="em">🧾</span>WHMCS</div>
+        <div class="steps">
+          <span class="step"><span class="n">📝</span>Actualiza la ficha (IP)</span>
+          <span class="arrow">→</span>
+          <span class="step"><span class="n">✉️</span>Correo de bienvenida</span>
+        </div>
+      </div>
+      <div class="lane">
+        <div class="who cli"><span class="em">🧑‍💻</span>Cliente</div>
+        <div class="steps">
+          <span class="step"><span class="n">🎉</span>Entra a su VPS y a WHM</span>
+        </div>
+      </div>
+      <div class="clockbar">⏱️ <span>Del pago al cliente operando: <b>~2 min</b> sin cPanel · <b>~11-15 min</b> con cPanel — <b>cero intervención humana</b>.</span></div>
+    </div>
+  </section>
+
+  <!-- ══════════ 2. MAPA DE EVENTOS ══════════ -->
+  <section>
+    <h2 class="sec"><span class="ic">🔗</span>Los 5 eventos del ciclo de vida</h2>
+    <p class="sub">Cada acontecimiento comercial de WHMCS mapea 1:1 con una acción del motor
+      que <b>ya existe y está probada</b>. El módulo solo traduce el evento en una llamada.</p>
+
+    <div class="evmap">
+      <div class="ev c-crear">
+        <div class="top"><span class="em">💰</span>Pago <span class="arrow">→</span> <span class="em">✨</span>Crear</div>
+        <p class="note">Se activa solo al confirmar el pago. El motor construye el VPS entero.</p>
+      </div>
+      <div class="ev c-susp">
+        <div class="top"><span class="em">⛔</span>Mora <span class="arrow">→</span> <span class="em">⏸️</span>Suspender</div>
+        <p class="note">Bloquea la IP pública (la VM sigue viva, datos intactos). Con confirmación por Telegram.</p>
+      </div>
+      <div class="ev c-rea">
+        <div class="top"><span class="em">✅</span>Pagó <span class="arrow">→</span> <span class="em">▶️</span>Reanudar</div>
+        <p class="note">Reabre la IP pública al instante. Todo vuelve como estaba.</p>
+      </div>
+      <div class="ev c-edit">
+        <div class="top"><span class="em">⬆️</span>Upgrade <span class="arrow">→</span> <span class="em">✏️</span>Editar</div>
+        <p class="note">Sube CPU/RAM en caliente; disco crece (nunca se achica). Downgrade con reinicio breve.</p>
+      </div>
+      <div class="ev c-elim">
+        <div class="top"><span class="em">🚪</span>Cancela <span class="arrow">→</span> <span class="em">🗑️</span>Eliminar</div>
+        <p class="note">Con confirmación por Telegram + papelera de 7 días (recuperable). Libera IPs y NetBox.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ══════════ 3. QUIÉN PUEDE HACER QUÉ ══════════ -->
+  <section>
+    <h2 class="sec"><span class="ic">🛂</span>¿Quién puede hacer qué?</h2>
+    <p class="sub">La decisión ganadora: el cliente <b>solo dispara la creación</b> (al pagar).
+      Todo lo que apaga o borra queda en manos de ustedes o de la automatización por mora.</p>
+
+    <div class="scroll">
+      <table>
+        <thead>
+          <tr>
+            <th>Acción</th>
+            <th>🧑‍💻 Cliente solo</th>
+            <th>⛔ Automático por mora</th>
+            <th>🛠️ Ustedes (equipo)</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Crear VPS<span class="mtx-note">al pagar</span></td>
+            <td><span class="yes">✔ Sí</span></td>
+            <td>—</td>
+            <td><span class="yes">✔</span></td>
+          </tr>
+          <tr>
+            <td>Reiniciar<span class="mtx-note">no destructivo</span></td>
+            <td><span class="opt">◐ Opcional</span></td>
+            <td>—</td>
+            <td><span class="yes">✔</span></td>
+          </tr>
+          <tr>
+            <td>Detener / apagar</td>
+            <td><span class="no">✘ No</span></td>
+            <td><span class="auto">⏸️ Sí (bloqueo IP)</span></td>
+            <td><span class="yes">✔</span></td>
+          </tr>
+          <tr>
+            <td>Editar plan<span class="mtx-note">upgrade / downgrade</span></td>
+            <td><span class="no">✘ No directo</span><span class="mtx-note">lo pide en WHMCS</span></td>
+            <td>—</td>
+            <td><span class="yes">✔</span></td>
+          </tr>
+          <tr>
+            <td>Eliminar</td>
+            <td><span class="no">✘ No directo</span><span class="mtx-note">solo "solicita cancelación"</span></td>
+            <td>—</td>
+            <td><span class="yes">✔ con confirmación</span></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="keyrow">
+      <span><b class="mono" style="color:var(--done)">✔</b> permitido</span>
+      <span><b class="mono" style="color:var(--danger)">✘</b> no puede</span>
+      <span><b class="mono" style="color:var(--prog)">◐</b> opcional (a decidir)</span>
+      <span><b class="mono" style="color:var(--accent-deep)">⏸️</b> automático</span>
+    </div>
+
+    <div class="callout">
+      <b>Sobre eliminar:</b> el cliente <b>no destruye su máquina de un clic</b>. Lo máximo que puede
+      hacer desde su cuenta es <b>solicitar la cancelación</b> → eso pasa por su confirmación (Telegram)
+      → y aun ejecutándose, la VM va a la <b>papelera 7 días</b>. Triple red de seguridad.
+    </div>
+  </section>
+
+  <!-- ══════════ 4. OPCIONALES ══════════ -->
+  <section>
+    <h2 class="sec"><span class="ic">🎚️</span>Opcionales — a conversar con el equipo</h2>
+    <p class="sub">Piezas que se pueden <b>activar o no</b> sin tocar el motor. Mostramos la recomendación,
+      pero la decisión es del equipo. Vienen apagadas por defecto salvo que se indique.</p>
+
+    <div class="opts">
+      <div class="opt-card">
+        <div class="h"><span><span class="em">🔄</span> <span class="ttl">Botón "Reiniciar" para el cliente</span></span><span class="sw dec">A decidir</span></div>
+        <p>Comodidad que ofrecen muchos hosting. Es <b>no destructivo</b> (solo reinicia el SO).</p>
+        <div class="rec">Recomendación: <b>evaluar</b> — suma valor y no tiene riesgo.</div>
+      </div>
+      <div class="opt-card">
+        <div class="h"><span><span class="em">⏻</span> <span class="ttl">Apagar / encender desde el cliente</span></span><span class="sw off">Off</span></div>
+        <p>Dejar que el cliente apague su propia VM. Puede confundir (creen que no pagan si está apagada).</p>
+        <div class="rec">Recomendación: <b>Off</b> — mejor no exponerlo.</div>
+      </div>
+      <div class="opt-card">
+        <div class="h"><span><span class="em">🗑️</span> <span class="ttl">Cliente elimina / cancelación automática</span></span><span class="sw off">Off</span></div>
+        <p>Que la solicitud de cancelación borre la VM sola, <b>sin</b> confirmación del equipo.
+          <b>Existe y se puede prender</b> — pero es la opción de más riesgo.</p>
+        <div class="rec">Recomendación (la ganadora): <b>Off</b> — que siempre pase por ustedes.</div>
+      </div>
+      <div class="opt-card">
+        <div class="h"><span><span class="em">📲</span> <span class="ttl">Confirmación Telegram (suspender/eliminar)</span></span><span class="sw on">On</span></div>
+        <p>Un botón de "confirmar" en el equipo antes de ejecutar algo destructivo.</p>
+        <div class="rec">Recomendación: <b>On</b> — red de seguridad barata.</div>
+      </div>
+      <div class="opt-card">
+        <div class="h"><span><span class="em">🔑</span> <span class="ttl">Campo "Llave SSH pública" (BYO) en el checkout</span></span><span class="sw on">On</span></div>
+        <p>El cliente trae su llave; el sistema no genera ni custodia nada. Ya está construido.</p>
+        <div class="rec">Recomendación: <b>On</b> — opción "pro" sin costo.</div>
+      </div>
+      <div class="opt-card">
+        <div class="h"><span><span class="em">💾</span> <span class="ttl">Backups del VPS</span></span><span class="sw off">Off hoy</span></div>
+        <p>Hoy <b>no hay respaldo automático</b> del VPS. ¿Se ofrece como addon? ¿snapshot semanal?</p>
+        <div class="rec">Recomendación: <b>definir</b> — es una expectativa típica del cliente.</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ══════════ 5. SUPUESTOS Y CASOS BORDE ══════════ -->
+  <section>
+    <h2 class="sec"><span class="ic">🧩</span>Supuestos y casos borde (para no dejar nada al aire)</h2>
+    <p class="sub">Lo que hay que tener resuelto o preguntado antes del go-live. Los
+      <b style="color:var(--prog)">naranjas</b> son preguntas abiertas; los
+      <b style="color:var(--danger)">rojos</b>, riesgos a cubrir.</p>
+
+    <div class="cases">
+      <div class="case ok">
+        <div class="h"><span class="em">⏳</span>El motor tarda, WHMCS no espera colgado</div>
+        <p>El módulo dispara la creación, recibe el <span class="mono">job id</span> y consulta el avance
+          (los mismos pasos del dashboard). Nada se queda bloqueado 11 min.</p>
+      </div>
+      <div class="case risk">
+        <div class="h"><span class="em">🔒</span>Canal WHMCS → motor seguro</div>
+        <p>El motor escucha cerrado (127.0.0.1). Hay que abrir un canal <b>solo para la IP del WHMCS</b>
+          (allowlist + token dedicado). <b>Nunca</b> la API abierta a internet.</p>
+      </div>
+      <div class="case risk">
+        <div class="h"><span class="em">💥</span>Falla a mitad de creación</div>
+        <p>Si algo revienta, el motor <b>limpia lo parcial</b> y avisa al equipo; el servicio no queda
+          "activo pero roto". Regla: crear es atómico o se revierte.</p>
+      </div>
+      <div class="case q">
+        <div class="h"><span class="em">🌐</span>¿Dominio = hostname del VPS?</div>
+        <p>El cliente pone un dominio en el checkout. ¿Ese es el hostname, o generamos
+          <span class="mono">vpsNNN.hosting.cl</span> y el dominio se apunta después? <b>Definir con Cristian.</b></p>
+      </div>
+      <div class="case risk">
+        <div class="h"><span class="em">📉</span>Sin IP pública libre</div>
+        <p>Si el rango público se agota, el motor <b>falla con aviso</b> (no entrega a medias). Vigilar
+          capacidad del address-list y planear ampliación.</p>
+      </div>
+      <div class="case q">
+        <div class="h"><span class="em">💳</span>Pagos que no son al instante</div>
+        <p>Transferencia/depósito no confirman solos. La creación se dispara cuando WHMCS marca el pago
+          confirmado (o lo aprueba un admin). <b>Confirmar política.</b></p>
+      </div>
+      <div class="case ok">
+        <div class="h"><span class="em">🔁</span>Renovación</div>
+        <p>Pagar la renovación <b>no toca la VM</b> — es solo facturación. La máquina sigue corriendo igual.</p>
+      </div>
+      <div class="case ok">
+        <div class="h"><span class="em">🔓</span>Contraseña de WHM</div>
+        <p>El VPS nace sin clave de root (solo llave). El correo <b>instruye al cliente</b> a definirla con
+          <span class="mono">passwd root</span> y entrar a WHM. No custodiamos contraseñas.</p>
+      </div>
+      <div class="case ok">
+        <div class="h"><span class="em">♻️</span>Papelera de 7 días</div>
+        <p>Al eliminar, la VM queda recuperable 7 días. Si el cliente se arrepiente o fue error, se restaura.
+          Pasados los 7 días se purga y se libera todo.</p>
+      </div>
+      <div class="case q">
+        <div class="h"><span class="em">🧭</span>DNS / DNS inverso (PTR)</div>
+        <p>¿Quién apunta el dominio del cliente a su IP pública, y el PTR para correo? Hoy queda del lado del
+          cliente. <b>Confirmar si se automatiza.</b></p>
+      </div>
+      <div class="case ok">
+        <div class="h"><span class="em">🏷️</span>Multi-marca</div>
+        <p>El mismo WHMCS puede vender varias marcas (Planeta Hosting, etc.). El motor ya soporta marca por
+          parámetro; el módulo la pasa según el producto.</p>
+      </div>
+      <div class="case ok">
+        <div class="h"><span class="em">📜</span>Licencia cPanel por IP</div>
+        <p>La licencia va atada a la IP pública. El VPS nace con su IP y su licencia; si la IP cambiara, la
+          licencia debe moverse con ella.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- resumen -->
+  <div class="callout">
+    <b>En una línea:</b> el cliente paga y en minutos tiene su VPS; ustedes conservan el control de todo lo
+    que apaga o borra; y las comodidades del cliente (reiniciar, backups) son perillas que se prenden cuando
+    el equipo lo decida. Lo técnico del motor ya está listo — falta acordar estos criterios y los accesos de WHMCS.
+  </div>
+
+  <footer>
+    Proyecto Vps · Flujo final esperado · borrador para discusión de equipo · detalle técnico en
+    docs/integracion-whmcs.md · <a href="/vps">volver al avance</a>
+  </footer>
+
+</div>
