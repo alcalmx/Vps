@@ -5,6 +5,21 @@
 
 ---
 
+## 2026-09-14 (domingo) — 🔑 2ª prueba con cPanel: login a WHM con la clave de la ficha (Feature #1 validada E2E)
+
+El usuario creó desde WHMCS un producto con **"Instalar cPanel" marcado** (PRUEBA VPS
+Estándar cPanel, duplicado del Estándar) y disparó Create → **vps-hcl-0010-alcadio**
+(clona la dorada `-cpanel`). Verificado por SSH: job **ok**, **cPanel 138 instalado**, **WHM
+responde 200**, **root con contraseña aplicada** (`passwd -S root → PS`, la que WHMCS puso en
+la ficha). **El usuario abrió `https://38.19.57.102:2087` e inició sesión en WHM con `root` +
+la clave de la ficha** — llegó al initial setup wizard. **Sin licencia** (no la bloquea el
+login; el #5 la agregará después). Con esto la **Feature #1 queda validada E2E**: el cliente
+recibe su clave de root lista para WHM, sin `passwd` manual. También optimizado antes: endpoint
+liviano `/vm-por-servicio` (solo BD) → CreateAccount vuelve en ~12s y "Sincronizar datos" es
+instantáneo (antes /vms recalculaba power-state por VM y tardaba). Los 5 puntos: #1-#4 hechos
+y probados; **#5 licencia cPanel = lo último** (falta que el usuario diga cómo asigna la
+licencia compartida). Prueba de creación con cPanel = OK; queda vps-hcl-0010 activo en .102.
+
 ## 2026-09-14 (domingo) — WHMCS Fase 3, mejoras 1-4 (root pw, no-bloqueante, productos, panel cliente)
 
 Tras validar el ciclo E2E, se abordaron los 5 puntos pendientes 1 por 1:
