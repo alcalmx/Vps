@@ -5,6 +5,26 @@
 
 ---
 
+## 2026-09-15 (lunes, tarde) — FIX #7 (ALTO): eliminación = saga re-ejecutable con estado 'eliminando'
+
+Aplicado y **aprobado por Codex** (2 rondas — pidió guard de estado, verificación del estado real
+tras errores, y recuperar la entrada real de papelera). Cambios en engine/app.py:
+- **Estado 'eliminando'** persistido al iniciar el flujo (visible en dashboard; agregado al schema
+  comment). Éxito → 'papelera' como siempre; aborto → queda 'eliminando' + job error.
+- **Pasos idempotentes para REINTENTAR** un eliminar abortado (antes moría en apagar/unregister):
+  apagar se omite si la VM ya no está en el inventario (power_state "?"); unregister tolera
+  "not found" SOLO si el inventario vivo lo confirma; borrar_nat ya era re-ejecutable (#6);
+  trash-vm tolera "no existe" SOLO tras confirmar con **list-vps** (no sigue en VPS/) y recuperar
+  la **entrada real** con **list-trash** (wrapper ya lo tenía) — sin placeholders, incluso si el
+  intento anterior murió entre el mv y el registro.
+- **Guard de estado**: /accion y /editar → 409 sobre una VM 'eliminando' salvo reintentar
+  'eliminar' (adelanto puntual del #17). Errores engañosos ("no existe" con la carpeta aún en
+  VPS/) → abort con "revisar a mano".
+- Tests 5/5 (módulo real, deps simuladas): aborto en NAT deja estado seguro; reintento completa;
+  entrada real recuperada; error engañoso detectado; 409 de suspender/editar sobre 'eliminando'.
+- Recuperación operativa: un eliminar que aborta (p.ej. RouterData caído) se resuelve
+  **re-disparando la misma acción** (dashboard o Terminate de WHMCS) cuando el entorno sane.
+
 ## 2026-09-15 (lunes, tarde) — ✅ E2E COMPLETO desde WHMCS con el motor endurecido: TODO VALIDADO
 
 **Segundo Create desde WHMCS (mismo servicio 36655, botón Create sobre el servicio terminado):**

@@ -127,7 +127,7 @@ def init_db():
         c.executescript("""
         CREATE TABLE IF NOT EXISTS vms(
           nombre TEXT PRIMARY KEY, marca TEXT, sabor TEXT, cliente TEXT,
-          hostname TEXT, ip TEXT, estado TEXT,          -- creando|activo|suspendido|papelera|error
+          hostname TEXT, ip TEXT, estado TEXT,          -- creando|activo|suspendido|eliminando|papelera|error
           vcpu INTEGER, ram_mb INTEGER, disco_gb INTEGER,
           papelera_entrada TEXT,
           created_at TEXT DEFAULT (datetime('now','localtime')),
@@ -1268,13 +1268,28 @@ def flujo_reanudar(job):
     job.ok("VPS %s REANUDADO — IP pública %s desbloqueada, servicio restablecido" % (job.vm, vm["publica"]))
 
 def flujo_eliminar(job):
+    """Eliminación como SAGA re-ejecutable (#7): cada paso tolera 'ya está hecho',
+    así un eliminar que abortó a medias (p.ej. RouterData caído en el paso NAT) se
+    recupera simplemente REINTENTANDO la acción — sin cirugía manual. El estado
+    'eliminando' queda visible en el registro/dashboard mientras corre o si aborta."""
     vm = guardarraices(job.vm)
     job.paso()
+    set_estado(job.vm, "eliminando")
     job.paso("VM %s validada (registro + prefijo)" % job.vm)  # → apagar
-    if power_state(job.vm) != "poweredOff":
+    ps = power_state(job.vm)
+    if ps == "?":
+        job.detalle("la VM no aparece en el ESXi (probable reintento tras des-registro previo) — se omite apagar")
+    elif ps != "poweredOff":
         apagar_graceful(job, job.vm)
     job.paso("apagada")  # → unregister
-    govc("vm.unregister", job.vm)
+    try:
+        govc("vm.unregister", job.vm)
+    except RuntimeError as e:
+        # no basta el texto del error: se CONFIRMA contra el inventario real
+        if "not found" in str(e).lower() and power_state(job.vm) == "?":
+            job.detalle("ya estaba des-registrada del ESXi (verificado en inventario) — sigo")
+        else:
+            raise
     job.paso("des-registrada del ESXi")  # → liberar NAT
     if vm.get("publica") and vm.get("pub_lista"):
         # #6: si el NAT no queda COMPROBADAMENTE revertido, borrar_nat lanza y la
@@ -1301,8 +1316,24 @@ def flujo_eliminar(job):
     else:
         job.detalle("sin enlace de entrega que borrar")
     job.paso("enlace de entrega cerrado")  # → papelera (la llave de la bóveda se conserva hasta la purga)
-    out = esxi_ssh("trash-vm %s" % job.vm)
-    entrada = out.replace("OK", "").strip()
+    try:
+        out = esxi_ssh("trash-vm %s" % job.vm)
+        entrada = out.replace("OK", "").strip()
+    except RuntimeError as e:
+        if "no existe" not in str(e):
+            raise
+        # no basta el texto del error: se CONFIRMA el estado real en el datastore —
+        # la carpeta no debe seguir en VPS/ y debe existir SU entrada en _papelera
+        # (la movió un intento anterior; así se recupera la entrada REAL aunque aquel
+        # intento muriera antes de registrarla)
+        if job.vm in (esxi_ssh("list-vps") or "").split():
+            raise RuntimeError("trash-vm dijo 'no existe' pero %s SIGUE en VPS/ — revisar a mano" % job.vm)
+        entradas = [l.strip() for l in (esxi_ssh("list-trash") or "").splitlines()
+                    if l.strip().endswith("-" + job.vm)]
+        if not entradas:
+            raise RuntimeError("la carpeta de %s no está en VPS/ ni en _papelera — revisar a mano" % job.vm)
+        entrada = sorted(entradas)[-1]  # la más reciente (prefijo AAAAMMDD-HHMMSS ordena bien)
+        job.detalle("carpeta ya movida por un intento anterior — entrada verificada en _papelera (%s)" % entrada)
     set_estado(job.vm, "papelera", papelera_entrada=entrada)
     job.ok("VPS %s en papelera (%s) — Send cerrado; la llave sigue en la bóveda hasta la purga (7 días)" % (job.vm, entrada))
 
@@ -1659,9 +1690,13 @@ def accion():
         if not vm:
             return jsonify({"error": "no hay VM activa para el serviceid %s" % serviceid}), 404
     try:
-        guardarraices(vm)
+        reg = guardarraices(vm)
     except RuntimeError as e:
         return jsonify({"error": str(e)}), 400
+    # una VM a medio eliminar SOLO acepta reintentar el eliminar (#7; la matriz
+    # completa de estados por operación es el hallazgo #17)
+    if reg.get("estado") == "eliminando" and acc != "eliminar":
+        return jsonify({"error": "la VM %s está a medio eliminar — solo se permite reintentar 'eliminar'" % vm}), 409
     # eliminar exige confirmación = nombre de la VM (o el serviceid si se identificó por él)
     if acc == "eliminar":
         conf = d.get("confirmacion")
@@ -1699,6 +1734,8 @@ def editar():
         reg = guardarraices(vm)
     except RuntimeError as e:
         return jsonify({"error": str(e)}), 400
+    if reg.get("estado") == "eliminando":
+        return jsonify({"error": "la VM %s está a medio eliminar — solo se permite reintentar 'eliminar'" % vm}), 409
     if (reg["marca"], sabor) not in SABORES:
         return jsonify({"error": "sabor desconocido para la marca %s" % reg["marca"]}), 400
     job, activo = lanzar_job_exclusivo("editar", vm, actor,
