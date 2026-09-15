@@ -5,6 +5,15 @@
 
 ---
 
+## 2026-09-15 (lunes, noche) — Bloque 3: Gerardo VA A EXPLICAR su config (plan B del diff DESCARTADO)
+
+Decisión del usuario: **Gerardo accedió a explicar** qué le configura a un cPanel antes de
+entregarlo. El plan B (ingeniería inversa por diff de perfiles) queda **descartado** — no
+retomarlo. Próximo paso del Bloque 3: cuando Alcadio traiga la explicación (idealmente lista de
+pasos con pantallas de WHM o comandos, y los VALORES que usa), replicarla junto a Claude y
+programarla como paso post-cPanel del motor (whmapi1/archivos + verificación, mismo estándar de
+los fixes de hoy). El PTR sigue siendo nuestro (MikroTik) → directo.
+
 ## 2026-09-15 (lunes, noche) — FIX #12+#13 (ALTOS): purga con allowlist + marca 'purgando' + bóveda-primero
 
 Aplicado y **aprobado por Codex en 5 rondas** (las objeciones fueron subiendo el nivel: allowlist,
