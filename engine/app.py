@@ -127,7 +127,7 @@ def init_db():
         c.executescript("""
         CREATE TABLE IF NOT EXISTS vms(
           nombre TEXT PRIMARY KEY, marca TEXT, sabor TEXT, cliente TEXT,
-          hostname TEXT, ip TEXT, estado TEXT,          -- creando|activo|suspendido|eliminando|papelera|error
+          hostname TEXT, ip TEXT, estado TEXT,          -- creando|activo|suspendido|eliminando|papelera|purgando|error
           vcpu INTEGER, ram_mb INTEGER, disco_gb INTEGER,
           papelera_entrada TEXT,
           created_at TEXT DEFAULT (datetime('now','localtime')),
@@ -1329,11 +1329,10 @@ def flujo_eliminar(job):
         # no basta el texto del error: se CONFIRMA el estado real en el datastore —
         # la carpeta no debe seguir en VPS/ y debe existir SU entrada en _papelera
         # (la movió un intento anterior; así se recupera la entrada REAL aunque aquel
-        # intento muriera antes de registrarla)
-        if job.vm in (esxi_ssh("list-vps") or "").split():
+        # intento muriera antes de registrarla). Listados con sentinel verificado.
+        if job.vm in listar_wrapper("list-vps"):
             raise RuntimeError("trash-vm dijo 'no existe' pero %s SIGUE en VPS/ — revisar a mano" % job.vm)
-        entradas = [l.strip() for l in (esxi_ssh("list-trash") or "").splitlines()
-                    if l.strip().endswith("-" + job.vm)]
+        entradas = [l for l in listar_wrapper("list-trash") if l.endswith("-" + job.vm)]
         if not entradas:
             raise RuntimeError("la carpeta de %s no está en VPS/ ni en _papelera — revisar a mano" % job.vm)
         entrada = sorted(entradas)[-1]  # la más reciente (prefijo AAAAMMDD-HHMMSS ordena bien)
@@ -1463,24 +1462,137 @@ def flujo_editar(job, sabor_slug):
     cierre = "con un reinicio breve" if requiere_reinicio else "sin corte de servicio"
     job.ok("VPS %s cambiado a %s (%s) — %s" % (job.vm, sabor_slug, ", ".join(cambios), cierre))
 
+VALID_TRASH_RE = re.compile(r"^[0-9]{8}-[0-9]{6}-vps-[a-z]{2,5}-[a-z0-9][a-z0-9-]{0,40}$")
+
+def listar_wrapper(cmd):
+    """Listado CONFIABLE vía wrapper: exige el sentinel 'OK' final (el wrapper ahora
+    falla cerrado si no puede leer el directorio; un listado sin OK = respuesta
+    truncada/no confiable → se aborta en vez de asumir 'vacío')."""
+    lineas = [l.strip() for l in (esxi_ssh(cmd) or "").splitlines() if l.strip()]
+    if not lineas or lineas[-1] != "OK":
+        raise RuntimeError("%s no devolvió el sentinel OK — listado no confiable" % cmd)
+    return lineas[:-1]
+
+def _vault_borrar(item_id, job, entrada):
+    """Borra una llave de la bóveda de forma IDEMPOTENTE: solo el HTTP 404
+    estructurado de provision_post (item inexistente — p.ej. una corrida anterior la
+    borró y cayó antes de anular el puntero) cuenta como éxito. Devuelve True si la
+    llave quedó borrada/inexistente, False si hay que conservar la entrada."""
+    try:
+        provision_post("/vault-borrar-item", {"item_id": item_id})
+        return True
+    except Exception as e:  # noqa: BLE001
+        if re.search(r"HTTP 404\b", str(e)):
+            job.detalle("la llave de %s ya no existía en la bóveda (404) — se continúa" % entrada)
+            return True
+        job.detalle("bóveda falló para %s (%s) — entrada conservada para reintento"
+                    % (entrada, str(e)[:80]))
+        return False
+
 def flujo_purgar(job):
+    """Purga con ALLOWLIST del registro (#12) y bóveda-antes-de-borrar (#13):
+    el motor decide QUÉ purgar — entradas que están en SU registro (estado papelera)
+    Y cumplen 7 días según el prefijo AAAAMMDD-HHMMSS — y las purga de a UNA con
+    purge-entry (el wrapper re-valida nombre y antigüedad por su lado). Entradas en
+    _papelera ajenas al registro NO se tocan y se reportan como deriva. Por entrada:
+    bóveda primero (si falla → se conserva TODO y se reintenta en la corrida diaria
+    siguiente); la fila del registro se borra solo tras purgar de verdad."""
     job.paso()
-    out = esxi_ssh("purge-trash", timeout=600)
-    purgadas = [l.split(":", 1)[1].strip() for l in out.splitlines() if l.startswith("purged:")]
-    llaves_borradas = 0
+    en_papelera = [l for l in listar_wrapper("list-trash") if VALID_TRASH_RE.match(l)]
     with DB_LOCK, db() as c:
-        for entrada in purgadas:
-            # política B: al purgar definitivo, borrar también la llave de la bóveda
-            for row in c.execute("SELECT vault_item FROM vms WHERE papelera_entrada=?", (entrada,)):
-                if row["vault_item"] and PROVISION_TOKEN:
-                    try:
-                        provision_post("/vault-borrar-item", {"item_id": row["vault_item"]})
-                        llaves_borradas += 1
-                    except Exception:  # noqa: BLE001 — no bloquear la purga por la bóveda
-                        pass
+        registradas = {r["papelera_entrada"]: {"vault": r["vault_item"], "estado": r["estado"]}
+                       for r in c.execute("SELECT papelera_entrada, vault_item, estado FROM vms "
+                                          "WHERE estado IN ('papelera','purgando') "
+                                          "AND papelera_entrada IS NOT NULL")}
+    limite = time.strftime("%Y%m%d-%H%M%S", time.localtime(time.time() - 7 * 86400))
+    purgables = [e for e in en_papelera if e in registradas and e[:15] < limite]
+    ajenas = sorted(set(en_papelera) - set(registradas))
+    if ajenas:
+        # deriva: hay basura en _papelera que el motor no creó/registró — alertar, no tocar
+        job.detalle("⚠ %d entrada/s en _papelera fuera del registro (deriva) — NO se tocan: %s"
+                    % (len(ajenas), ", ".join(ajenas[:5])))
+        audit("timer", "purgar-papelera", "-",
+              "deriva en _papelera (no tocadas): %s" % ", ".join(ajenas[:10]), "aviso")
+    purgadas, llaves_borradas, saltadas = [], 0, []
+    for entrada in purgables:
+        vault_item = registradas[entrada]["vault"]
+        if vault_item:
+            # #13: la bóveda PRIMERO — si falla (o no hay token para operarla), la
+            # entrada se conserva completa y se reintenta en la corrida diaria
+            if not PROVISION_TOKEN:
+                saltadas.append(entrada)
+                job.detalle("hay llave en bóveda pero PROVISION_TOKEN no está configurado — %s conservada" % entrada)
+                continue
+            if not _vault_borrar(vault_item, job, entrada):
+                saltadas.append(entrada)
+                continue
+            llaves_borradas += 1
+            # llave ya borrada: se anula el puntero para que un fallo posterior de la
+            # purga no re-intente borrar una llave inexistente en la próxima corrida
+            # (y si el proceso cae justo aquí, _vault_borrar tolera el 404 al reintentar)
+            with DB_LOCK, db() as c:
+                c.execute("UPDATE vms SET vault_item=NULL WHERE papelera_entrada=?", (entrada,))
+        # MARCA PERSISTIDA de "purga física iniciada" ANTES del borrado real: si el
+        # proceso cae entre purge-entry y el DELETE, la próxima corrida reconoce la
+        # fila 'purgando' como purga PROPIA confirmada y la limpia. Una fila
+        # 'papelera' ausente de _papelera SIN esta marca jamás se limpia sola.
+        with DB_LOCK, db() as c:
+            c.execute("UPDATE vms SET estado='purgando' WHERE papelera_entrada=?", (entrada,))
+        try:
+            esxi_ssh("purge-entry %s" % entrada, timeout=300)
+        except RuntimeError as e:
+            saltadas.append(entrada)
+            job.detalle("purge-entry falló para %s (%s) — se reintenta en la próxima corrida"
+                        % (entrada, str(e)[:80]))
+            continue
+        with DB_LOCK, db() as c:
             c.execute("DELETE FROM vms WHERE papelera_entrada=?", (entrada,))
-    job.ok("papelera purgada: %d VPS (>7 días) · %d llaves eliminadas de la bóveda"
-           % (len(purgadas), llaves_borradas))
+        purgadas.append(entrada)
+    # reconciliación: filas cuya entrada YA NO está en _papelera. SOLO se limpian
+    # solas las que llevan NUESTRA marca 'purgando' (purga propia interrumpida antes
+    # del DELETE). Cualquier otra ausencia (borrado manual, pérdida en el datastore)
+    # NO es prueba de purga → se alerta y se conserva fila+llave para revisión humana.
+    # OJO: se re-leen registro y _papelera FRESCOS — los snapshots del inicio ya no
+    # sirven (este mismo loop borró filas, y un eliminar concurrente pudo agregar
+    # entradas nuevas a _papelera durante la corrida → serían deriva falsa).
+    en_papelera2 = set(l for l in listar_wrapper("list-trash") if VALID_TRASH_RE.match(l))
+    with DB_LOCK, db() as c:
+        registro2 = {r["papelera_entrada"]: {"vault": r["vault_item"], "estado": r["estado"]}
+                     for r in c.execute("SELECT papelera_entrada, vault_item, estado FROM vms "
+                                        "WHERE estado IN ('papelera','purgando') "
+                                        "AND papelera_entrada IS NOT NULL")}
+    ausentes = sorted(set(registro2) - en_papelera2)
+    limpiadas, deriva_reg = [], []
+    if ausentes:
+        en_vps = set(listar_wrapper("list-vps"))
+        for entrada in ausentes:
+            nombre_vm = entrada[16:]
+            if nombre_vm in en_vps:
+                job.detalle("⚠ %s figura '%s' en el registro pero la VM está en VPS/ "
+                            "(¿restore manual?) — revisar el registro a mano"
+                            % (nombre_vm, registro2[entrada]["estado"]))
+                continue
+            if registro2[entrada]["estado"] != "purgando":
+                deriva_reg.append(entrada)
+                continue
+            vault_item = registro2[entrada]["vault"]  # normalmente NULL a esta altura
+            if vault_item:
+                if not PROVISION_TOKEN or not _vault_borrar(vault_item, job, entrada):
+                    continue
+                llaves_borradas += 1
+            with DB_LOCK, db() as c:
+                c.execute("DELETE FROM vms WHERE papelera_entrada=? AND estado='purgando'", (entrada,))
+            limpiadas.append(entrada)
+            job.detalle("purga propia interrumpida completada (marca 'purgando'): %s" % entrada)
+    if deriva_reg:
+        job.detalle("⚠ %d fila/s 'papelera' cuya entrada desapareció de _papelera SIN marca de purga "
+                    "propia — conservadas, revisar a mano: %s" % (len(deriva_reg), ", ".join(deriva_reg[:5])))
+        audit("timer", "purgar-papelera", "-",
+              "entradas desaparecidas sin marca de purga (conservadas): %s" % ", ".join(deriva_reg[:10]), "aviso")
+    job.ok("papelera: %d purgada/s (allowlist del registro, >7 días) · %d llave/s de bóveda · "
+           "%d saltada/s (reintento diario) · %d ajena/s NO tocadas · %d purga/s propia/s completada/s · "
+           "%d desaparecida/s conservada/s"
+           % (len(purgadas), llaves_borradas, len(saltadas), len(ajenas), len(limpiadas), len(deriva_reg)))
 
 # ── API ──────────────────────────────────────────────────────────────────────
 def auth():
@@ -1701,6 +1813,8 @@ def accion():
     # completa de estados por operación es el hallazgo #17)
     if reg.get("estado") == "eliminando" and acc != "eliminar":
         return jsonify({"error": "la VM %s está a medio eliminar — solo se permite reintentar 'eliminar'" % vm}), 409
+    if reg.get("estado") == "purgando":
+        return jsonify({"error": "la VM %s está en purga definitiva (timer) — no admite acciones" % vm}), 409
     # eliminar exige confirmación = nombre de la VM (o el serviceid si se identificó por él)
     if acc == "eliminar":
         conf = d.get("confirmacion")
@@ -1738,8 +1852,8 @@ def editar():
         reg = guardarraices(vm)
     except RuntimeError as e:
         return jsonify({"error": str(e)}), 400
-    if reg.get("estado") == "eliminando":
-        return jsonify({"error": "la VM %s está a medio eliminar — solo se permite reintentar 'eliminar'" % vm}), 409
+    if reg.get("estado") in ("eliminando", "purgando"):
+        return jsonify({"error": "la VM %s está a medio eliminar/purgar — no admite edición" % vm}), 409
     if (reg["marca"], sabor) not in SABORES:
         return jsonify({"error": "sabor desconocido para la marca %s" % reg["marca"]}), 400
     job, activo = lanzar_job_exclusivo("editar", vm, actor,

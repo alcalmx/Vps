@@ -5,6 +5,35 @@
 
 ---
 
+## 2026-09-15 (lunes, noche) — FIX #12+#13 (ALTOS): purga con allowlist + marca 'purgando' + bóveda-primero
+
+Aplicado y **aprobado por Codex en 5 rondas** (las objeciones fueron subiendo el nivel: allowlist,
+ventanas de interrupción, borrado lógico masivo por listado enmascarado, evidencia persistida,
+deriva falsa por snapshots). Diseño final (engine/app.py + esxi/vps-wrapper.sh):
+- **Wrapper**: nuevo `purge-entry <entrada>` (borra UNA entrada explícita re-validando nombre
+  estricto y >7 días por su lado); **eliminado el `purge-trash` masivo**. `list-vps`/`list-trash`
+  ahora **fallan cerrado** si no pueden leer (antes enmascaraban con 2>/dev/null → un listado
+  vacío falso habría causado borrado lógico masivo) y mantienen el sentinel OK.
+- **Motor (flujo_purgar)**: allowlist = entradas de _papelera ∩ registro propio ∩ >7 días
+  (prefijo AAAAMMDD-HHMMSS). Entradas AJENAS al registro → deriva: alerta y NO se tocan.
+  `listar_wrapper()` exige el sentinel OK (listado no confiable → aborta sin tocar nada; usado
+  también en la saga #7). Por entrada: **bóveda PRIMERO** (#13; sin PROVISION_TOKEN o con falla →
+  entrada conservada, reintento diario; el HTTP 404 estructurado se tolera como ya-borrada) →
+  vault_item=NULL → **marca estado='purgando'** (evidencia persistida) → purge-entry → DELETE.
+- **Reconciliación por evidencia propia**: filas ausentes de _papelera SOLO se limpian si llevan
+  la marca 'purgando' (purga propia interrumpida antes del DELETE); una fila 'papelera'
+  desaparecida SIN marca (borrado manual, pérdida de datastore) se CONSERVA con alerta (job +
+  auditoría). VM restaurada a VPS/ (restore-trash) → aviso, no se toca. La reconciliación re-lee
+  registro y _papelera FRESCOS (evita deriva falsa por purgas del mismo loop o eliminaciones
+  concurrentes). Guards: /accion y /editar → 409 sobre 'purgando'.
+- Tests: 8 escenarios de purga (incl. listado caído/sin sentinel → aborta sin borrado lógico;
+  ausencias masivas sin marca conservadas; con marca converge) + regresión saga #7 + wrapper
+  local (purga vieja/rechaza joven/inválida/inexistente; _papelera inaccesible → die).
+- **PENDIENTE DEPLOY (requiere OK explícito):** contenedor vps-engine (rebuild) **+ subir el
+  wrapper nuevo al ESXi** (`/vmfs/volumes/DiscoA37245/VPS/_bin/vps-wrapper.sh`). Hasta entonces
+  el motor desplegado sigue llamando al purge-trash antiguo (que ya no existirá tras subir el
+  wrapper — desplegar AMBOS juntos).
+
 ## 2026-09-15 (lunes, tarde) — #10 CERRADO por verificación: el "ssh root al ESXi" está confinado como diseñado
 
 **Verificado en el host real** (con Codex de acuerdo en cerrar así, sin cambio de código):

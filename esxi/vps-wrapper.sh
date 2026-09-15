@@ -7,7 +7,8 @@
 # Protocolo: SSH_ORIGINAL_COMMAND = "<subcomando> <args...>"
 # Todo opera EXCLUSIVAMENTE bajo $BASE. Los nombres se validan con regex estricta
 # (sin '/', sin '..', sin espacios) → no hay traversal posible.
-# trash-vm solo MUEVE a _papelera; el único borrado real es purge-trash (>7 días).
+# trash-vm solo MUEVE a _papelera; el único borrado real es purge-entry (UNA
+# entrada explícita del motor, re-validando nombre y >7 días aquí — #12).
 
 BASE=/vmfs/volumes/DiscoA37245/VPS
 LOG=$BASE/_bin/wrapper.log
@@ -84,16 +85,30 @@ case "$cmd" in
     [ -e "$BASE/$orig" ] && die "ya existe un $orig activo"
     mv "$BASE/_papelera/$1" "$BASE/$orig" && echo "OK $orig" ;;
 
-  purge-trash)  # purge-trash → borra DEFINITIVO entradas con >7 días en _papelera
-    find "$BASE/_papelera" -maxdepth 1 -type d -mtime +7 2>/dev/null | while read -r d; do
-      b=$(basename "$d")
-      valid_trash "$b" || { log "purge SKIP nombre raro: $b"; continue; }
-      rm -rf "$BASE/_papelera/$b" && log "PURGED: $b" && echo "purged: $b"
-    done
-    echo OK ;;
+  purge-entry)  # purge-entry <entrada> → borra DEFINITIVO **UNA** entrada (>7 días)
+    # (#12: el motor manda una ALLOWLIST explícita entrada por entrada; el wrapper
+    #  re-valida nombre estricto Y antigüedad por su lado — cinturón y tirantes.
+    #  Reemplaza al antiguo purge-trash masivo.)
+    valid_trash "$1" || die "entrada de papelera inválida: $1"
+    d="$BASE/_papelera/$1"
+    [ -d "$d" ] || die "no existe en papelera: $1"
+    find "$BASE/_papelera" -maxdepth 1 -type d -name "$1" -mtime +7 2>/dev/null | grep -q . \
+      || die "aún no cumple 7 días en papelera: $1"
+    rm -rf "$d" && log "PURGED(entry): $1" && echo "purged: $1" ;;
 
-  list-vps)    ls -1 "$BASE" 2>/dev/null | grep -E '^vps-'; echo OK ;;
-  list-trash)  ls -1 "$BASE/_papelera" 2>/dev/null; echo OK ;;
+  # Los listados FALLAN CERRADO (die) si el directorio no se puede leer: un listado
+  # vacío por error enmascarado haría creer al motor que no hay nada (y su
+  # reconciliación de huérfanas borraría registros/llaves en masa). El OK final es
+  # el sentinel que el motor verifica para confiar en el listado.
+  list-vps)
+    out=$(ls -1 "$BASE" 2>&1) || die "no pude listar VPS/: $out"
+    echo "$out" | grep -E '^vps-' || true   # sin VPS no es error: el sentinel debe salir igual
+    echo OK ;;
+  list-trash)
+    [ -d "$BASE/_papelera" ] || die "_papelera inaccesible"
+    out=$(ls -1 "$BASE/_papelera" 2>&1) || die "no pude listar _papelera: $out"
+    [ -n "$out" ] && echo "$out"
+    echo OK ;;
   df)          df -h /vmfs/volumes/DiscoA37245 | tail -1 ;;
 
   *) die "subcomando no permitido: '$cmd'" ;;
