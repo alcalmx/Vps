@@ -5,6 +5,33 @@
 
 ---
 
+## 2026-09-15 (lunes, tarde) — 🔍 Auditoría del motor con Codex (24 hallazgos) + fix #1 aplicado
+
+Se instaló el flujo Claude→Codex (plugin openai-codex; review gate activado; regla: todo código
+nuevo pasa por revisión de Codex, y si Codex está sin cuota se sigue sin él). **Codex auditó
+engine/app.py completo**: 24 hallazgos (6 críticos, 9 altos, 7 medios, 2 bajos) — informe en el
+chat; los críticos: (1) inyección shell vía pubkey BYO, (2) carreras en asignación nombre/IPs/NAT,
+(3) sin exclusión mutua por VM, (4) WHMCS_TOKEN = admin total, (5) el body puede forzar modo
+produccion, (6) borrar_nat no verifica y la eliminación sigue ante fallo. Matices: el (5) es
+decisión de diseño (selector por creación) a endurecer antes del go-live; el (10, ssh root al
+ESXi) contradice SEGURIDAD.md → verificar. Se acordó con el usuario ir **uno a uno, sin cambiar
+comportamiento observable** (mismo flujo/resultados; depurar por debajo).
+
+**FIX #1 (inyección vía pubkey_cliente) APLICADO y aprobado por Codex:**
+- `instalar_pubkey_en_vm`: la llave ahora viaja por **STDIN** con script remoto FIJO
+  (`key=$(cat)` + `grep -qxF -- "$key"` + `printf`) — mismo patrón que set_root_password/chpasswd.
+  Ya no se interpola nada en el shell. Además verifica exit status y lanza RuntimeError si falla
+  (antes fallaba en silencio reportando "llave instalada").
+- `PUBKEY_RE`: comentario restringido a `[A-Za-z0-9@ ._:+=/-]{0,120}` (defensa en profundidad;
+  rechaza $, backticks, ;, | con el mismo mensaje "llave pública inválida" de siempre).
+- Probado local: compila; 5 llaves legítimas pasan / 4 maliciosas rechazadas; simulación bash del
+  script = instala, no duplica, y un payload `$(touch PWNED)` queda como texto inerte.
+- Nota técnica: Codex objetó buffering de stdin en paramiko; verificado contra el fuente real:
+  con bufsize=-1 paramiko es NO bufferizado (write→_write_all inmediato), el EOF no puede
+  adelantarse. Se agregó `stdin.flush()` igual como seguro. Codex aprobó con esa evidencia.
+- **OJO: el fix está en el repo, NO desplegado aún al contenedor vps-engine de noc-monitor**
+  (se desplegará en lote al cerrar varios fixes). Siguiente: hallazgo #2 (carreras de asignación).
+
 ## 2026-09-15 (lunes, cierre) — 📌 ESTADO Y PENDIENTES para retomar en otro chat
 
 **Modelo mental — el proyecto en 4 bloques:**

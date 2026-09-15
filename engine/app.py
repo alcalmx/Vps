@@ -525,7 +525,9 @@ def provision_post(path, payload, timeout=60):
         return json.loads(resp.read().decode())
 
 
-PUBKEY_RE = re.compile(r"^(ssh-ed25519|ssh-rsa|ecdsa-sha2-nistp(256|384|521)) [A-Za-z0-9+/=]{40,3000}( [^\n\"']{0,120})?$")
+# Comentario restringido a caracteres seguros (defensa en profundidad: la llave además
+# viaja por stdin y nunca se interpola en un comando de shell — ver instalar_pubkey_en_vm).
+PUBKEY_RE = re.compile(r"^(ssh-ed25519|ssh-rsa|ecdsa-sha2-nistp(256|384|521)) [A-Za-z0-9+/=]{40,3000}( [A-Za-z0-9@ ._:+=/-]{0,120})?$")
 
 
 def fingerprint_pubkey(pub):
@@ -540,17 +542,29 @@ def fingerprint_pubkey(pub):
 
 
 def instalar_pubkey_en_vm(ip, pub):
-    """Agrega una llave pública al authorized_keys de la VM (vía llave de gestión)."""
+    """Agrega una llave pública al authorized_keys de la VM (vía llave de gestión).
+    La llave viaja por STDIN (mismo patrón que set_root_password/chpasswd): el comando
+    remoto es fijo, así el contenido no puede inyectar shell aunque el comentario
+    traiga $, backticks, etc. Lanza RuntimeError si la instalación falla."""
     cli = paramiko.SSHClient()
     cli.set_missing_host_key_policy(paramiko.AutoAddPolicy())
     cli.connect(ip, username="root", key_filename=MGMT_PRIVKEY_PATH, timeout=15,
                 allow_agent=False, look_for_keys=False)
-    script = ('mkdir -p /root/.ssh && chmod 700 /root/.ssh && touch /root/.ssh/authorized_keys '
-              '&& chmod 600 /root/.ssh/authorized_keys && grep -qF "%s" /root/.ssh/authorized_keys '
-              '|| echo "%s" >> /root/.ssh/authorized_keys' % (pub, pub))
-    _, out, _ = cli.exec_command(script, timeout=30)
-    out.channel.recv_exit_status()
-    cli.close()
+    script = ('key=$(cat) && mkdir -p /root/.ssh && chmod 700 /root/.ssh '
+              '&& touch /root/.ssh/authorized_keys && chmod 600 /root/.ssh/authorized_keys '
+              '&& { grep -qxF -- "$key" /root/.ssh/authorized_keys '
+              '|| printf \'%s\\n\' "$key" >> /root/.ssh/authorized_keys; }')
+    try:
+        stdin, out, err = cli.exec_command(script, timeout=30)
+        stdin.write(pub.strip() + "\n")
+        stdin.flush()  # no-op con el bufsize=-1 por defecto (paramiko no bufferiza), seguro ante cambios
+        stdin.channel.shutdown_write()
+        rc = out.channel.recv_exit_status()
+        if rc != 0:
+            detalle = err.read().decode(errors="replace")[:200]
+            raise RuntimeError("instalar llave pública en %s falló (rc=%s): %s" % (ip, rc, detalle))
+    finally:
+        cli.close()
 
 
 def securizar_byo(job, nombre, ip, pubkey_cliente):
