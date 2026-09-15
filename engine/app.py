@@ -461,20 +461,41 @@ def crear_nat(privada, publica, lista, hostname, marca_nombre, job=None):
 def borrar_nat(privada, publica, lista, job=None):
     """Revierte el NAT y libera la pública en la address-list (al borrar el VPS).
     Igual que /api/alta/baja del NOC: los valores del `find` van ENTRECOMILLADOS —
-    sin comillas RouterOS no matchea y el remove no borra nada (bug detectado 2026-09-11)."""
-    mikrotik('/ip firewall nat remove [find where chain=srcnat and src-address="%s" and to-addresses="%s"]'
-             % (privada, publica))
-    mikrotik('/ip firewall nat remove [find where chain=dstnat and dst-address="%s" and to-addresses="%s"]'
-             % (publica, privada))
-    mikrotik('/ip firewall address-list set [find where list=%s and address="%s"] '
-             'comment="" disabled=no' % (lista, publica))
-    # verificar que realmente no quedó NAT de esa privada
-    ok, out = mikrotik("/ip firewall nat print terse")
-    quedo = ok and re.search(r'=%s\b' % re.escape(privada), out)
+    sin comillas RouterOS no matchea y el remove no borra nada (bug detectado 2026-09-11).
+    ORDEN SEGURO (#6): remover → VERIFICAR que el par exacto ya no existe → recién
+    ahí liberar la pública. Lanza RuntimeError en cualquier falla o si queda NAT:
+    ante la duda la pública queda deshabilitada/comentada (nadie la reasigna) y el
+    job de eliminación debe quedar en error — nunca éxito en falso."""
+    ok1, o1 = mikrotik('/ip firewall nat remove [find where chain=srcnat and src-address="%s" and to-addresses="%s"]'
+                       % (privada, publica))
+    ok2, o2 = mikrotik('/ip firewall nat remove [find where chain=dstnat and dst-address="%s" and to-addresses="%s"]'
+                       % (publica, privada))
+    if not (ok1 and ok2):
+        raise RuntimeError("remove NAT falló (srcnat ok=%s, dstnat ok=%s): %s"
+                           % (ok1, ok2, (o1 or o2).strip()[:150]))
+    # verificación ESTRICTA del par exacto (no por aparición suelta de la IP: reglas
+    # de terceros con esa privada no deben dar falso positivo, ni una consulta caída
+    # falso éxito)
+    okv1, res1 = mikrotik('/ip firewall nat print terse where chain=srcnat and src-address="%s" and to-addresses="%s"'
+                          % (privada, publica))
+    okv2, res2 = mikrotik('/ip firewall nat print terse where chain=dstnat and dst-address="%s" and to-addresses="%s"'
+                          % (publica, privada))
+    if not (okv1 and okv2):
+        raise RuntimeError("no pude VERIFICAR la reversión del NAT %s↔%s (consulta a RouterData falló) — "
+                           "la pública queda SIN liberar por seguridad" % (privada, publica))
+    residuo = [l for l in (res1 + res2).splitlines() if l.strip()]
+    if residuo:
+        raise RuntimeError("el NAT %s↔%s SIGUE presente tras el remove (%d regla/s) — "
+                           "la pública queda SIN liberar por seguridad" % (privada, publica, len(residuo)))
+    # NAT comprobadamente revertido → recién ahora se libera la pública
+    ok3, o3 = mikrotik('/ip firewall address-list set [find where list=%s and address="%s"] '
+                       'comment="" disabled=no' % (lista, publica))
+    if not ok3:
+        raise RuntimeError("NAT revertido, pero no pude liberar la pública %s en %s: %s"
+                           % (publica, lista, o3.strip()[:150]))
     if job:
-        job.detalle(("⚠ quedó NAT de %s — revisar" % privada) if quedo
-                    else "NAT removido y pública %s liberada en %s" % (publica, lista))
-    return not quedo
+        job.detalle("NAT removido (verificado el par exacto) y pública %s liberada en %s" % (publica, lista))
+    return True
 
 
 # ── Securización: llave del cliente → bóveda → Bitwarden Send ─────────────────
@@ -1229,11 +1250,12 @@ def flujo_eliminar(job):
     govc("vm.unregister", job.vm)
     job.paso("des-registrada del ESXi")  # → liberar NAT
     if vm.get("publica") and vm.get("pub_lista"):
-        try:
-            borrar_nat(vm["ip"], vm["publica"], vm["pub_lista"], job)
-        except Exception as e:  # noqa: BLE001 — no bloquear el borrado por el NAT
-            job.detalle("aviso: no se pudo revertir el NAT de %s (%s) — revisar a mano"
-                        % (vm.get("publica"), e))
+        # #6: si el NAT no queda COMPROBADAMENTE revertido, borrar_nat lanza y la
+        # eliminación ABORTA aquí (job en error, VM fuera de papelera, pública sin
+        # liberar). Antes seguía a papelera con un "aviso" → NAT huérfano apuntando
+        # a un VPS muerto y pública reasignable. Reintento: correr eliminar de nuevo
+        # cuando RouterData esté sano (la saga idempotente completa es el fix #7).
+        borrar_nat(vm["ip"], vm["publica"], vm["pub_lista"], job)
     else:
         job.detalle("sin IP pública que liberar")
     # limpiar el registro de IPs en NetBox (best-effort)

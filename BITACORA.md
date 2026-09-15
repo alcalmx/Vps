@@ -5,6 +5,35 @@
 
 ---
 
+## 2026-09-15 (lunes, tarde) — FIX #6: eliminación segura del NAT (verificado antes de liberar) — 🏁 6/6 CRÍTICOS CERRADOS
+
+Aplicado y **aprobado por Codex con observaciones** (validó además la sintaxis RouterOS v6/v7
+contra la documentación de MikroTik). Cambios en engine/app.py:
+- **borrar_nat con orden seguro**: remove srcnat/dstnat verificando el exit de CADA comando →
+  **verificación estricta del par exacto** (`print terse where chain=... and src-address="X" and
+  to-addresses="Y"`, 2 consultas, valores entrecomillados — ya no la búsqueda difusa por
+  aparición de la IP, que daba falsos positivos con reglas ajenas y ÉXITO FALSO si la consulta
+  caía) → la pública se libera en la address-list **SOLO después de verificar** (antes se
+  liberaba antes de verificar). Cualquier falla → RuntimeError; la pública queda deshabilitada/
+  comentada → ni el motor ni el alta manual del NOC la reasignan.
+- **flujo_eliminar ya no traga la falla del NAT**: si borrar_nat lanza, la eliminación ABORTA —
+  job en ERROR, la VM NO va a papelera, sus IPs siguen "ocupadas" en el registro. Antes: seguía
+  a papelera con un "aviso" → NAT huérfano apuntando a un VPS muerto + pública reasignable.
+- **⚠️ Estado de recuperación (hasta el fix #7 - saga):** si la eliminación aborta en el paso NAT,
+  la VM queda apagada y DES-REGISTRADA del ESXi pero 'activa' en el registro, con NetBox/Send/
+  papelera sin ejecutar. Es la condición SEGURA (nada se pierde ni se reasigna); la recuperación
+  es re-intentar eliminar cuando RouterData esté sano — pero el re-intento hoy tropieza con los
+  pasos ya hechos (apagar/unregister no son idempotentes aún). Eso lo resuelve el #7.
+- Tests con mikrotik() simulado: 5/5 (feliz con orden asertado; remove caído; verificación caída
+  —antes daba éxito falso—; regla residual; liberación caída). En fallas nunca se libera.
+
+**🏁 Con esto los 6 hallazgos CRÍTICOS de la auditoría Codex están cerrados (todos aprobados por
+Codex, commiteados y pusheados). NADA desplegado aún al contenedor vps-engine — desplegar en
+lote: podman build + WHMCS_MODO=produccion en engine.env (ver fix #4+#5). Siguen 9 ALTOS
+(#7 saga de eliminación, #8 espacio datastore, #9 host keys SSH, #10 ssh root al ESXi vs
+SEGURIDAD.md, #11 reconciliación, #12 purga con allowlist, #13 bóveda en purga, #14 secretos en
+jobs, #15 límites de input) + 7 medios + 2 bajos.**
+
 ## 2026-09-15 (lunes, tarde) — FIX #4+#5: permisos por token (rol whmcs acotado) + modo no forzable
 
 Aplicado y **aprobado por Codex** (2 rondas: pidió fail-fast de config, capar `resultado` en /job
