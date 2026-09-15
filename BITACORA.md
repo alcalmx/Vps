@@ -5,6 +5,29 @@
 
 ---
 
+## 2026-09-15 (lunes, tarde) — 🧪 Prueba E2E desde WHMCS: incidente del primer boot + FIX auto-reinicio
+
+**Prueba real del ciclo desde WHMCS** (Create del usuario, producto cPanel, servicio 36655):
+- ✅ El canal y los fixes nuevos funcionaron en vivo: actor whmcs:36655, modo produccion por
+  WHMCS_MODO, nombre vps-hcl-0013-alcadio reservado atómico, IP privada 10.100.16.247 por lock,
+  clon + registro + cloud-init + encendido ok.
+- ❌ **INCIDENTE (guest, no motor):** el primer boot de la dorada cPanel NO aplicó la IP estática
+  (carrera cloud-init/NetworkManager con growpart 103GB + primer arranque pesado de cPanel).
+  Evidencia: metadata del VMX descodificada = config PERFECTA; Tools corriendo; NIC conectada
+  (Vps_Hosting.cl); solo IPv6 link-local. El motor abortó LIMPIO a los 320s (sin pública, sin
+  NAT, sin huérfanos — los fixes de hoy trabajando). Un **reinicio manual del guest aplicó la IP
+  al instante** (confirmado con vigía: ping OK tras reboot). La 0010 de ayer pasó por el mismo
+  estado transitorio y se recuperó dentro de la ventana — defecto LATENTE, no regresión.
+- ✅ **Terminate de la 0013 desde WHMCS: limpio** (job 400efd1489e0, 6 s, camino "sin IP pública
+  que liberar", a papelera). Eliminación con motor endurecido validada en producción.
+- **FIX auto-reinicio (aprobado por Codex, 2 rondas):** en el paso 11 (verificar SSH), si a los
+  ~150 s no entra SSH se reinicia la VM UNA vez (govc vm.power -r por Tools, fallback -reset;
+  ambos capturan RuntimeError y subprocess.TimeoutExpired para nunca abortar la espera), presupuesto
+  total ~8.7 min, detalle claro en el job y en el error final ("incluso tras 1 reinicio automático").
+  Flags -r/-reset verificados contra el govc real del contenedor. Con esto, el incidente de hoy se
+  auto-sana sin intervención.
+- Pendiente inmediato: redesplegar el contenedor con este fix y repetir el Create para el E2E completo.
+
 ## 2026-09-15 (lunes, tarde) — 🚀 DESPLEGADO a producción (noc-monitor) el motor endurecido (6 fixes)
 
 **Deploy ejecutado y verificado** (commit b3b70a7 → contenedor vps-engine):

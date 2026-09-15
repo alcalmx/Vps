@@ -1014,12 +1014,18 @@ def flujo_crear(job, marca, sabor_slug, cliente, hostname, instalar_cpanel, modo
                     "arranque y se confirma en el paso siguiente" % (ip_real, ip))
 
     # 11. verificar ssh (hasta ~4 min: el primer boot con cPanel preinstalado es
-    #     pesado — la IP estática y sshd pueden tardar 2-3 min en quedar arriba)
+    #     pesado — la IP estática y sshd pueden tardar 2-3 min en quedar arriba).
+    #     AUTO-REINICIO (visto 2026-09-15, vps-hcl-0013): a veces el primer boot NO
+    #     aplica la IP estática (carrera cloud-init/NetworkManager con el growpart y
+    #     el primer arranque de cPanel) aunque la config quede bien escrita — un
+    #     reinicio la aplica. Si a los ~2.5 min no hay SSH, se reinicia la VM UNA vez
+    #     (reboot por Tools; si falla, reset duro) y se sigue esperando.
     job.paso()
     if MGMT_PRIVKEY_PATH:
         ultimo = None
         t0 = time.time()
-        for intento in range(25):
+        reiniciada = False
+        for intento in range(40):
             try:
                 cli = paramiko.SSHClient()
                 cli.set_missing_host_key_policy(paramiko.AutoAddPolicy())
@@ -1030,12 +1036,33 @@ def flujo_crear(job, marca, sabor_slug, cliente, hostname, instalar_cpanel, modo
                 break
             except Exception as e:
                 ultimo = e
-                job.detalle("esperando sshd en %s… (%ds; el primer boot con cPanel tarda 2-3 min)"
-                            % (ip, int(time.time() - t0)))
+                transcurrido = int(time.time() - t0)
+                if not reiniciada and transcurrido >= 150:
+                    reiniciada = True
+                    # govc puede fallar con RuntimeError (exit != 0) o TimeoutExpired
+                    # (subprocess) — ninguno debe abortar la espera de SSH
+                    try:
+                        govc("vm.power", "-r", nombre)
+                        job.detalle("sin SSH tras %ds — reinicio automático de la VM (1 vez): "
+                                    "el primer boot a veces no aplica la IP estática" % transcurrido)
+                    except (RuntimeError, subprocess.TimeoutExpired):
+                        try:
+                            govc("vm.power", "-reset", nombre)
+                            job.detalle("sin SSH tras %ds — reset automático de la VM (reboot por Tools no disponible)"
+                                        % transcurrido)
+                        except (RuntimeError, subprocess.TimeoutExpired) as e3:
+                            job.detalle("no pude reiniciar la VM automáticamente (%s) — sigo esperando" % str(e3)[:80])
+                else:
+                    job.detalle("esperando sshd en %s… (%ds%s)"
+                                % (ip, transcurrido,
+                                   "; ya reiniciada 1 vez" if reiniciada
+                                   else "; el primer boot con cPanel tarda 2-3 min"))
                 time.sleep(10)
         if ultimo:
-            raise RuntimeError("SSH con llave de gestión no entra tras %ds: %s"
-                               % (int(time.time() - t0), ultimo))
+            raise RuntimeError("SSH con llave de gestión no entra tras %ds%s: %s"
+                               % (int(time.time() - t0),
+                                  " (incluso tras 1 reinicio automático)" if reiniciada else "",
+                                  ultimo))
         job.detalle("SSH root@%s con llave de gestión: OK" % ip)
         # clave de root (opcional, viene de WHMCS): se aplica por SSH; SSH sigue key-only,
         # esta clave sirve para WHM/consola, no para login SSH.
