@@ -5,6 +5,22 @@
 
 ---
 
+## 2026-09-15 (lunes, tarde) — ✅ E2E COMPLETO desde WHMCS con el motor endurecido: TODO VALIDADO
+
+**Segundo Create desde WHMCS (mismo servicio 36655, botón Create sobre el servicio terminado):**
+job d00d47ab81cf → **vps-hcl-0014-alcadio ACTIVO en ~4 min** (pública 38.19.57.102 ↔ privada
+10.100.16.247). Esta vez el primer boot aplicó la IP a la primera (sin auto-reinicio). Validado
+en producción con el motor endurecido + auto-reinicio desplegados:
+- Canal WHMCS → motor con token acotado (actor whmcs:36655) ✅
+- Modo fijado por WHMCS_MODO=produccion (no por el body) ✅
+- Reserva atómica de nombre (0014, sin chocar con la 0013 en papelera del MISMO serviceid) ✅
+- IP privada/pública por locks + NAT creado con re-chequeo ✅
+- Clave de root de la ficha aplicada → WHM 200 en https://38.19.57.102:2087, licencia solicitada ✅
+- **IP en la ficha de WHMCS rellenada sola** (whmcs_set_ip) ✅
+- Terminate previo (0013) limpio: papelera + "sin IP pública que liberar" ✅
+**El flujo completo Create→(uso)→Terminate quedó operativo tal como venía, ahora endurecido.**
+Queda vivo vps-hcl-0014-alcadio como VPS de prueba (decidir: mantener para más pruebas o Terminate).
+
 ## 2026-09-15 (lunes, tarde) — 🧪 Prueba E2E desde WHMCS: incidente del primer boot + FIX auto-reinicio
 
 **Prueba real del ciclo desde WHMCS** (Create del usuario, producto cPanel, servicio 36655):
