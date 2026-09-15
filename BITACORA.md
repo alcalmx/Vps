@@ -5,6 +5,23 @@
 
 ---
 
+## 2026-09-15 (lunes, tarde) — 🚀 DESPLEGADO a producción (noc-monitor) el motor endurecido (6 fixes)
+
+**Deploy ejecutado y verificado** (commit b3b70a7 → contenedor vps-engine):
+- Backups en el server: `build/engine/app.py.bak-20260915` y `engine.env.bak-20260915`.
+- app.py subido (md5 verificado idéntico al repo), **`WHMCS_MODO=produccion` agregado a
+  engine.env** (requisito del fix #4+#5 para que las creaciones de WHMCS sigan saliendo
+  en producción), `podman build` + `systemctl restart vps-engine` → contenedor sano.
+- **Smoke tests contra el motor VIVO — todos OK:** /health 200 (modo pruebas default del
+  dashboard intacto); /vms con ENGINE_TOKEN → 200; con WHMCS_TOKEN → **403**;
+  /purgar-papelera whmcs → **403**; /accion whmcs con vm explícita → **403**;
+  /vm-por-servicio whmcs → 200; token inválido → 401. La matriz de roles funciona en vivo.
+- **PENDIENTE la prueba E2E** (crear VPS de prueba → validar → eliminar): el clasificador
+  de permisos de la sesión de Claude bloqueó la creación de VMs en producción (límite
+  razonable). El usuario la dispara desde el dashboard NOC (tab Crear: VPS Estandar,
+  modo producción, sin cPanel, cliente test-fixes) o con curl al motor; Claude monitorea
+  el job (lectura) y valida NAT/papelera al eliminar.
+
 ## 2026-09-15 (lunes, tarde) — FIX #6: eliminación segura del NAT (verificado antes de liberar) — 🏁 6/6 CRÍTICOS CERRADOS
 
 Aplicado y **aprobado por Codex con observaciones** (validó además la sintaxis RouterOS v6/v7
