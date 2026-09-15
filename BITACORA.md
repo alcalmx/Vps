@@ -5,6 +5,27 @@
 
 ---
 
+## 2026-09-15 (lunes) — Motor→WHMCS: cliente API + relleno automático de IP (sin "Sincronizar" manual)
+
+El usuario notó que tras la creación había que apretar "Sincronizar datos" para traer la IP a
+la ficha (por el diseño no-bloqueante). Se eligió la **opción C: el MOTOR avisa a WHMCS por su
+API** (dirección motor→WHMCS, reutilizable para más cosas). Implementado:
+- **Cliente API genérico** `whmcs_api(action, params)` en engine/app.py (config `WHMCS_API_URL`
+  = `https://panel.hosting.cl/includes/api.php`, `WHMCS_API_IDENTIFIER`, `WHMCS_API_SECRET` en
+  engine.env). Inerte si no está configurado.
+- **`whmcs_set_ip(serviceid, ip)`** (UpdateClientProduct) cableado en `flujo_crear` justo tras
+  asignar la pública/NAT → **rellena la IP en la ficha AL INSTANTE** para creaciones con
+  `whmcs_serviceid`. Ya no hace falta "Sincronizar" (que queda como respaldo manual).
+- **Credential API** creada por el usuario (rol "Motor VPS callback" con UpdateClientProduct +
+  GetClientsProducts; SendEmail no aparecía en su versión → queda para el correo de bienvenida).
+- **403 "Invalid IP 192.168.122.252":** la API de WHMCS tiene **allowlist de IPs**. El motor sale
+  con `192.168.122.252` (noc-monitor ens192) hacia panel.hosting.cl (201.148.105.100). El usuario
+  agregó esa IP en Setup → General Settings → Security → **API IP Access Restriction** (SIN borrar
+  las existentes de la web/otras integraciones). Test OK: `result: success` (34.156 servicios en
+  ese WHMCS — negocio grande, go-live cuidadoso). **Próximo:** correo de bienvenida con IP (via
+  SendEmail) cuando se defina el permiso. Nota UX: el paso a paso del dashboard ahora sale en la
+  pestaña Jobs (2 columnas) y al crear desde el tab Crear salta a Jobs; TZ del contenedor corregida.
+
 ## 2026-09-14 (domingo, cierre) — Flujo web→WHMCS mapeado + checklist de go-live a producción
 
 Cerrando el día, se investigó (sin preguntar a Cristian, todo self-service) **cómo entra una
