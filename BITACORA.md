@@ -19,7 +19,14 @@ en producción con el motor endurecido + auto-reinicio desplegados:
 - **IP en la ficha de WHMCS rellenada sola** (whmcs_set_ip) ✅
 - Terminate previo (0013) limpio: papelera + "sin IP pública que liberar" ✅
 **El flujo completo Create→(uso)→Terminate quedó operativo tal como venía, ahora endurecido.**
-Queda vivo vps-hcl-0014-alcadio como VPS de prueba (decidir: mantener para más pruebas o Terminate).
+
+**Cierre del ciclo:** Terminate de la 0014 también validado (job 337485fa0245, 38 s): apagada →
+des-registrada → **NAT removido con la verificación estricta del par exacto** (primer ejercicio
+en producción del camino completo del fix #6 con NAT real — un residuo habría abortado el job)
+→ pública 38.19.57.102 liberada → Send cerrado → papelera 20260915-173035. **Sin VPS de prueba
+activos; RouterData limpio.** Próxima sesión: hallazgos ALTOS de Codex (#7 saga + #11
+reconciliación primero, luego #10 aclarar ssh root vs svc-vps del ESXi), y los pendientes de
+negocio (bloque 3 Gerardo, correo bienvenida, licencia #5, go-live).
 
 ## 2026-09-15 (lunes, tarde) — 🧪 Prueba E2E desde WHMCS: incidente del primer boot + FIX auto-reinicio
 
