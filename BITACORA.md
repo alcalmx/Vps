@@ -36,8 +36,14 @@ pago" = nunca crea sin pago confirmado.
 
 **Estado para mañana:** #1-#4 hechos y validados (incl. cPanel + WHM login con la clave de la
 ficha). Falta **#5 (licencia cPanel)** — pendiente que el usuario diga cómo asigna la licencia
-compartida (Manage2 API / portal / addon). Limpieza: revisar si quedó vps-hcl-0010 activo (.102).
-Tablero al 78% global, Fase 3 al 55%.
+compartida (Manage2 API / portal / addon). Tablero al 78% global, Fase 3 al 55%.
+
+**Limpieza + fix de reloj (2026-09-15):** el usuario eliminó vps-hcl-0010 (liberó la .102).
+Se detectó que los timestamps de los jobs salían 3h adelantados: el **contenedor vps-engine
+estaba en UTC** (sin TZ). Se agregó al quadlet `/etc/containers/systemd/vps-engine.container`
+**`Environment=TZ=America/Santiago`** + `Volume=/etc/localtime:/etc/localtime:ro` y se reinició
+(daemon-reload). Verificado: contenedor ahora en hora de Chile (-03). Los jobs nuevos salen en
+hora local; los viejos quedan en UTC (ya grabados). (Complementa el arreglo de relojes previo.)
 
 ## 2026-09-14 (domingo) — 🔑 2ª prueba con cPanel: login a WHM con la clave de la ficha (Feature #1 validada E2E)
 
