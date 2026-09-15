@@ -5,6 +5,38 @@
 
 ---
 
+## 2026-09-15 (lunes, cierre) — 📌 ESTADO Y PENDIENTES para retomar en otro chat
+
+**Modelo mental — el proyecto en 4 bloques:**
+1. **WHMCS** — 🟢 listo (canal seguro, módulo hostingcl_vps, callback motor→WHMCS, validado E2E).
+2. **Motor** — 🟢 prácticamente cerrado (crear/gestionar + IP a la ficha sola + upgrades/Change Package).
+3. **Config post-levantamiento** (cPanel: PTR, dominio, DNS, SSL, cuenta cPanel…) — 🔴 **próximo frente**.
+4. **Entrega al cliente** — 🟡 (BYO, bóveda/Send, clave root→WHM listos; falta correo de bienvenida con IP).
+
+**Lo hecho esta sesión (bloques 1-2):** relleno automático de IP en la ficha (opción C: motor→WHMCS
+API, `whmcs_set_ip`/`whmcs_api` en el motor, credential + IP allowlist 192.168.122.252 en WHMCS —
+todo en docs/whmcs-intervenciones.md). Change Package (editar/upgrade) validado. Catálogo de prueba
+completo: **6 productos** (3 sabores × con/sin cPanel) en grupo ZZZ-PRUEBAS. UX del dashboard: paso a
+paso en pestaña Jobs (2 columnas), al crear salta a Jobs. TZ del contenedor corregida. Sin VPS de
+prueba activos (todo terminado).
+
+**PENDIENTES (para el próximo chat):**
+- **Bloque 3 — el gran frente (config post-cPanel):** el usuario va a **hablar con Gerardo (operaciones)**
+  para que muestre qué le hace a un cPanel antes de entregarlo (PTR, cuenta cPanel del dominio, DNS,
+  AutoSSL, seguridad, etc.). Gerardo es reacio (hoy lo hace con un agente Claude por máquina — caro,
+  no repetible). **Plan B si no coopera:** ingeniería inversa = crear un cPanel de prueba y hacer
+  **diff** vs uno ya entregado de producción; el **PTR ya es NUESTRO** (red/MikroTik) → automatizar
+  directo. Objetivo: codificar esos pasos en el motor (determinista, gratis, repetible).
+- **Bloque 4 — correo de bienvenida con IP:** falta agregar el permiso **SendEmail** al rol API "Motor
+  VPS callback" (no aparecía en su versión de WHMCS — revisar) y programar el motor para dispararlo con
+  la IP al terminar el VPS. El cable motor→WHMCS ya está.
+- **#5 — Licencia cPanel (compartida):** automatizar asignar del pool a la IP al crear + liberar al
+  eliminar. Falta que el usuario diga **cómo la asigna hoy** (¿Manage2 API con usuario+access hash? portal? addon?).
+- **Go-live productos reales (335/336/338):** cambiar SOLO Module Settings a Motor Vps. Prerrequisitos
+  (checklist "Go-live" del tablero): #5 licencia, quitar límite de IPs de prueba (publica_rango_prueba
+  .100-.102 → pool completo Red57-0, config del motor), plan para clientes actuales (quedan manuales;
+  solo nuevos se automatizan), Auto Setup manual → 1 orden real → luego "al pagar".
+
 ## 2026-09-15 (lunes) — Motor→WHMCS: cliente API + relleno automático de IP (sin "Sincronizar" manual)
 
 El usuario notó que tras la creación había que apretar "Sincronizar datos" para traer la IP a
