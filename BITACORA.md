@@ -5,6 +5,29 @@
 
 ---
 
+## 2026-09-15 (lunes, tarde) — FIX #2: carreras de asignación (nombre/IP priv/IP púb+NAT) cerradas
+
+Aplicado y **aprobado por Codex** (con sus 3 observaciones ya incorporadas). El problema: los jobs
+de creación corren en threads y la selección es determinista (el recurso más alto libre), así que
+dos creaciones simultáneas (p.ej. dos pagos WHMCS juntos) elegían el MISMO nombre/IP. Cambios en
+engine/app.py, **sin cambio de comportamiento observable** en el caso secuencial:
+- **3 locks por recurso** (NOMBRE_LOCK, IP_PRIV_LOCK, IP_PUB_LOCK): la ventana leer→elegir→reservar
+  de cada recurso es atómica entre jobs; el clonado (minutos) sigue en paralelo y reservar un
+  nombre no espera el barrido ping de otra creación.
+- **reservar_vm()**: el nombre se calcula y se INSERTa ('creando') en una sola sección crítica en
+  /crear (antes: cálculo en endpoint + INSERT después en el hilo = ventana). nombre es PK (3ª capa).
+  El paso 1 de flujo_crear ya no inserta: valida la reserva.
+- **IP privada**: elegir + set_estado(ip=...) bajo lock (ambos ip_libre_* consultan el registro →
+  el siguiente job la ve ocupada). **IP pública**: elegir + crear_nat + grabar bajo lock; el
+  re-chequeo anti-carrera interno de crear_nat queda como capa contra actores EXTERNOS (altas
+  manuales del NOC sobre RouterData).
+- Robustez del endpoint: si Job/run_job fallan tras reservar, se borra la reserva (sin fila
+  'creando' huérfana por esa vía); errores de reserva → auditoría + mensaje genérico (sin SQL crudo).
+- Probado: 12 creaciones concurrentes → nombres 0001..0012 únicos y 12 IPs únicas (sin lock, colisiona).
+- Pendiente relacionado (hallazgos #7/#11): reconciliación de filas 'creando' de jobs muertos a
+  mitad de flujo (preexistente, no lo introduce este fix).
+- Permisos git (commit/push) agregados a .claude/settings.json de Proyectos para el flujo de trabajo.
+
 ## 2026-09-15 (lunes, tarde) — 🔍 Auditoría del motor con Codex (24 hallazgos) + fix #1 aplicado
 
 Se instaló el flujo Claude→Codex (plugin openai-codex; review gate activado; regla: todo código

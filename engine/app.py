@@ -94,6 +94,15 @@ for marca_dir in os.listdir(os.path.join(CONFIG_DIR, "sabores")):
 
 # ── Registro (SQLite) ────────────────────────────────────────────────────────
 DB_LOCK = threading.Lock()
+# Serializan las secciones de ASIGNACIÓN de recursos compartidos entre creaciones
+# concurrentes (jobs en threads): la ventana leer→elegir→reservar debe ser atómica
+# o dos jobs eligen el mismo recurso (la selección es determinista: siempre el más
+# alto libre). Un lock POR RECURSO (son independientes) para no serializar de más:
+# p.ej. reservar un nombre no espera el barrido ping de otra creación. DB_LOCK solo
+# protege SQLite. Orden de anidamiento: lock de asignación por fuera, DB_LOCK dentro.
+NOMBRE_LOCK = threading.Lock()   # elegir número + INSERT de la reserva
+IP_PRIV_LOCK = threading.Lock()  # elegir IP privada + grabarla en el registro
+IP_PUB_LOCK = threading.Lock()   # elegir IP pública + crear NAT + grabarla
 
 def db():
     conn = sqlite3.connect(DB_PATH, timeout=30)
@@ -736,6 +745,21 @@ def siguiente_nombre(marca_cfg, cliente):
     base = "%s-%04d" % (pref, nxt)
     return ("%s-%s" % (base, slug)) if slug else base
 
+def reservar_vm(marca, marca_cfg, sabor_slug, sabor, cliente, hostname, whmcs_serviceid=None):
+    """Elige el siguiente nombre y lo RESERVA (INSERT estado='creando') en una sola
+    sección crítica. Antes el nombre se calculaba en el endpoint y se insertaba
+    después en el hilo del job: dos creaciones simultáneas podían calcular el mismo
+    número. Con la reserva atómica, la segunda ve la fila de la primera y toma el
+    número siguiente. (nombre es PRIMARY KEY: tercera capa por si acaso.)"""
+    with NOMBRE_LOCK:
+        nombre = siguiente_nombre(marca_cfg, cliente)
+        with DB_LOCK, db() as c:
+            c.execute("INSERT INTO vms(nombre,marca,sabor,cliente,hostname,estado,vcpu,ram_mb,disco_gb,whmcs_serviceid) "
+                      "VALUES(?,?,?,?,?,'creando',?,?,?,?)",
+                      (nombre, marca, sabor_slug, cliente, hostname,
+                       sabor["vcpu"], sabor["ram_mb"], sabor["disco_gb"], whmcs_serviceid))
+    return nombre
+
 def red_activa(marca_cfg, modo):
     return marca_cfg["red_pruebas"] if modo == "pruebas" else marca_cfg["red_default"]
 
@@ -814,25 +838,25 @@ def flujo_crear(job, marca, sabor_slug, cliente, hostname, instalar_cpanel, modo
     prefijo = ipaddress.ip_network(red["subred"]).prefixlen
     nombre = job.vm
 
-    # 1. validar / reservar en registro
+    # 1. validar la reserva del registro (el INSERT atómico ya lo hizo reservar_vm
+    #    en /crear — cierra la carrera de nombre/número entre creaciones paralelas)
     job.paso()
-    if vm_registrada(nombre):
-        raise RuntimeError("colisión de nombre: %s ya registrado" % nombre)
-    with DB_LOCK, db() as c:
-        c.execute("INSERT INTO vms(nombre,marca,sabor,cliente,hostname,estado,vcpu,ram_mb,disco_gb,whmcs_serviceid) "
-                  "VALUES(?,?,?,?,?,'creando',?,?,?,?)",
-                  (nombre, marca, sabor_slug, cliente, hostname,
-                   sabor["vcpu"], sabor["ram_mb"], sabor["disco_gb"], whmcs_serviceid))
+    reg = vm_registrada(nombre)
+    if not reg or reg.get("estado") != "creando":
+        raise RuntimeError("reserva de %s no encontrada o en estado inesperado" % nombre)
     job.detalle("%s · %s (%d vCPU / %d MB / %d GB) · modo %s"
                 % (nombre, sabor["nombre_web"], sabor["vcpu"], sabor["ram_mb"], sabor["disco_gb"], modo))
 
-    # 2. IP privada libre — RouterData en producción, barrido local en pruebas
+    # 2. IP privada libre — RouterData en producción, barrido local en pruebas.
+    #    Bajo IP_PRIV_LOCK: elegir y GRABAR es atómico entre jobs (ambos flujos
+    #    consultan el registro, así el siguiente ya la ve ocupada).
     job.paso()
-    if modo == "produccion":
-        ip = ip_libre_produccion(red["subred"], red["gateway"], job)
-    else:
-        ip = ip_libre_pruebas(red["subred"], red["gateway"], job)
-    set_estado(nombre, "creando", ip=ip)
+    with IP_PRIV_LOCK:
+        if modo == "produccion":
+            ip = ip_libre_produccion(red["subred"], red["gateway"], job)
+        else:
+            ip = ip_libre_pruebas(red["subred"], red["gateway"], job)
+        set_estado(nombre, "creando", ip=ip)
     job.detalle("IP privada asignada: %s (gw %s)" % (ip, red["gateway"]))
 
     # 3. espacio
@@ -956,9 +980,14 @@ def flujo_crear(job, marca, sabor_slug, cliente, hostname, instalar_cpanel, modo
     if modo == "produccion":
         pub_lista = marca_cfg.get("pub_lista", "Red107-0")
         rango = red.get("publica_rango_prueba")   # [lo, hi] para restringir en pruebas de prod
-        publica, _rech = ip_publica_libre(pub_lista, rango, job)
-        crear_nat(ip, publica, pub_lista, fqdn, marca_cfg.get("nombre", marca), job)
-        set_estado(nombre, "creando", publica=publica, pub_lista=pub_lista)
+        # Bajo IP_PUB_LOCK: elegir pública + crear NAT + grabar es atómico entre jobs
+        # (tras crear_nat la IP queda visiblemente tomada en RouterData: NAT + entrada
+        # deshabilitada). El re-chequeo interno de crear_nat sigue cubriendo actores
+        # EXTERNOS al motor (altas manuales del NOC).
+        with IP_PUB_LOCK:
+            publica, _rech = ip_publica_libre(pub_lista, rango, job)
+            crear_nat(ip, publica, pub_lista, fqdn, marca_cfg.get("nombre", marca), job)
+            set_estado(nombre, "creando", publica=publica, pub_lista=pub_lista)
         # registrar ambas IPs en NetBox (IPAM vigente) — best effort, no bloquea
         desc_base = "%s - VPS %s (%s)" % (fqdn, marca_cfg.get("nombre", marca), nombre)
         nb_priv = netbox_ip_add(ip + "/24", fqdn, desc_base + " · NAT 1:1 a %s · alta vps-engine" % publica)
@@ -1374,10 +1403,23 @@ def crear():
     root_password = (d.get("root_password") or "").strip() or None
     # id del servicio en WHMCS (para trackear la VM sin depender del Username)
     whmcs_serviceid = (str(d.get("whmcs_serviceid")).strip() if d.get("whmcs_serviceid") else None)
-    nombre = siguiente_nombre(MARCAS[marca], cliente)
-    job = Job("crear", nombre, actor, PASOS_CREAR)
-    run_job(job, lambda j: flujo_crear(j, marca, sabor, cliente, hostname, cpanel, modo,
-                                       pubkey_cliente or None, root_password, whmcs_serviceid))
+    try:
+        nombre = reservar_vm(marca, MARCAS[marca], sabor, SABORES[(marca, sabor)],
+                             cliente, hostname, whmcs_serviceid)
+    except sqlite3.Error as e:
+        audit(actor, "crear", "-", "reserva de nombre falló: %s" % e, "ERROR")
+        return jsonify({"error": "no se pudo reservar el nombre (ver registro de operaciones)"}), 500
+    try:
+        job = Job("crear", nombre, actor, PASOS_CREAR)
+        run_job(job, lambda j: flujo_crear(j, marca, sabor, cliente, hostname, cpanel, modo,
+                                           pubkey_cliente or None, root_password, whmcs_serviceid))
+    except Exception as e:
+        # si el job no llegó a arrancar, la reserva no debe quedar huérfana ('creando'
+        # eterno que además consume el número) — se libera solo si sigue intacta
+        with DB_LOCK, db() as c:
+            c.execute("DELETE FROM vms WHERE nombre=? AND estado='creando' AND ip IS NULL", (nombre,))
+        audit(actor, "crear", nombre, "no se pudo lanzar el job: %s" % e, "ERROR")
+        return jsonify({"error": "no se pudo lanzar la creación (ver registro de operaciones)"}), 500
     return jsonify({"ok": True, "job_id": job.id, "vm": nombre, "modo": modo,
                     "byo": bool(pubkey_cliente)})
 
