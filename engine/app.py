@@ -61,6 +61,11 @@ PROVISION_TOKEN = os.environ.get("PROVISION_TOKEN", "")
 # NetBox (IPAM vigente = NETBOX2 :8090): registro automático de las IPs de cada VPS
 NETBOX_URL = os.environ.get("NETBOX_API_URL", "").rstrip("/")
 NETBOX_TOKEN = os.environ.get("NETBOX_API_TOKEN", "")
+# WHMCS API (dirección motor → WHMCS): rellenar la IP en la ficha, disparar correos, etc.
+# Genérico: cualquier acción de la API de WHMCS. Inerte si no está configurado.
+WHMCS_API_URL = os.environ.get("WHMCS_API_URL", "")        # ej. https://panel.hosting.cl/includes/api.php
+WHMCS_API_ID = os.environ.get("WHMCS_API_IDENTIFIER", "")
+WHMCS_API_SECRET = os.environ.get("WHMCS_API_SECRET", "")
 DB_PATH = os.environ.get("DB_PATH", "/data/registry.db")
 CONFIG_DIR = os.environ.get("CONFIG_DIR", "/app/config")
 MODO = os.environ.get("MODO", "pruebas")  # pruebas | produccion
@@ -473,6 +478,40 @@ def netbox_ip_del(nb_id):
             return True
         except Exception:  # noqa: BLE001
             return False
+
+# ── Cliente API de WHMCS (dirección motor → WHMCS) ───────────────────────────
+def whmcs_api(action, params=None, timeout=15):
+    """Llama a la API de WHMCS. Genérico: sirve para cualquier acción (UpdateClientProduct,
+    SendEmail, etc.). Devuelve el JSON de respuesta, o None si no está configurado."""
+    if not (WHMCS_API_URL and WHMCS_API_ID and WHMCS_API_SECRET):
+        return None
+    import urllib.request, urllib.parse
+    data = {"identifier": WHMCS_API_ID, "secret": WHMCS_API_SECRET,
+            "action": action, "responsetype": "json"}
+    if params:
+        data.update({k: v for k, v in params.items() if v is not None})
+    req = urllib.request.Request(WHMCS_API_URL, method="POST",
+                                 data=urllib.parse.urlencode(data).encode())
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        body = resp.read().decode()
+        return json.loads(body) if body.strip() else {}
+
+def whmcs_set_ip(serviceid, ip, job=None):
+    """Rellena la IP dedicada de un servicio en la ficha de WHMCS (best-effort). Solo actúa si
+    hay serviceid (creación disparada por WHMCS) y la API está configurada."""
+    if not (serviceid and ip and WHMCS_API_URL):
+        return False
+    try:
+        r = whmcs_api("UpdateClientProduct", {"serviceid": serviceid, "dedicatedip": ip})
+        ok = bool(r and r.get("result") == "success")
+        if job:
+            job.detalle("IP %s enviada a la ficha de WHMCS (servicio %s): %s"
+                        % (ip, serviceid, "ok" if ok else ("respuesta: %s" % (r or "sin config"))))
+        return ok
+    except Exception as e:  # noqa: BLE001 — no bloquear la creación por WHMCS
+        if job:
+            job.detalle("aviso: no se pudo actualizar la ficha WHMCS (%s)" % e)
+        return False
 
 
 def provision_post(path, payload, timeout=60):
@@ -919,6 +958,9 @@ def flujo_crear(job, marca, sabor_slug, cliente, hostname, instalar_cpanel, modo
                        "ambas IPs registradas" if (nb_priv and nb_pub) else
                        "registro parcial/omitido (revisar IPAM)" if (nb_priv or nb_pub) else
                        "no disponible — registrar a mano"))
+        # si la creación vino de WHMCS, rellenar la IP en la ficha AL INSTANTE (sin Sync manual)
+        if whmcs_serviceid:
+            whmcs_set_ip(whmcs_serviceid, publica, job)
     else:
         job.detalle("omitido (modo pruebas — la VM queda solo con IP privada)")
 
