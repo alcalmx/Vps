@@ -29,10 +29,14 @@ deriva falsa por snapshots). Diseño final (engine/app.py + esxi/vps-wrapper.sh)
 - Tests: 8 escenarios de purga (incl. listado caído/sin sentinel → aborta sin borrado lógico;
   ausencias masivas sin marca conservadas; con marca converge) + regresión saga #7 + wrapper
   local (purga vieja/rechaza joven/inválida/inexistente; _papelera inaccesible → die).
-- **PENDIENTE DEPLOY (requiere OK explícito):** contenedor vps-engine (rebuild) **+ subir el
-  wrapper nuevo al ESXi** (`/vmfs/volumes/DiscoA37245/VPS/_bin/vps-wrapper.sh`). Hasta entonces
-  el motor desplegado sigue llamando al purge-trash antiguo (que ya no existirá tras subir el
-  wrapper — desplegar AMBOS juntos).
+- **🚀 DESPLEGADO (con OK del usuario) y VALIDADO EN VIVO:** (1) wrapper al ESXi con backup
+  (`vps-wrapper.sh.bak-20260915`), normalización CRLF (sed; el ESXi no tiene tr) y `sh -n` antes
+  de reemplazar; probado por el canal real del motor: ping→pong, list-trash con sentinel (14
+  entradas, la más vieja 2026-09-11), purge-trash → "no permitido", purge-entry joven →
+  rechazada. (2) Contenedor rebuild + restart, health 200. (3) **Purga real ejecutada: 0
+  purgadas (todo joven) · 0 ajenas (las 14 entradas están TODAS en el registro — consistencia
+  total) · 0 desaparecidas.** Primera purga real esperable ~2026-09-18 (cuando las entradas del
+  11-09 cumplan 7 días) — revisar ese job en el dashboard.
 
 ## 2026-09-15 (lunes, tarde) — #10 CERRADO por verificación: el "ssh root al ESXi" está confinado como diseñado
 
