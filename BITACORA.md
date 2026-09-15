@@ -5,6 +5,29 @@
 
 ---
 
+## 2026-09-15 (lunes, tarde) — FIX #4+#5: permisos por token (rol whmcs acotado) + modo no forzable
+
+Aplicado y **aprobado por Codex** (2 rondas: pidió fail-fast de config, capar `resultado` en /job
+y validar el modelo de confianza del serviceid). Cambios en engine/app.py:
+- **auth() devuelve ROL**: 'admin' (ENGINE_TOKEN, todo igual) / 'whmcs' (WHMCS_TOKEN) / None, con
+  hmac.compare_digest (parte del #16). Sin WHMCS_TOKEN configurado → solo admin (compat).
+- **Rol whmcs = allowlist de lo que usa el módulo**: /crear (whmcs_serviceid OBLIGATORIO), /accion
+  y /editar (vm explícito → 403; serviceid obligatorio; VM resuelta SOLO server-side →
+  pertenencia por construcción), /vm-por-servicio, /job/<id> (SIN `resultado`: ahí van las
+  credenciales del Send — el módulo solo lee estado/pasos). /vms, /jobs, /auditoria,
+  /purgar-papelera → 403. Antes el token WHMCS podía TODO (purgar, eliminar por nombre, etc.).
+- **#5 modo**: rol whmcs NO elige modo — usa env **WHMCS_MODO** (default MODO); discrepancia con
+  el body se audita. Rol admin conserva el selector del dashboard.
+- **Fail-fast al arrancar**: WHMCS_TOKEN==ENGINE_TOKEN, MODO o WHMCS_MODO inválidos → el
+  contenedor NO parte (RuntimeError con mensaje claro).
+- **⚠️ DEPLOY**: agregar **WHMCS_MODO=produccion** a engine.env — sin eso las creaciones de WHMCS
+  salen en modo pruebas (los productos ZZZ crean en producción vía body, que ahora se ignora).
+- Modelo de confianza validado con Codex: 1 solo WHMCS → su token representa la instancia
+  completa; frontera real = no alcanza VMs sin serviceid ni operaciones de NOC. **Pendiente
+  multi-marca** (si algún día hay 2+ WHMCS): token por marca + chequeo marca↔serviceid.
+- Tests contra la app real (flask test_client, flujo stubbeado): 21 de matriz de roles + 3
+  arranques rechazados + resultado capado. Módulo PHP: CERO cambios (ya envía todo lo requerido).
+
 ## 2026-09-15 (lunes, tarde) — FIX #3: exclusión mutua por VM ("un solo job activo por VM")
 
 Aplicado y **aprobado por Codex** (rechazó la 1ª versión por una carrera fina real: la reserva

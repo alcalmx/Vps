@@ -20,6 +20,7 @@ SEGURIDAD (ver SEGURIDAD.md del repo — 5 capas):
 """
 import base64
 import gzip
+import hmac
 import ipaddress
 import json
 import os
@@ -39,6 +40,8 @@ from flask import Flask, jsonify, request
 TOKEN = os.environ["ENGINE_TOKEN"]
 # Token dedicado para el conector WHMCS (revocable aparte del dashboard). Opcional.
 WHMCS_TOKEN = os.environ.get("WHMCS_TOKEN", "")
+if WHMCS_TOKEN and WHMCS_TOKEN == TOKEN:
+    raise RuntimeError("WHMCS_TOKEN no puede ser igual a ENGINE_TOKEN (el conector quedaría con rol admin)")
 ESXI_HOST = os.environ.get("ESXI_HOST", "10.100.37.245")
 ESXI_SSH_PORT = int(os.environ.get("ESXI_SSH_PORT", "22"))
 ESXI_SSH_KEY = os.environ.get("ESXI_SSH_KEY", "/keys/vps_engine_esxi")
@@ -69,6 +72,15 @@ WHMCS_API_SECRET = os.environ.get("WHMCS_API_SECRET", "")
 DB_PATH = os.environ.get("DB_PATH", "/data/registry.db")
 CONFIG_DIR = os.environ.get("CONFIG_DIR", "/app/config")
 MODO = os.environ.get("MODO", "pruebas")  # pruebas | produccion
+# Modo FIJO para las creaciones del rol whmcs (#5: el conector no elige modo por
+# body — lo fija el motor). Para el go-live real: WHMCS_MODO=produccion en engine.env.
+WHMCS_MODO = os.environ.get("WHMCS_MODO", MODO)
+# fail-fast de configuración: mejor que el contenedor no arranque a que corra con
+# un modo inválido o con los dos tokens iguales (WHMCS quedaría con rol admin)
+if MODO not in ("pruebas", "produccion"):
+    raise RuntimeError("MODO inválido: %r (pruebas | produccion)" % MODO)
+if WHMCS_MODO not in ("pruebas", "produccion"):
+    raise RuntimeError("WHMCS_MODO inválido: %r (pruebas | produccion)" % WHMCS_MODO)
 DORADA_DEFAULT = os.environ.get("DORADA", "dorada-almalinux9.7")
 
 app = Flask(__name__)
@@ -1388,10 +1400,21 @@ def flujo_purgar(job):
 
 # ── API ──────────────────────────────────────────────────────────────────────
 def auth():
-    tok = request.headers.get("X-Auth-Token")
+    """Devuelve el ROL del token: 'admin' (dashboard/NOC, todo permitido) o 'whmcs'
+    (conector: solo crear/accion/editar por serviceid + consultas de su servicio),
+    o None si no autoriza. Comparación en tiempo constante (hmac.compare_digest).
+    Sin WHMCS_TOKEN configurado existe solo el rol admin (comportamiento previo).
+    Los 'if not auth()' existentes siguen funcionando (str truthy / None falsy)."""
+    tok = request.headers.get("X-Auth-Token") or ""
     if not tok:
-        return False
-    return tok == TOKEN or (WHMCS_TOKEN and tok == WHMCS_TOKEN)
+        return None
+    if hmac.compare_digest(tok, TOKEN):
+        return "admin"
+    if WHMCS_TOKEN and hmac.compare_digest(tok, WHMCS_TOKEN):
+        return "whmcs"
+    return None
+
+ERR_SOLO_ADMIN = "operación reservada al token de administración (rol del token: whmcs)"
 
 @app.route("/health")
 def health():
@@ -1405,7 +1428,8 @@ def health():
 
 @app.route("/crear", methods=["POST"])
 def crear():
-    if not auth():
+    rol = auth()
+    if not rol:
         return jsonify({"error": "unauthorized"}), 401
     d = request.get_json(force=True)
     marca = (d.get("marca") or "").strip()
@@ -1414,6 +1438,15 @@ def crear():
     hostname = (d.get("hostname") or "").strip().lower()
     actor = (d.get("actor") or "dashboard").strip()
     modo = (d.get("modo") or MODO).strip()   # pruebas | produccion (default = env)
+    if rol == "whmcs":
+        # #4: el conector siempre crea CON serviceid (es su única llave a la VM)
+        if not d.get("whmcs_serviceid"):
+            return jsonify({"error": "whmcs_serviceid es obligatorio para el token de WHMCS"}), 400
+        # #5: el modo lo fija el motor (WHMCS_MODO), no el body del conector
+        if modo != WHMCS_MODO:
+            audit(actor, "crear", "-", "modo del body (%s) ignorado para rol whmcs — se usa WHMCS_MODO=%s"
+                  % (modo, WHMCS_MODO), "aviso")
+        modo = WHMCS_MODO
     if modo not in ("pruebas", "produccion"):
         return jsonify({"error": "modo inválido (pruebas | produccion)"}), 400
     if marca not in MARCAS:
@@ -1471,7 +1504,8 @@ def crear():
 
 @app.route("/job/<jid>")
 def job_get(jid):
-    if not auth():
+    rol = auth()
+    if not rol:
         return jsonify({"error": "unauthorized"}), 401
     with DB_LOCK, db() as c:
         row = c.execute("SELECT * FROM jobs WHERE id=?", (jid,)).fetchone()
@@ -1479,7 +1513,11 @@ def job_get(jid):
         return jsonify({"error": "job no existe"}), 404
     d = dict(row)
     d["pasos"] = json.loads(d["pasos"])
-    if d.get("resultado"):
+    if rol != "admin":
+        # el resultado puede traer credenciales de entrega (link+clave del Send) —
+        # solo para el NOC; el módulo WHMCS únicamente lee estado/pasos (#14 parcial)
+        d.pop("resultado", None)
+    elif d.get("resultado"):
         try:
             d["resultado"] = json.loads(d["resultado"])
         except (ValueError, TypeError):
@@ -1488,8 +1526,11 @@ def job_get(jid):
 
 @app.route("/jobs")
 def jobs_list():
-    if not auth():
+    rol = auth()
+    if not rol:
         return jsonify({"error": "unauthorized"}), 401
+    if rol != "admin":
+        return jsonify({"error": ERR_SOLO_ADMIN}), 403
     with DB_LOCK, db() as c:
         rows = c.execute("SELECT id,tipo,vm,estado,error,created_at,updated_at "
                          "FROM jobs ORDER BY created_at DESC LIMIT 30").fetchall()
@@ -1497,8 +1538,11 @@ def jobs_list():
 
 @app.route("/vms")
 def vms_list():
-    if not auth():
+    rol = auth()
+    if not rol:
         return jsonify({"error": "unauthorized"}), 401
+    if rol != "admin":
+        return jsonify({"error": ERR_SOLO_ADMIN}), 403
     with DB_LOCK, db() as c:
         rows = [dict(r) for r in c.execute(
             "SELECT * FROM vms WHERE estado != 'papelera' ORDER BY nombre").fetchall()]
@@ -1542,7 +1586,8 @@ def vm_por_servicio_get():
 
 @app.route("/accion", methods=["POST"])
 def accion():
-    if not auth():
+    rol = auth()
+    if not rol:
         return jsonify({"error": "unauthorized"}), 401
     d = request.get_json(force=True)
     vm, acc = (d.get("vm") or "").strip(), (d.get("accion") or "").strip()
@@ -1550,6 +1595,13 @@ def accion():
     actor = (d.get("actor") or "dashboard").strip()
     if acc not in ACCIONES:
         return jsonify({"error": "acción desconocida"}), 400
+    # #4: el rol whmcs opera SOLO por serviceid — la VM se resuelve en el servidor,
+    # así el conector no puede tocar VMs ajenas (pertenencia por construcción)
+    if rol == "whmcs":
+        if vm:
+            return jsonify({"error": "el token de WHMCS opera solo por serviceid (vm explícito no permitido)"}), 403
+        if not serviceid:
+            return jsonify({"error": "falta serviceid"}), 400
     # caso WHMCS: si no vino el nombre, se resuelve por el serviceid
     por_sid = False
     if not vm and serviceid:
@@ -1578,12 +1630,18 @@ def accion():
 
 @app.route("/editar", methods=["POST"])
 def editar():
-    if not auth():
+    rol = auth()
+    if not rol:
         return jsonify({"error": "unauthorized"}), 401
     d = request.get_json(force=True)
     vm, sabor = (d.get("vm") or "").strip(), (d.get("sabor") or "").strip()
     serviceid = (str(d.get("serviceid")).strip() if d.get("serviceid") else "")
     actor = (d.get("actor") or "dashboard").strip()
+    if rol == "whmcs":
+        if vm:
+            return jsonify({"error": "el token de WHMCS opera solo por serviceid (vm explícito no permitido)"}), 403
+        if not serviceid:
+            return jsonify({"error": "falta serviceid"}), 400
     if not vm and serviceid:
         vm = vm_por_serviceid(serviceid) or ""
         if not vm:
@@ -1607,8 +1665,11 @@ def editar():
 
 @app.route("/purgar-papelera", methods=["POST"])
 def purgar():
-    if not auth():
+    rol = auth()
+    if not rol:
         return jsonify({"error": "unauthorized"}), 401
+    if rol != "admin":
+        return jsonify({"error": ERR_SOLO_ADMIN}), 403
     job, activo = lanzar_job_exclusivo("purgar-papelera", "-", "timer", ["Purgar entradas >7 días"])
     if not job:
         # purga ya corriendo → idempotente: se devuelve el job existente, sin error
@@ -1620,8 +1681,11 @@ def purgar():
 
 @app.route("/auditoria")
 def auditoria():
-    if not auth():
+    rol = auth()
+    if not rol:
         return jsonify({"error": "unauthorized"}), 401
+    if rol != "admin":
+        return jsonify({"error": ERR_SOLO_ADMIN}), 403
     with DB_LOCK, db() as c:
         rows = c.execute("SELECT * FROM operaciones ORDER BY id DESC LIMIT 100").fetchall()
     return jsonify({"operaciones": [dict(r) for r in rows]})
