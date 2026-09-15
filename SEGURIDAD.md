@@ -39,6 +39,12 @@ falla, las demás siguen protegiendo).
 ### Capa 4 — SSH restringido con wrapper (ESXi)
 El clon de discos (`vmkfstools`) no existe en la API → se hace por SSH, pero NUNCA
 con shell libre:
+- La sesión SSH autentica como `root` (en ESXi no hay alternativa real: `vmkfstools`
+  y mover carpetas del datastore requieren root, y un usuario local con rol de
+  administrador sería equivalente a root). **La protección NO es la identidad del
+  usuario sino el confinamiento por `command=` forzado**: la llave del motor no
+  obtiene shell, ni pty, ni forwarding — solo el wrapper (verificado en el host
+  2026-09-15). El usuario `svc-vps` (capa 3) es solo para la API (govc), no SSH.
 - Llave dedicada `vps_engine_esxi` (distinta de `claude_esxi`, que es la de
   diagnóstico humano/IA).
 - En `authorized_keys` del ESXi la llave entra con
@@ -106,5 +112,8 @@ con shell libre:
 - No abre puertos nuevos ni toca firewalls.
 - No gestiona VMs que no creó (ni "adopta" existentes).
 - No guarda contraseñas de clientes (eso es de VpsClientes/Vaultwarden).
-- No opera sobre el ESXi como root (ni por API ni por SSH).
+- No opera sobre el ESXi con privilegios libres: por API usa `svc-vps` (rol mínimo,
+  nunca root); por SSH la sesión autentica como root **pero sin shell** — confinada
+  por `command=` al wrapper (ver capa 4). La credencial de root del ESXi (password)
+  nunca la conoce ni la usa el motor.
 - No borra nada de forma inmediata e irreversible.

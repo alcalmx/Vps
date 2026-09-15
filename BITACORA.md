@@ -5,6 +5,22 @@
 
 ---
 
+## 2026-09-15 (lunes, tarde) — #10 CERRADO por verificación: el "ssh root al ESXi" está confinado como diseñado
+
+**Verificado en el host real** (con Codex de acuerdo en cerrar así, sin cambio de código):
+- La llave del motor en /etc/ssh/keys-root/authorized_keys tiene EXACTAMENTE el confinamiento de
+  la capa 4: command= al wrapper + no-pty + no-port/X11/agent-forwarding → sin shell root aunque
+  la llave se filtre. authorized_keys (600 root) y wrapper (755 root) no-escribibles por el motor.
+- La sesión autentica como root porque ESXi lo exige para vmkfstools/mv del datastore (un usuario
+  con rol admin sería root-equivalente); svc-vps es solo para la API. **La protección es el
+  forced-command, no la identidad** — se corrigió la redacción imprecisa de SEGURIDAD.md
+  ("no opera como root ni por SSH") y el docstring de esxi_ssh para reflejar la realidad.
+  (El docstring viaja en el próximo deploy funcional; no amerita rebuild propio.)
+- **⚠️ HALLAZGO COLATERAL para Alcadio (fuera del proyecto Vps, NO se tocó):** en el mismo
+  authorized_keys de root hay una llave `backup@esxi` SIN NINGUNA restricción — shell root
+  completo si se filtra. Recomendación: restringirla (command= de su herramienta de backup y/o
+  from= con la IP de origen). Conversarlo con Fabián/operaciones.
+
 ## 2026-09-15 (lunes, tarde) — FIX #7 (ALTO): eliminación = saga re-ejecutable con estado 'eliminando'
 
 Aplicado y **aprobado por Codex** (2 rondas — pidió guard de estado, verificación del estado real

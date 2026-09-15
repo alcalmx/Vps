@@ -277,7 +277,11 @@ def govc(*args, timeout=120):
 
 def esxi_ssh(comando, timeout=300):
     """Ejecuta un subcomando del wrapper restringido. El authorized_keys fuerza
-    command= → lo que enviamos llega como SSH_ORIGINAL_COMMAND al wrapper."""
+    command= → lo que enviamos llega como SSH_ORIGINAL_COMMAND al wrapper.
+    La sesión autentica como root (vmkfstools/mv del datastore lo exigen en ESXi)
+    pero la llave NO da shell: command= + no-pty + no-forwarding (capa 4 de
+    SEGURIDAD.md, verificado en el host 2026-09-15) — el confinamiento es el
+    forced-command, no la identidad."""
     cli = paramiko.SSHClient()
     cli.set_missing_host_key_policy(paramiko.AutoAddPolicy())
     cli.connect(ESXI_HOST, port=ESXI_SSH_PORT, username="root",
