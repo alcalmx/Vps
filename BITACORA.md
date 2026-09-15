@@ -5,6 +5,30 @@
 
 ---
 
+## 2026-09-15 (lunes, tarde) — FIX #3: exclusión mutua por VM ("un solo job activo por VM")
+
+Aplicado y **aprobado por Codex** (rechazó la 1ª versión por una carrera fina real: la reserva
+de /crear graba whmcs_serviceid ANTES de existir el job → un Terminate de WHMCS llegando en esa
+ventana resolvía la VM por serviceid, pasaba el gate y eliminaba una VM a medio nacer; corregido).
+Cambios en engine/app.py:
+- **Gate por VM** (`lanzar_job_exclusivo` + JOB_GATE_LOCK): antes de crear un job se verifica en
+  sección crítica que no haya otro 'corriendo' para esa VM (tabla jobs). /accion y /editar
+  devuelven **409** con tipo+id del job activo; /purgar-papelera es idempotente (devuelve el job
+  existente); /crear hace **reserva de nombre + creación del job bajo el mismo gate** (cierra la
+  ventana del serviceid). Protege también la creación: eliminar/editar durante un crear → 409.
+- **Limpieza al arrancar** (init_db): jobs 'corriendo' huérfanos de un proceso anterior →
+  estado='error' "interrumpido por reinicio del motor" (antes quedaban girando eternos en el
+  dashboard; con el gate habrían bloqueado su VM para siempre).
+- **Thread.start fallido** (`lanzar_o_fallar`): si el hilo no arranca, el job se marca error
+  (libera el gate) + 500 genérico; /crear además borra la reserva intacta y audita.
+- **OJO arquitectura** (documentado en el código): el gate y los locks son threading.Lock →
+  válidos SOLO con 1 proceso. Migrar a gunicorn (hallazgo #24) exige gate por transacciones
+  SQLite (BEGIN IMMEDIATE) y repensar la limpieza de init_db.
+- Cambios visibles (deseables): acción sobre VM ocupada = 409 claro (antes corría en paralelo);
+  tras reinicio los jobs interrumpidos salen 'error' (antes 'corriendo' eterno).
+- Probado: 6 acciones simultáneas sobre la misma VM → pasa 1; Terminate martillando en paralelo
+  a un Create → 409; huérfanos limpiados no bloquean.
+
 ## 2026-09-15 (lunes, tarde) — FIX #2: carreras de asignación (nombre/IP priv/IP púb+NAT) cerradas
 
 Aplicado y **aprobado por Codex** (con sus 3 observaciones ya incorporadas). El problema: los jobs

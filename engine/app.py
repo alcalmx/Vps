@@ -103,6 +103,7 @@ DB_LOCK = threading.Lock()
 NOMBRE_LOCK = threading.Lock()   # elegir número + INSERT de la reserva
 IP_PRIV_LOCK = threading.Lock()  # elegir IP privada + grabarla en el registro
 IP_PUB_LOCK = threading.Lock()   # elegir IP pública + crear NAT + grabarla
+JOB_GATE_LOCK = threading.Lock() # gate "un solo job activo por VM" (ver lanzar_job_exclusivo)
 
 def db():
     conn = sqlite3.connect(DB_PATH, timeout=30)
@@ -141,6 +142,11 @@ def init_db():
             c.execute("ALTER TABLE jobs ADD COLUMN resultado TEXT")  # datos de acceso
         except sqlite3.OperationalError:
             pass
+        # jobs 'corriendo' huérfanos de un proceso anterior (reinicio del motor): sus
+        # threads ya no existen → error, para que no bloqueen el gate de 1-job-por-VM
+        # ni queden girando eternamente en el dashboard
+        c.execute("UPDATE jobs SET estado='error', error='interrumpido por reinicio del motor', "
+                  "updated_at=datetime('now','localtime') WHERE estado='corriendo'")
 
 def audit(actor, accion, vm, detalle, resultado):
     with DB_LOCK, db() as c:
@@ -214,6 +220,41 @@ def run_job(job, fn):
         except Exception as e:  # noqa: BLE001 — el job registra cualquier falla
             job.fail("%s: %s" % (type(e).__name__, e))
     threading.Thread(target=_wrap, daemon=True).start()
+
+def job_activo(vm):
+    """Job 'corriendo' para esa VM, o None."""
+    with DB_LOCK, db() as c:
+        row = c.execute("SELECT id,tipo FROM jobs WHERE vm=? AND estado='corriendo' LIMIT 1",
+                        (vm,)).fetchone()
+    return dict(row) if row else None
+
+def lanzar_job_exclusivo(tipo, vm, actor, pasos):
+    """Gate de EXCLUSIÓN MUTUA por VM: un solo job activo a la vez. Chequeo +
+    creación del job en una sección crítica (JOB_GATE_LOCK por fuera, DB_LOCK por
+    dentro) para que dos requests simultáneas no pasen ambas el chequeo. Evita
+    eliminar/editar/suspender en paralelo sobre la misma VM (o durante su creación).
+    Devuelve (job, None) o (None, job_activo_existente).
+    OJO ARQUITECTURA: el gate (y los locks de asignación) son threading.Lock →
+    válidos SOLO con UN proceso (app.run threaded / 1 contenedor). Si esto migra a
+    gunicorn/multiproceso, el gate debe pasar a transacciones SQLite (BEGIN
+    IMMEDIATE) y la limpieza de init_db dejaría de ser segura tal cual."""
+    with JOB_GATE_LOCK:
+        act = job_activo(vm)
+        if act:
+            return None, act
+        job = Job(tipo, vm, actor, pasos)
+    return job, None
+
+def lanzar_o_fallar(job, fn):
+    """run_job con manejo del caso patológico: si el hilo NO llega a arrancar
+    (Thread.start falla), el job se marca error — si quedara 'corriendo' sin hilo,
+    bloquearía el gate de su VM para siempre. Devuelve None si ok, o (json, 500)."""
+    try:
+        run_job(job, fn)
+        return None
+    except Exception as e:  # noqa: BLE001
+        job.fail("no se pudo lanzar el hilo del job: %s" % e)
+        return jsonify({"error": "no se pudo lanzar el job (ver registro de operaciones)"}), 500
 
 # ── Acceso al ESXi: govc (API, usuario svc-vps) y SSH restringido (wrapper) ──
 def govc(*args, timeout=120):
@@ -1403,22 +1444,27 @@ def crear():
     root_password = (d.get("root_password") or "").strip() or None
     # id del servicio en WHMCS (para trackear la VM sin depender del Username)
     whmcs_serviceid = (str(d.get("whmcs_serviceid")).strip() if d.get("whmcs_serviceid") else None)
+    nombre, job = None, None
     try:
-        nombre = reservar_vm(marca, MARCAS[marca], sabor, SABORES[(marca, sabor)],
-                             cliente, hostname, whmcs_serviceid)
-    except sqlite3.Error as e:
-        audit(actor, "crear", "-", "reserva de nombre falló: %s" % e, "ERROR")
-        return jsonify({"error": "no se pudo reservar el nombre (ver registro de operaciones)"}), 500
-    try:
-        job = Job("crear", nombre, actor, PASOS_CREAR)
+        # reserva del nombre + creación del job BAJO EL MISMO GATE: sin esto hay una
+        # ventana en que la fila 'creando' (con whmcs_serviceid) ya existe pero su job
+        # no — un Terminate de WHMCS llegando justo ahí resolvería la VM por serviceid
+        # y pasaría el gate, lanzando un eliminar sobre una VM a medio nacer
+        with JOB_GATE_LOCK:
+            nombre = reservar_vm(marca, MARCAS[marca], sabor, SABORES[(marca, sabor)],
+                                 cliente, hostname, whmcs_serviceid)
+            job = Job("crear", nombre, actor, PASOS_CREAR)
         run_job(job, lambda j: flujo_crear(j, marca, sabor, cliente, hostname, cpanel, modo,
                                            pubkey_cliente or None, root_password, whmcs_serviceid))
     except Exception as e:
-        # si el job no llegó a arrancar, la reserva no debe quedar huérfana ('creando'
-        # eterno que además consume el número) — se libera solo si sigue intacta
-        with DB_LOCK, db() as c:
-            c.execute("DELETE FROM vms WHERE nombre=? AND estado='creando' AND ip IS NULL", (nombre,))
-        audit(actor, "crear", nombre, "no se pudo lanzar el job: %s" % e, "ERROR")
+        # deshacer lo que alcanzó a quedar: el job se marca error (libera el gate) y
+        # la reserva se borra solo si sigue intacta — sin filas 'creando' huérfanas
+        if job:
+            job.fail("no se pudo lanzar el hilo de creación: %s" % e)
+        if nombre:
+            with DB_LOCK, db() as c:
+                c.execute("DELETE FROM vms WHERE nombre=? AND estado='creando' AND ip IS NULL", (nombre,))
+        audit(actor, "crear", nombre or "-", "creación no lanzada: %s" % e, "ERROR")
         return jsonify({"error": "no se pudo lanzar la creación (ver registro de operaciones)"}), 500
     return jsonify({"ok": True, "job_id": job.id, "vm": nombre, "modo": modo,
                     "byo": bool(pubkey_cliente)})
@@ -1521,8 +1567,13 @@ def accion():
         if not (conf == vm or (por_sid and conf == serviceid)):
             return jsonify({"error": "confirmación requerida: reescribe el nombre exacto de la VM"}), 400
     fn, pasos = ACCIONES[acc]
-    job = Job(acc, vm, actor, pasos)
-    run_job(job, fn)
+    job, activo = lanzar_job_exclusivo(acc, vm, actor, pasos)
+    if not job:
+        return jsonify({"error": "la VM %s tiene un job en curso (%s, id %s) — reintenta cuando termine"
+                        % (vm, activo["tipo"], activo["id"])}), 409
+    err = lanzar_o_fallar(job, fn)
+    if err:
+        return err
     return jsonify({"ok": True, "job_id": job.id, "vm": vm})
 
 @app.route("/editar", methods=["POST"])
@@ -1543,18 +1594,28 @@ def editar():
         return jsonify({"error": str(e)}), 400
     if (reg["marca"], sabor) not in SABORES:
         return jsonify({"error": "sabor desconocido para la marca %s" % reg["marca"]}), 400
-    job = Job("editar", vm, actor,
+    job, activo = lanzar_job_exclusivo("editar", vm, actor,
               ["Calcular cambio de plan (upgrade/downgrade)", "Aplicar CPU/RAM",
                "Ajustar disco (solo crece, nunca se achica)", "Actualizar registro"])
-    run_job(job, lambda j: flujo_editar(j, sabor))
+    if not job:
+        return jsonify({"error": "la VM %s tiene un job en curso (%s, id %s) — reintenta cuando termine"
+                        % (vm, activo["tipo"], activo["id"])}), 409
+    err = lanzar_o_fallar(job, lambda j: flujo_editar(j, sabor))
+    if err:
+        return err
     return jsonify({"ok": True, "job_id": job.id})
 
 @app.route("/purgar-papelera", methods=["POST"])
 def purgar():
     if not auth():
         return jsonify({"error": "unauthorized"}), 401
-    job = Job("purgar-papelera", "-", "timer", ["Purgar entradas >7 días"])
-    run_job(job, flujo_purgar)
+    job, activo = lanzar_job_exclusivo("purgar-papelera", "-", "timer", ["Purgar entradas >7 días"])
+    if not job:
+        # purga ya corriendo → idempotente: se devuelve el job existente, sin error
+        return jsonify({"ok": True, "job_id": activo["id"], "nota": "purga ya en curso"})
+    err = lanzar_o_fallar(job, flujo_purgar)
+    if err:
+        return err
     return jsonify({"ok": True, "job_id": job.id})
 
 @app.route("/auditoria")
