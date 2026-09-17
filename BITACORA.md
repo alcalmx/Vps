@@ -5,6 +5,25 @@
 
 ---
 
+## 2026-09-17 (miércoles) — FIX #9 (ALTO): pinning de host keys SSH (ESXi + MikroTiks)
+
+Aplicado **sin Codex (sin cuota; anotado en docs/pendiente-revision-codex.md junto al #8 y el
+timer)**. Cambios:
+- **cliente_ssh_pinned()**: paramiko con `load_host_keys(KNOWN_HOSTS_PATH)` + **RejectPolicy** —
+  host desconocido o huella distinta → conexión RECHAZADA (anti-MITM). Fail-closed: sin el
+  archivo no hay conexión a la infra fija. Usado por esxi_ssh (antes AutoAddPolicy).
+- **mikrotik()**: `-o UserKnownHostsFile=/keys/known_hosts -o StrictHostKeyChecking=yes`
+  (antes `no`). Cubre RouterData y el CCR de borde (formato `[host]:2420`).
+- **noc-monitor/known-hosts.sh** (nuevo, versionado): genera el archivo con ssh-keyscan de las
+  3 máquinas; NO instala archivos incompletos (si una no responde, aborta). Re-correr SOLO ante
+  cambio legítimo de llaves (reinstalación de ESXi/MikroTik) — si el motor empieza a rechazar
+  conexiones, la pregunta es POR QUÉ cambió la huella, no cómo callarlo.
+- **TOFU deliberado en VPS nuevos** (documentado en el código): las conexiones a las VMs recién
+  creadas siguen con AutoAdd SIN known_hosts — su llave nace con la VM (imposible pre-conocerla)
+  y las IPs se REUTILIZAN (.247 en cada prueba: un known_hosts las haría chocar entre sí).
+- Tests: 4 escenarios (fail-closed sin archivo; RejectPolicy + huellas cargadas incl. puerto no
+  estándar; opciones estrictas en mikrotik; TOFU de VPS intacto) + regresión total verde.
+
 ## 2026-09-17 (miércoles) — FIX #8 (ALTO): cupo del host + espacio real del datastore
 
 Aplicado **sin revisión de Codex (sin cuota — regla del usuario aplicada)**, compensado con

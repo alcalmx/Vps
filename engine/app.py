@@ -55,6 +55,12 @@ MIKROTIK_USER = os.environ.get("MIKROTIK_USER", "claude")
 MIKROTIK_PORT = os.environ.get("MIKROTIK_PORT", "2420")
 ROUTERDATA = os.environ.get("ROUTERDATA_HOST", "172.16.1.90")   # decide/rutea
 CCR_BORDE = os.environ.get("CCR_BORDE_HOST", "172.16.1.69")     # ping de verificación
+# #9: pinning de host keys de la INFRAESTRUCTURA FIJA (ESXi, MikroTiks). El deploy
+# genera este archivo con ssh-keyscan (ver noc-monitor/); si falta o la huella no
+# calza → la conexión se RECHAZA (fail-closed, anti-MITM). Las conexiones a VPS
+# recién creados quedan en TOFU deliberado: su llave nace con la VM (es imposible
+# pre-conocerla) y sus IPs se REUTILIZAN (un known_hosts las haría chocar).
+KNOWN_HOSTS_PATH = os.environ.get("KNOWN_HOSTS_PATH", "/keys/known_hosts")
 # address-list de RouterData por red pública (igual que ALTA_PUB_REDES del NOC)
 PUB_REDES = {"Red57-0": "38.19.57", "Red104-0": "201.148.104", "Red105-0": "201.148.105",
              "Red106-0": "201.148.106", "Red107-0": "201.148.107"}
@@ -285,15 +291,26 @@ def govc(*args, timeout=120):
         raise RuntimeError("govc %s: %s" % (args[0], (r.stderr or r.stdout).strip()[:300]))
     return r.stdout.strip()
 
+def cliente_ssh_pinned():
+    """Cliente paramiko con host key PINNED (#9): carga KNOWN_HOSTS_PATH y RECHAZA
+    hosts desconocidos o con huella distinta (RejectPolicy). Fail-closed: sin el
+    archivo no hay conexión a la infraestructura fija."""
+    if not os.path.isfile(KNOWN_HOSTS_PATH):
+        raise RuntimeError("falta %s (pinning de host keys #9) — generar con ssh-keyscan "
+                           "en el deploy (ver noc-monitor/known-hosts.sh)" % KNOWN_HOSTS_PATH)
+    cli = paramiko.SSHClient()
+    cli.load_host_keys(KNOWN_HOSTS_PATH)
+    cli.set_missing_host_key_policy(paramiko.RejectPolicy())
+    return cli
+
 def esxi_ssh(comando, timeout=300):
     """Ejecuta un subcomando del wrapper restringido. El authorized_keys fuerza
     command= → lo que enviamos llega como SSH_ORIGINAL_COMMAND al wrapper.
     La sesión autentica como root (vmkfstools/mv del datastore lo exigen en ESXi)
     pero la llave NO da shell: command= + no-pty + no-forwarding (capa 4 de
     SEGURIDAD.md, verificado en el host 2026-09-15) — el confinamiento es el
-    forced-command, no la identidad."""
-    cli = paramiko.SSHClient()
-    cli.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+    forced-command, no la identidad. Host key PINNED (#9)."""
+    cli = cliente_ssh_pinned()
     cli.connect(ESXI_HOST, port=ESXI_SSH_PORT, username="root",
                 key_filename=ESXI_SSH_KEY, timeout=20,
                 allow_agent=False, look_for_keys=False)
@@ -346,8 +363,11 @@ def ip_libre_pruebas(subred, gateway, job=None):
 def mikrotik(cmd, host=None, timeout=25):
     """Corre un comando en el MikroTik por SSH (mismo acceso claude@2420 del NOC)."""
     host = host or ROUTERDATA
+    # #9: host key PINNED — known_hosts generado en el deploy; huella distinta o
+    # host desconocido → la conexión falla (anti-MITM). Antes: StrictHostKeyChecking=no.
     r = subprocess.run(
-        ["ssh", "-i", MIKROTIK_KEY, "-o", "StrictHostKeyChecking=no", "-o", "BatchMode=yes",
+        ["ssh", "-i", MIKROTIK_KEY, "-o", "UserKnownHostsFile=%s" % KNOWN_HOSTS_PATH,
+         "-o", "StrictHostKeyChecking=yes", "-o", "BatchMode=yes",
          "-o", "LogLevel=ERROR", "-o", "ConnectTimeout=10", "-p", MIKROTIK_PORT,
          "%s@%s" % (MIKROTIK_USER, host), cmd],
         capture_output=True, text=True, timeout=timeout)
