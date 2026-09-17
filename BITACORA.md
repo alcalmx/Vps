@@ -5,6 +5,33 @@
 
 ---
 
+## 2026-09-17 (miércoles) — ✨ VPS PERSONALIZADO (motor + dashboard) desplegado · diseño multi-host anotado
+
+**Feature pedida por Alcadio**: opción "Personalizado" en el tab Crear del dashboard.
+- **Motor** (`/crear`, commit 0449e4c): sabor `personalizado` con specs explícitas — SOLO rol
+  admin (WHMCS sigue con catálogo fijo, 403), rangos vCPU 1-24 / RAM 1024-65536 MB / disco
+  25-600 GB, pasa por el cupo del host (#8) y el chequeo real de datastore. `sabor_def` se
+  inyecta a flujo_crear (ya no re-consulta el catálogo). Registro guarda sabor='personalizado'
+  + specs reales (compatible con /editar hacia sabores del catálogo). Tests 5/5 + validado en
+  vivo (400 sin specs). Sin Codex (en la deuda).
+- **Dashboard v2** (repo fastnetmon, commit e79e07f): opción en el select + fila de specs
+  condicional + validación de rangos en cliente; parche con backup (.bak-20260917), imagen v2
+  reconstruida, verificado sirviendo el form. DESCUBRIMIENTO: noc.hosting.cl lo sirve el **v2**
+  (:8081 de noc-monitor) — el comentario del quadlet sobre "v1 sigue sirviendo" está obsoleto.
+
+**PRÓXIMO FRENTE — GESTIÓN MULTI-HOST DEL MOTOR (diseño acordado, para sesión propia):**
+Pestaña "Motor" en el dashboard para administrar EN QUÉ hosts VMware puede actuar el motor
+(hoy fijo: ESXI_HOST=10.100.37.245). Piezas del diseño:
+1. Tabla `hosts` en el registro (ip, datastore, portgroup/red, estado activo/pausado, límites
+   por host) + endpoints CRUD `/hosts` (solo admin) + columna `host` en vms.
+2. **Credenciales POR HOST** (SEGURIDAD.md: no se comparten): cada host nuevo necesita su
+   svc-vps (API), su llave SSH con wrapper command=, el wrapper en su datastore y su huella en
+   known_hosts → script "enrolar-host" que lo semi-automatice.
+3. Scan de recursos por host (datastore libre + RAM/CPU vía govc host.info) + cupo #8 per-host.
+4. Selección automática al crear: host activo con espacio/cupo; "lleno → siguiente".
+5. Efecto dominó: reconciliación/purga/saga/papelera conscientes del host de cada VM.
+Ejemplo de Alcadio: agregar 192.168.200.121 y que el motor cree ahí cuando el .245 no dé más.
+
 ## 2026-09-17 (miércoles) — #22 resto CERRADO por decisión: el formato NAT es un CONTRATO (no se toca)
 
 Alcadio recordó el porqué del formato del comentario NAT y se VERIFICÓ contra el código del
