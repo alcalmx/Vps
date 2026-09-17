@@ -26,6 +26,10 @@ comportamiento**: los flujos siguen operando el host principal; esto es la FUNDA
 - Sin Codex (en la deuda). **Siguiente: Fase A2** — flujos host-aware (govc/esxi_ssh resuelven
   el host de cada VM), selección automática al crear, CRUD de hosts. Luego B (pestaña) y C
   (script enrolar-host para el 192.168.200.121).
+- **🚀 DESPLEGADO Y PROBADO EN VIVO**: bootstrap ok (esxi-245 auto-registrado), 16 VMs
+  adoptadas, scan real del host: 1041 GB libres en datastore, 16 cores, 159 GB RAM (104 en
+  uso por la infra), comprometido 0 (todo en papelera). GET /hosts operativo para la
+  futura pestaña Motor.
 
 ## 2026-09-17 (miércoles) — ✨ VPS PERSONALIZADO (motor + dashboard) desplegado · diseño multi-host anotado
 
