@@ -5,6 +5,28 @@
 
 ---
 
+## 2026-09-17 (miércoles) — FIX #8 (ALTO): cupo del host + espacio real del datastore
+
+Aplicado **sin revisión de Codex (sin cuota — regla del usuario aplicada)**, compensado con
+tests exhaustivos + regresión completa. Implementa además los "Límites de recursos" que
+SEGURIDAD.md prometía. Cambios en engine/app.py:
+- **Cupo del host** (env `HOST_MAX_VCPU=24`, `HOST_MAX_RAM_MB=65536`, `HOST_MAX_DISCO_GB=600` —
+  la propuesta de SEGURIDAD.md; 0 = sin límite): `validar_cupo()` suma lo comprometido (filas
+  vigentes; papelera/purgando no cuentan) y rechaza si el nuevo plan no cabe. **Atómico con la
+  reserva del nombre** (mismo NOMBRE_LOCK) → cero sobreventa entre creaciones concurrentes
+  (test: 9 hilos, cupo 600, exactamente 6 de 100 GB caben). /crear responde **409 con el motivo**
+  (WHMCS lo muestra en el módulo). `editar` valida su delta (upgrades consumen, downgrades pasan).
+- **Espacio real del datastore** (paso 3): `datastore_libre_gb()` vía `govc datastore.info -json`
+  (bytes exactos; tolera shapes de distintas versiones de govc; sin datastore → fail-closed).
+  Regla: `libres ≥ disco_del_plan + DATASTORE_RESERVA_GB` (env, default 50) o la creación aborta
+  ANTES de clonar. Antes este paso solo imprimía el df sin verificar nada.
+- **⚠️ OPERATIVO:** los límites por defecto quedan ACTIVOS al desplegar: 24 vCPU / 64 GB RAM /
+  600 GB disco para clientes en el host. Con los sabores actuales (~100-153 GB) caben ~4-6 VPS
+  → **Alcadio debe definir los valores reales** en engine.env (HOST_MAX_*) según lo que quiera
+  reservar para la infraestructura del host compartido.
+- Tests: 5 escenarios nuevos (concurrencia sin sobreventa, papelera libera, bordes exactos,
+  parser datastore 3 variantes, 409 endpoint) + regresión total (roles/saga/purga/reconciliación).
+
 ## 2026-09-17 (miércoles) — ⏰ Timer de mantención diaria instalado (gap encontrado: la purga nunca corría sola)
 
 Pregunta del usuario sobre "la purga real" destapó que **la purga diaria del diseño nunca se

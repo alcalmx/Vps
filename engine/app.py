@@ -71,6 +71,16 @@ WHMCS_API_ID = os.environ.get("WHMCS_API_IDENTIFIER", "")
 WHMCS_API_SECRET = os.environ.get("WHMCS_API_SECRET", "")
 DB_PATH = os.environ.get("DB_PATH", "/data/registry.db")
 CONFIG_DIR = os.environ.get("CONFIG_DIR", "/app/config")
+# Límites de recursos del host para VPS de clientes (#8 / SEGURIDAD.md §Límites:
+# proteger la infraestructura que comparte el host; 0 = sin límite). El cupo se
+# verifica ATÓMICO con la reserva del nombre (mismo lock) → sin sobreventa entre
+# creaciones concurrentes. Valores por defecto = propuesta de SEGURIDAD.md.
+HOST_MAX_VCPU = int(os.environ.get("HOST_MAX_VCPU", "24"))
+HOST_MAX_RAM_MB = int(os.environ.get("HOST_MAX_RAM_MB", "65536"))
+HOST_MAX_DISCO_GB = int(os.environ.get("HOST_MAX_DISCO_GB", "600"))
+# Reserva de seguridad del datastore: una creación aborta si al datastore le quedan
+# menos de (disco del plan + esta reserva) GB libres — colchón para la infra.
+DATASTORE_RESERVA_GB = int(os.environ.get("DATASTORE_RESERVA_GB", "50"))
 MODO = os.environ.get("MODO", "pruebas")  # pruebas | produccion
 # Modo FIJO para las creaciones del rol whmcs (#5: el conector no elige modo por
 # body — lo fija el motor). Para el go-live real: WHMCS_MODO=produccion en engine.env.
@@ -823,6 +833,43 @@ def siguiente_nombre(marca_cfg, cliente):
     base = "%s-%04d" % (pref, nxt)
     return ("%s-%s" % (base, slug)) if slug else base
 
+def cupo_comprometido():
+    """Recursos ya comprometidos con clientes: filas vigentes del registro (todo lo
+    que no está en papelera/purgando — un 'eliminando' aún ocupa su disco)."""
+    with DB_LOCK, db() as c:
+        r = c.execute("SELECT COALESCE(SUM(vcpu),0) v, COALESCE(SUM(ram_mb),0) m, "
+                      "COALESCE(SUM(disco_gb),0) d FROM vms "
+                      "WHERE estado NOT IN ('papelera','purgando')").fetchone()
+    return r["v"], r["m"], r["d"]
+
+def validar_cupo(d_vcpu, d_ram_mb, d_disco_gb):
+    """#8: lanza RuntimeError si (comprometido + delta) excede el cupo del host.
+    Límite en 0 = sin límite. Los deltas negativos (downgrades) siempre pasan."""
+    v, m, d = cupo_comprometido()
+    problemas = []
+    if HOST_MAX_VCPU and v + d_vcpu > HOST_MAX_VCPU:
+        problemas.append("vCPU %d+%d > máx %d" % (v, d_vcpu, HOST_MAX_VCPU))
+    if HOST_MAX_RAM_MB and m + d_ram_mb > HOST_MAX_RAM_MB:
+        problemas.append("RAM %d+%d MB > máx %d" % (m, d_ram_mb, HOST_MAX_RAM_MB))
+    if HOST_MAX_DISCO_GB and d + d_disco_gb > HOST_MAX_DISCO_GB:
+        problemas.append("disco %d+%d GB > máx %d" % (d, d_disco_gb, HOST_MAX_DISCO_GB))
+    if problemas:
+        raise RuntimeError("cupo del host excedido: " + "; ".join(problemas) +
+                           " — liberar recursos o ajustar HOST_MAX_* en engine.env")
+
+def datastore_libre_gb():
+    """GB libres del datastore según la API (bytes exactos, no df -h). Lanza si no
+    puede obtenerse — la creación debe abortar antes de clonar (fail-closed)."""
+    out = govc("datastore.info", "-json", DATASTORE)
+    data = json.loads(out)
+    for ds in (data.get("datastores") or data.get("Datastores") or []):
+        s = ds.get("summary") or ds.get("Summary") or {}
+        if (s.get("name") or s.get("Name")) == DATASTORE:
+            libre = s.get("freeSpace", s.get("FreeSpace"))
+            if libre is not None:
+                return int(libre) // (1024 ** 3)
+    raise RuntimeError("no pude obtener el espacio libre del datastore %s" % DATASTORE)
+
 def reservar_vm(marca, marca_cfg, sabor_slug, sabor, cliente, hostname, whmcs_serviceid=None):
     """Elige el siguiente nombre y lo RESERVA (INSERT estado='creando') en una sola
     sección crítica. Antes el nombre se calculaba en el endpoint y se insertaba
@@ -830,6 +877,9 @@ def reservar_vm(marca, marca_cfg, sabor_slug, sabor, cliente, hostname, whmcs_se
     número. Con la reserva atómica, la segunda ve la fila de la primera y toma el
     número siguiente. (nombre es PRIMARY KEY: tercera capa por si acaso.)"""
     with NOMBRE_LOCK:
+        # #8: cupo verificado ATÓMICO con la reserva — la fila insertada ya cuenta
+        # como comprometida para la siguiente reserva concurrente (sin sobreventa)
+        validar_cupo(sabor["vcpu"], sabor["ram_mb"], sabor["disco_gb"])
         nombre = siguiente_nombre(marca_cfg, cliente)
         with DB_LOCK, db() as c:
             c.execute("INSERT INTO vms(nombre,marca,sabor,cliente,hostname,estado,vcpu,ram_mb,disco_gb,whmcs_serviceid) "
@@ -937,10 +987,16 @@ def flujo_crear(job, marca, sabor_slug, cliente, hostname, instalar_cpanel, modo
         set_estado(nombre, "creando", ip=ip)
     job.detalle("IP privada asignada: %s (gw %s)" % (ip, red["gateway"]))
 
-    # 3. espacio
+    # 3. espacio REAL del datastore (#8, fail-closed): antes solo se mostraba el df
     job.paso()
-    df = esxi_ssh("df")
-    job.detalle("datastore: %s" % df)
+    libre_gb = datastore_libre_gb()
+    requerido = sabor["disco_gb"] + DATASTORE_RESERVA_GB
+    if libre_gb < requerido:
+        raise RuntimeError("espacio insuficiente en %s: %d GB libres < %d requeridos "
+                           "(plan %d GB + reserva de seguridad %d GB)"
+                           % (DATASTORE, libre_gb, requerido, sabor["disco_gb"], DATASTORE_RESERVA_GB))
+    job.detalle("datastore %s: %d GB libres ≥ %d requeridos (plan %d + reserva %d) — OK"
+                % (DATASTORE, libre_gb, requerido, sabor["disco_gb"], DATASTORE_RESERVA_GB))
 
     # 4. clonar
     job.paso("IP %s reservada" % ip)
@@ -1372,6 +1428,10 @@ def flujo_editar(job, sabor_slug):
             c.execute("UPDATE vms SET sabor=? WHERE nombre=?", (sabor_slug, job.vm))
         job.ok("plan actualizado a %s — %s" % (sabor_slug, "; ".join(cambios) or "recursos idénticos"))
         return
+    # #8: el upgrade también consume cupo (deltas negativos de downgrade pasan solos).
+    # Nota: chequeo no atómico con otros editar simultáneos (raro, admin) — el cupo
+    # duro de las CREACIONES sí es atómico (reservar_vm).
+    validar_cupo(d_cpu, d_ram, disco_final - vm["disco_gb"])
     requiere_reinicio = d_cpu < 0 or d_ram < 0
     tipo = "DOWNGRADE (requiere reinicio breve)" if requiere_reinicio else "UPGRADE en caliente"
     job.paso("%s: %s" % (tipo, ", ".join(cambios)))  # → aplicar CPU/RAM
@@ -1820,6 +1880,10 @@ def crear():
         run_job(job, lambda j: flujo_crear(j, marca, sabor, cliente, hostname, cpanel, modo,
                                            pubkey_cliente or None, root_password, whmcs_serviceid))
     except Exception as e:
+        # cupo excedido: rechazo LIMPIO con el motivo (no es un error interno)
+        if "cupo del host excedido" in str(e):
+            audit(actor, "crear", "-", str(e), "rechazado")
+            return jsonify({"error": str(e)}), 409
         # deshacer lo que alcanzó a quedar: el job se marca error (libera el gate) y
         # la reserva se borra solo si sigue intacta — sin filas 'creando' huérfanas
         if job:
