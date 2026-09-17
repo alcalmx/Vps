@@ -5,6 +5,25 @@
 
 ---
 
+## 2026-09-17 (miércoles) — FIX #14+#15 (ALTOS finales): secretos con expiración + límites de input
+
+Aplicados **sin Codex (sin cuota; anotados en docs/pendiente-revision-codex.md)**. Con estos
+**quedan CERRADOS los 9 hallazgos ALTOS** de la auditoría. Cambios en engine/app.py:
+- **#14 — expirar_secretos_jobs()**: los datos de entrega (send_url/send_password) se REDACTAN
+  del resultado de jobs con más de SEND_SECRETO_TTL_DIAS (env, default 2 — la vida real del
+  Send); el resto del resultado (IPs, WHM, fingerprint) se conserva para el historial. Corre en
+  la mantención diaria (dentro de flujo_purgar) e informa el conteo en el resumen. Idempotente.
+- **#15 — límites de input**: MAX_CONTENT_LENGTH 64 KB (413 JSON); json_body() tolerante al
+  Content-Type pero JSON malformado/no-objeto → 400 JSON limpio (antes: HTML de Flask);
+  serviceid/whmcs_serviceid estrictamente numéricos (400); root_password máx 128 (RECHAZA, no
+  trunca — una clave truncada sería otra clave); pubkey con tope de largo antes de la regex;
+  cliente cap 40; **actor saneado** (charset acotado + máx 60 — ya no puede contaminar
+  auditoría/UI con caracteres de control o markup).
+- Tests: 6 escenarios nuevos (#14 completo con TTL e idempotencia; 400/413 JSON; serviceid en
+  3 endpoints; root_password/whmcs_serviceid/pubkey; actor saneado end-to-end hasta la tabla
+  jobs) + regresión total de los 6 suites en verde.
+- PENDIENTE DEPLOY (contenedor).
+
 ## 2026-09-17 (miércoles) — 🚀 DEPLOY #8+#9 con validación en vivo
 
 Desplegado el paquete (OK del usuario, cupos por DEFECTO 24 vCPU/64 GB/600 GB — ajustables en

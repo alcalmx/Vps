@@ -87,6 +87,9 @@ HOST_MAX_DISCO_GB = int(os.environ.get("HOST_MAX_DISCO_GB", "600"))
 # Reserva de seguridad del datastore: una creación aborta si al datastore le quedan
 # menos de (disco del plan + esta reserva) GB libres — colchón para la infra.
 DATASTORE_RESERVA_GB = int(os.environ.get("DATASTORE_RESERVA_GB", "50"))
+# #14: los secretos de entrega (link+clave del Send) se REDACTAN del resultado de los
+# jobs cuando el Send ya expiró (vive ~2 días) — barrido en la mantención diaria.
+SEND_SECRETO_TTL_DIAS = int(os.environ.get("SEND_SECRETO_TTL_DIAS", "2"))
 MODO = os.environ.get("MODO", "pruebas")  # pruebas | produccion
 # Modo FIJO para las creaciones del rol whmcs (#5: el conector no elige modo por
 # body — lo fija el motor). Para el go-live real: WHMCS_MODO=produccion en engine.env.
@@ -100,6 +103,12 @@ if WHMCS_MODO not in ("pruebas", "produccion"):
 DORADA_DEFAULT = os.environ.get("DORADA", "dorada-almalinux9.7")
 
 app = Flask(__name__)
+# #15: tope duro del body (nuestros payloads reales son < 8 KB; 64 KB da holgura)
+app.config["MAX_CONTENT_LENGTH"] = 64 * 1024
+
+@app.errorhandler(413)
+def _err_413(e):
+    return jsonify({"error": "body demasiado grande (máx 64 KB)"}), 413
 
 # ── Config de marcas y sabores (del repo, horneadas en la imagen) ────────────
 def _load_json(path):
@@ -1544,6 +1553,33 @@ def flujo_editar(job, sabor_slug):
 
 VALID_TRASH_RE = re.compile(r"^[0-9]{8}-[0-9]{6}-vps-[a-z]{2,5}-[a-z0-9][a-z0-9-]{0,40}$")
 
+def expirar_secretos_jobs():
+    """#14: redacta send_url/send_password del resultado de jobs con más de
+    SEND_SECRETO_TTL_DIAS (el Send real ya expiró — retener la clave es riesgo sin
+    utilidad). El resto del resultado (IPs, WHM, fingerprint) se conserva para el
+    historial del dashboard. Idempotente; corre en la mantención diaria."""
+    limpiados = 0
+    with DB_LOCK, db() as c:
+        rows = c.execute("SELECT id, resultado FROM jobs WHERE resultado IS NOT NULL "
+                         "AND created_at < datetime('now','localtime','-%d days')"
+                         % SEND_SECRETO_TTL_DIAS).fetchall()
+        for r in rows:
+            try:
+                d = json.loads(r["resultado"])
+            except (ValueError, TypeError):
+                continue
+            if not isinstance(d, dict):
+                continue
+            sensibles = [k for k in ("send_url", "send_password")
+                         if d.get(k) not in (None, "", "(expirado)")]
+            if not sensibles:
+                continue
+            for k in sensibles:
+                d[k] = "(expirado)"
+            c.execute("UPDATE jobs SET resultado=? WHERE id=?", (json.dumps(d), r["id"]))
+            limpiados += 1
+    return limpiados
+
 def listar_wrapper(cmd):
     """Listado CONFIABLE vía wrapper: exige el sentinel 'OK' final (el wrapper ahora
     falla cerrado si no puede leer el directorio; un listado sin OK = respuesta
@@ -1578,6 +1614,8 @@ def flujo_purgar(job):
     bóveda primero (si falla → se conserva TODO y se reintenta en la corrida diaria
     siguiente); la fila del registro se borra solo tras purgar de verdad."""
     job.paso()
+    # #14: de pasada, redactar los secretos de entrega ya expirados de jobs antiguos
+    secretos = expirar_secretos_jobs()
     en_papelera = [l for l in listar_wrapper("list-trash") if VALID_TRASH_RE.match(l)]
     with DB_LOCK, db() as c:
         registradas = {r["papelera_entrada"]: {"vault": r["vault_item"], "estado": r["estado"]}
@@ -1671,8 +1709,9 @@ def flujo_purgar(job):
               "entradas desaparecidas sin marca de purga (conservadas): %s" % ", ".join(deriva_reg[:10]), "aviso")
     job.ok("papelera: %d purgada/s (allowlist del registro, >7 días) · %d llave/s de bóveda · "
            "%d saltada/s (reintento diario) · %d ajena/s NO tocadas · %d purga/s propia/s completada/s · "
-           "%d desaparecida/s conservada/s"
-           % (len(purgadas), llaves_borradas, len(saltadas), len(ajenas), len(limpiadas), len(deriva_reg)))
+           "%d desaparecida/s conservada/s · %d secreto/s de entrega expirados"
+           % (len(purgadas), llaves_borradas, len(saltadas), len(ajenas), len(limpiadas),
+              len(deriva_reg), secretos))
 
 # ── FLUJO: reconciliar (#11) ─────────────────────────────────────────────────
 PASOS_RECONCILIAR = [
@@ -1826,6 +1865,25 @@ def auth():
 
 ERR_SOLO_ADMIN = "operación reservada al token de administración (rol del token: whmcs)"
 
+# ── Validación de inputs (#15) ───────────────────────────────────────────────
+ACTOR_LIMPIO_RE = re.compile(r"[^A-Za-z0-9@:. _+-]")
+SERVICEID_RE = re.compile(r"^[0-9]{1,20}$")
+
+def json_body():
+    """Body JSON del request (#15): tolerante al Content-Type (compat con módulo y
+    dashboard) pero JSON malformado o no-objeto → None (el endpoint responde 400
+    JSON limpio en vez del HTML de Flask)."""
+    d = request.get_json(force=True, silent=True)
+    return d if isinstance(d, dict) else None
+
+ERR_BODY = "body inválido: se espera un objeto JSON"
+
+def limpiar_actor(v):
+    """#15: 'actor' es texto informativo (auditoría/jobs del dashboard) que viene del
+    cliente — charset acotado y largo máximo para que no contamine logs/UI."""
+    v = ACTOR_LIMPIO_RE.sub("", (v or "").strip()[:60])
+    return v or "api"
+
 @app.route("/health")
 def health():
     detalle = [{"marca": s["marca"], "slug": s["slug"], "nombre_web": s["nombre_web"],
@@ -1841,12 +1899,14 @@ def crear():
     rol = auth()
     if not rol:
         return jsonify({"error": "unauthorized"}), 401
-    d = request.get_json(force=True)
+    d = json_body()
+    if d is None:
+        return jsonify({"error": ERR_BODY}), 400
     marca = (d.get("marca") or "").strip()
     sabor = (d.get("sabor") or "").strip()
-    cliente = (d.get("cliente") or "").strip()
+    cliente = (d.get("cliente") or "").strip()[:40]
     hostname = (d.get("hostname") or "").strip().lower()
-    actor = (d.get("actor") or "dashboard").strip()
+    actor = limpiar_actor(d.get("actor") or "dashboard")
     modo = (d.get("modo") or MODO).strip()   # pruebas | produccion (default = env)
     if rol == "whmcs":
         # #4: el conector siempre crea CON serviceid (es su única llave a la VM)
@@ -1875,6 +1935,8 @@ def crear():
         cpanel = (SABORES[(marca, sabor)].get("extras", {}).get("cpanel_licencia_cuentas", 0) or 0) > 0
     # BYO key (opcional): el cliente trae su llave PÚBLICA — no generamos ni custodiamos
     pubkey_cliente = (d.get("pubkey_cliente") or "").strip().replace("\r", "").replace("\n", " ").strip()
+    if len(pubkey_cliente) > 4096:  # #15: tope antes de la regex
+        return jsonify({"error": "llave pública demasiado larga"}), 400
     if pubkey_cliente:
         if not PUBKEY_RE.match(pubkey_cliente):
             return jsonify({"error": "llave pública inválida — pega una línea tipo "
@@ -1885,8 +1947,13 @@ def crear():
             return jsonify({"error": str(e)}), 400
     # clave de root opcional (la genera WHMCS) → se aplica en la VM para WHM/consola
     root_password = (d.get("root_password") or "").strip() or None
+    if root_password and len(root_password) > 128:
+        # #15: rechazar (no truncar — una clave truncada en silencio sería otra clave)
+        return jsonify({"error": "root_password demasiado larga (máx 128)"}), 400
     # id del servicio en WHMCS (para trackear la VM sin depender del Username)
     whmcs_serviceid = (str(d.get("whmcs_serviceid")).strip() if d.get("whmcs_serviceid") else None)
+    if whmcs_serviceid and not SERVICEID_RE.match(whmcs_serviceid):
+        return jsonify({"error": "whmcs_serviceid inválido (numérico)"}), 400
     nombre, job = None, None
     try:
         # reserva del nombre + creación del job BAJO EL MISMO GATE: sin esto hay una
@@ -1989,6 +2056,8 @@ def vm_por_servicio_get():
     sid = (request.args.get("serviceid") or "").strip()
     if not sid:
         return jsonify({"error": "falta serviceid"}), 400
+    if not SERVICEID_RE.match(sid):
+        return jsonify({"error": "serviceid inválido (numérico)"}), 400
     with DB_LOCK, db() as c:
         row = c.execute("SELECT nombre,estado,ip,publica,hostname FROM vms WHERE whmcs_serviceid=? "
                         "ORDER BY created_at DESC LIMIT 1", (str(sid),)).fetchone()
@@ -2003,10 +2072,14 @@ def accion():
     rol = auth()
     if not rol:
         return jsonify({"error": "unauthorized"}), 401
-    d = request.get_json(force=True)
+    d = json_body()
+    if d is None:
+        return jsonify({"error": ERR_BODY}), 400
     vm, acc = (d.get("vm") or "").strip(), (d.get("accion") or "").strip()
     serviceid = (str(d.get("serviceid")).strip() if d.get("serviceid") else "")
-    actor = (d.get("actor") or "dashboard").strip()
+    if serviceid and not SERVICEID_RE.match(serviceid):
+        return jsonify({"error": "serviceid inválido (numérico)"}), 400
+    actor = limpiar_actor(d.get("actor") or "dashboard")
     if acc not in ACCIONES:
         return jsonify({"error": "acción desconocida"}), 400
     # #4: el rol whmcs opera SOLO por serviceid — la VM se resuelve en el servidor,
@@ -2053,10 +2126,14 @@ def editar():
     rol = auth()
     if not rol:
         return jsonify({"error": "unauthorized"}), 401
-    d = request.get_json(force=True)
+    d = json_body()
+    if d is None:
+        return jsonify({"error": ERR_BODY}), 400
     vm, sabor = (d.get("vm") or "").strip(), (d.get("sabor") or "").strip()
     serviceid = (str(d.get("serviceid")).strip() if d.get("serviceid") else "")
-    actor = (d.get("actor") or "dashboard").strip()
+    if serviceid and not SERVICEID_RE.match(serviceid):
+        return jsonify({"error": "serviceid inválido (numérico)"}), 400
+    actor = limpiar_actor(d.get("actor") or "dashboard")
     if rol == "whmcs":
         if vm:
             return jsonify({"error": "el token de WHMCS opera solo por serviceid (vm explícito no permitido)"}), 403
@@ -2095,7 +2172,7 @@ def reconciliar():
         return jsonify({"error": "unauthorized"}), 401
     if rol != "admin":
         return jsonify({"error": ERR_SOLO_ADMIN}), 403
-    actor = ((request.get_json(silent=True) or {}).get("actor") or "dashboard").strip()
+    actor = limpiar_actor((request.get_json(force=True, silent=True) or {}).get("actor") or "dashboard")
     job, activo = lanzar_job_exclusivo("reconciliar", "-", actor, PASOS_RECONCILIAR)
     if not job:
         return jsonify({"ok": True, "job_id": activo["id"],
