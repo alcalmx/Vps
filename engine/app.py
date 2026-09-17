@@ -1005,9 +1005,11 @@ def set_root_password(ip, password):
     return True
 
 def flujo_crear(job, marca, sabor_slug, cliente, hostname, instalar_cpanel, modo,
-                pubkey_cliente=None, root_password=None, whmcs_serviceid=None):
+                pubkey_cliente=None, root_password=None, whmcs_serviceid=None,
+                sabor_def=None):
     marca_cfg = MARCAS[marca]
-    sabor = SABORES[(marca, sabor_slug)]
+    # sabor_def viene resuelto desde /crear (catálogo o PERSONALIZADO con specs propias)
+    sabor = sabor_def or SABORES[(marca, sabor_slug)]
     red = red_activa(marca_cfg, modo)
     prefijo = ipaddress.ip_network(red["subred"]).prefixlen
     nombre = job.vm
@@ -1986,18 +1988,39 @@ def crear():
         return jsonify({"error": "modo inválido (pruebas | produccion)"}), 400
     if marca not in MARCAS:
         return jsonify({"error": "marca desconocida: %s" % marca}), 400
-    if (marca, sabor) not in SABORES:
-        return jsonify({"error": "sabor desconocido: %s/%s" % (marca, sabor)}), 400
+    # Sabor PERSONALIZADO (pedido Alcadio 2026-09-17): specs explícitas desde el
+    # dashboard. SOLO rol admin — WHMCS vende el catálogo fijo. Pasa por el MISMO
+    # cupo del host (#8) y chequeo de datastore que cualquier sabor.
+    if sabor == "personalizado":
+        if rol != "admin":
+            return jsonify({"error": "el sabor personalizado es solo para el NOC (rol admin)"}), 403
+        try:
+            vcpu_p = int(d.get("vcpu"))
+            ram_p = int(d.get("ram_mb"))
+            disco_p = int(d.get("disco_gb"))
+        except (TypeError, ValueError):
+            return jsonify({"error": "personalizado requiere vcpu, ram_mb y disco_gb numéricos"}), 400
+        if not (1 <= vcpu_p <= 24 and 1024 <= ram_p <= 65536 and 25 <= disco_p <= 600):
+            return jsonify({"error": "personalizado fuera de rango: vCPU 1-24, RAM 1024-65536 MB, "
+                                     "disco 25-600 GB (además aplica el cupo del host)"}), 400
+        sabor_def = {"marca": marca, "slug": "personalizado",
+                     "nombre_web": "Personalizado %d vCPU / %d GB RAM / %d GB" % (vcpu_p, ram_p // 1024, disco_p),
+                     "vcpu": vcpu_p, "ram_mb": ram_p, "disco_gb": disco_p, "activo": True, "extras": {}}
+    else:
+        if (marca, sabor) not in SABORES:
+            return jsonify({"error": "sabor desconocido: %s/%s" % (marca, sabor)}), 400
+        if not SABORES[(marca, sabor)].get("activo", True):
+            return jsonify({"error": "el sabor %s no está activo" % sabor}), 400
+        sabor_def = SABORES[(marca, sabor)]
     if not re.match(r"^[a-z0-9][a-z0-9.-]{1,60}$", hostname):
         return jsonify({"error": "hostname inválido (minúsculas, dígitos, puntos, guiones)"}), 400
-    if not SABORES[(marca, sabor)].get("activo", True):
-        return jsonify({"error": "el sabor %s no está activo" % sabor}), 400
     # cPanel: lo decide el PLAN (todos los de hosting.cl lo incluyen). El parámetro
-    # explícito instalar_cpanel queda como override para API/pruebas.
+    # explícito instalar_cpanel queda como override para API/pruebas (y es el switch
+    # del personalizado, cuyo default es SIN cPanel).
     if "instalar_cpanel" in d:
         cpanel = bool(d["instalar_cpanel"])
     else:
-        cpanel = (SABORES[(marca, sabor)].get("extras", {}).get("cpanel_licencia_cuentas", 0) or 0) > 0
+        cpanel = (sabor_def.get("extras", {}).get("cpanel_licencia_cuentas", 0) or 0) > 0
     # BYO key (opcional): el cliente trae su llave PÚBLICA — no generamos ni custodiamos
     pubkey_cliente = (d.get("pubkey_cliente") or "").strip().replace("\r", "").replace("\n", " ").strip()
     if len(pubkey_cliente) > 4096:  # #15: tope antes de la regex
@@ -2026,11 +2049,12 @@ def crear():
         # no — un Terminate de WHMCS llegando justo ahí resolvería la VM por serviceid
         # y pasaría el gate, lanzando un eliminar sobre una VM a medio nacer
         with JOB_GATE_LOCK:
-            nombre = reservar_vm(marca, MARCAS[marca], sabor, SABORES[(marca, sabor)],
+            nombre = reservar_vm(marca, MARCAS[marca], sabor, sabor_def,
                                  cliente, hostname, whmcs_serviceid)
             job = Job("crear", nombre, actor, PASOS_CREAR)
         run_job(job, lambda j: flujo_crear(j, marca, sabor, cliente, hostname, cpanel, modo,
-                                           pubkey_cliente or None, root_password, whmcs_serviceid))
+                                           pubkey_cliente or None, root_password, whmcs_serviceid,
+                                           sabor_def=sabor_def))
     except Exception as e:
         # cupo excedido: rechazo LIMPIO con el motivo (no es un error interno)
         if "cupo del host excedido" in str(e):

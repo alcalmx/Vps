@@ -16,6 +16,8 @@
 
 | ⏳ | **Medios #16-#23** — health por rol, matriz de estados, rc en chpasswd, growfs robusto (FS_OK/ERR/SKIP), migraciones estrictas, address-list en reconciliación | `bef0f41` | Revisar especialmente: matriz de estados vs flujos WHMCS reales, script growfs (¿casos de partición no numerada?), y el supuesto "duplicate column name" en versiones futuras de SQLite |
 
+| ⏳ | **VPS personalizado** — sabor 'personalizado' en /crear (solo admin, specs 1-24/1024-65536/25-600, sabor_def a flujo_crear, cupo #8 aplica) + UI en dashboard | (commits Vps + fastnetmon) | Revisar: rangos, interacción con /editar sobre filas personalizadas, y la UI |
+
 ## Cómo re-validar (cuando vuelva la cuota)
 
 1. `/codex:setup --enable-review-gate` (reactivar el gate).
