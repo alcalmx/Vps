@@ -5,6 +5,35 @@
 
 ---
 
+## 2026-09-17 (miércoles) — MEDIOS #16-#23 barridos (queda solo #24 postergado)
+
+Tanda final de la auditoría, **sin Codex (anotada en la deuda)**, tests en 8 suites verdes:
+- **#16**: /health sin token (healthcheck del quadlet) o rol whmcs → `{"ok": true}` pelado; el
+  detalle (modo/marcas/sabores) solo para rol admin (el dashboard lo recibe via proxy con token).
+- **#17**: **matriz de estados por operación** en /accion y /editar: suspender solo desde
+  'activo'; reanudar desde activo/suspendido (activo→noop ok, compat WHMCS Unsuspend); eliminar
+  desde activo/suspendido/creando/eliminando; editar solo activo/suspendido + **sabor destino
+  debe estar activo** (400). Estados no aptos → 409 con mensaje claro.
+- **#18**: `set_root_password` verifica el exit de chpasswd (+flush) — sigue best-effort pero
+  con señal real (aviso en el job si falla, ya no éxito falso).
+- **#19**: script de crecimiento de FS REESCRITO: detecta el dispositivo real de la raíz
+  (findmnt, ya no asume /dev/sda3), tolera growpart NOCHANGE (rc=1) y falla con rc=2, crece
+  según fstype (xfs/ext4) verificando exit codes, y **compara tamaño antes/después** (FS_OK
+  a→b GB en el job); LVM/fs raro → FS_SKIP "crecer a mano". Simulado con binarios fake: 3 caminos.
+- **#20**: CERRADO por los rediseños #12/#13 (las llamadas de red de la purga ya corren FUERA
+  de DB_LOCK; verificado en el código actual).
+- **#21**: migraciones estrictas — solo "duplicate column name" se tolera; BD bloqueada/corrupta
+  ABORTA el arranque (supuesto del mensaje validado contra sqlite real).
+- **#22 (parcial)**: la reconciliación ahora verifica también la **address-list** de cada
+  pública (debe figurar TOMADA: deshabilitada+comentada) → alerta si está liberada por error.
+  El resto del #22 (IDs únicos por regla NAT) queda como DECISIÓN DE NEGOCIO: cambiaría el
+  formato compartido con las altas manuales del NOC — conversar antes de tocar.
+- **#23**: los 2 `except: pass` restantes son best-effort legítimos (el retorno es la señal) —
+  documentados con su justificación en el código.
+- **#24 (bajo) POSTERGADO** explícitamente: gunicorn + jobs durables es cambio de arquitectura
+  (amarrado a multiproceso/locks→SQLite BEGIN IMMEDIATE) — sesión propia, idealmente con Codex.
+- PENDIENTE DEPLOY (contenedor).
+
 ## 2026-09-17 (miércoles) — FIX #14+#15 (ALTOS finales): secretos con expiración + límites de input
 
 Aplicados **sin Codex (sin cuota; anotados en docs/pendiente-revision-codex.md)**. Con estos

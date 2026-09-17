@@ -14,6 +14,8 @@
 
 | ⏳ | **Fix #14+#15** — expirar_secretos_jobs (TTL del Send) + límites de input (64KB/413, json_body 400, serviceid numérico, root_password≤128, actor saneado) | `1c09236` | Revisar especialmente: charset del actor (¿demasiado restrictivo?), interacción del 413 con el módulo PHP, y si conviene redactar más campos del resultado |
 
+| ⏳ | **Medios #16-#23** — health por rol, matriz de estados, rc en chpasswd, growfs robusto (FS_OK/ERR/SKIP), migraciones estrictas, address-list en reconciliación | (commit de este cambio) | Revisar especialmente: matriz de estados vs flujos WHMCS reales, script growfs (¿casos de partición no numerada?), y el supuesto "duplicate column name" en versiones futuras de SQLite |
+
 ## Cómo re-validar (cuando vuelva la cuota)
 
 1. `/codex:setup --enable-review-gate` (reactivar el gate).

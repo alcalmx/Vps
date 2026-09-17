@@ -173,12 +173,16 @@ def init_db():
                           ("whmcs_serviceid", "TEXT")):
             try:
                 c.execute("ALTER TABLE vms ADD COLUMN %s %s" % (col, decl))
-            except sqlite3.OperationalError:
-                pass  # ya existe
+            except sqlite3.OperationalError as e:
+                # #21: SOLO la columna duplicada es esperable; una BD bloqueada o
+                # corrupta debe ABORTAR el arranque, no dejar el esquema a medias
+                if "duplicate column name" not in str(e).lower():
+                    raise
         try:
             c.execute("ALTER TABLE jobs ADD COLUMN resultado TEXT")  # datos de acceso
-        except sqlite3.OperationalError:
-            pass
+        except sqlite3.OperationalError as e:
+            if "duplicate column name" not in str(e).lower():
+                raise
         # jobs 'corriendo' huérfanos de un proceso anterior (reinicio del motor): sus
         # threads ya no existen → error, para que no bloqueen el gate de 1-job-por-VM
         # ni queden girando eternamente en el dashboard
@@ -354,8 +358,8 @@ def ip_libre_pruebas(subred, gateway, job=None):
         for m in re.finditer(r"(\d+\.\d+\.\d+\.\d+)\s.*(?:REACHABLE|STALE|DELAY|PROBE)", arp):
             if ipaddress.ip_address(m.group(1)) in net:
                 ocupadas.add(m.group(1))
-    except Exception:
-        pass
+    except Exception:  # noqa: BLE001 — #23: capa EXTRA de detección (red de pruebas);
+        pass           # si falla, ping + registro siguen protegiendo la elección
     with DB_LOCK, db() as c:
         for row in c.execute("SELECT ip FROM vms WHERE ip IS NOT NULL AND estado != 'papelera'"):
             ocupadas.add(row["ip"])
@@ -927,8 +931,8 @@ def power_state(nombre):
         if vms:
             return vms[0].get("runtime", vms[0].get("Runtime", {})).get("powerState",
                    vms[0].get("Runtime", {}).get("PowerState", "?"))
-    except Exception:
-        pass
+    except Exception:  # noqa: BLE001 — #23: el "?" ES la señal (VM ausente o ESXi
+        pass           # caído); los callers lo tratan explícitamente (saga #7)
     return "?"
 
 def apagar_graceful(job, nombre, espera=60):
@@ -981,8 +985,12 @@ def set_root_password(ip, password):
     try:
         stdin, _out, _err = cli.exec_command("chpasswd")
         stdin.write("root:%s\n" % password)
+        stdin.flush()
         stdin.channel.shutdown_write()
-        _out.channel.recv_exit_status()
+        rc = _out.channel.recv_exit_status()
+        if rc != 0:
+            # #18: señal real — el caller (best-effort) lo convierte en aviso del job
+            raise RuntimeError("chpasswd rc=%d: %s" % (rc, _err.read().decode(errors="replace")[:120]))
     finally:
         cli.close()
     return True
@@ -1520,13 +1528,30 @@ def flujo_editar(job, sabor_slug):
                     cli.set_missing_host_key_policy(paramiko.AutoAddPolicy())
                     cli.connect(vm["ip"], username="root", key_filename=MGMT_PRIVKEY_PATH,
                                 timeout=10, allow_agent=False, look_for_keys=False)
-                    script = ("echo 1 > /sys/class/block/sda/device/rescan; "
-                              "PART=$(lsblk -no NAME,MOUNTPOINT /dev/sda | awk '$2==\"/\"{print $1}' | tr -dc '0-9'); "
-                              "growpart /dev/sda ${PART:-3}; "
-                              "xfs_growfs / 2>/dev/null || resize2fs /dev/sda${PART:-3} 2>/dev/null; "
-                              "df -h / | tail -1")
-                    _, out, _ = cli.exec_command(script, timeout=60)
+                    # #19: script robusto — detecta el DISPOSITIVO REAL de la raíz
+                    # (no asume /dev/sda3), tolera growpart NOCHANGE (rc=1), crece el
+                    # FS según su tipo verificando exit codes, y COMPARA tamaño
+                    # antes/después. rc=3 = caso no automatizable (LVM/fs raro).
+                    script = (
+                        'set -e; '
+                        'SRC=$(findmnt -no SOURCE /); FST=$(findmnt -no FSTYPE /); '
+                        'case "$SRC" in /dev/sd*|/dev/vd*|/dev/nvme*) ;; '
+                        '*) echo "FS_SKIP raiz en $SRC (LVM/otro)"; exit 3;; esac; '
+                        'DISK=$(lsblk -no PKNAME "$SRC" | head -1); '
+                        'PART=$(printf %s "$SRC" | grep -oE "[0-9]+$"); '
+                        'echo 1 > "/sys/class/block/$DISK/device/rescan" 2>/dev/null || true; '
+                        'ANTES=$(df -B1 --output=size / | tail -1 | tr -dc 0-9); '
+                        'set +e; growpart "/dev/$DISK" "$PART"; RC=$?; set -e; '
+                        '[ "$RC" -eq 0 ] || [ "$RC" -eq 1 ] || { echo "FS_ERR growpart rc=$RC"; exit 2; }; '
+                        'case "$FST" in xfs) xfs_growfs / >/dev/null;; '
+                        'ext4|ext3) resize2fs "$SRC" >/dev/null;; '
+                        '*) echo "FS_SKIP fstype $FST"; exit 3;; esac; '
+                        'DESPUES=$(df -B1 --output=size / | tail -1 | tr -dc 0-9); '
+                        'echo "FS_OK $ANTES $DESPUES"')
+                    _, out, errch = cli.exec_command(script, timeout=90)
+                    rc = out.channel.recv_exit_status()
                     salida = out.read().decode().strip().splitlines()
+                    err_txt = errch.read().decode(errors="replace").strip()
                     cli.close()
                     err = None
                     break
@@ -1537,7 +1562,19 @@ def flujo_editar(job, sabor_slug):
                 job.detalle("vmdk crecido; no se pudo expandir el FS por SSH (%s) — se expandirá al próximo arranque"
                             % str(err)[:100])
             else:
-                job.detalle("filesystem expandido: %s" % (salida[-1] if salida else "ok"))
+                ultima = salida[-1] if salida else ""
+                if rc == 0 and ultima.startswith("FS_OK"):
+                    try:
+                        _, antes_b, despues_b = ultima.split()
+                        job.detalle("filesystem expandido y VERIFICADO: %.1f → %.1f GB"
+                                    % (int(antes_b) / 1024**3, int(despues_b) / 1024**3))
+                    except ValueError:
+                        job.detalle("filesystem expandido (FS_OK)")
+                elif rc == 3:
+                    job.detalle("⚠ FS no automatizable (%s) — crecer a MANO en el guest" % (ultima or "?"))
+                else:
+                    job.detalle("⚠ expansión del FS FALLÓ (rc=%d: %s %s) — revisar el guest a mano"
+                                % (rc, ultima[:80], err_txt[:80]))
         else:
             job.detalle("vmdk crecido; el guest expandirá el FS al próximo arranque")
     else:
@@ -1777,6 +1814,21 @@ def flujo_reconciliar(job):
             alertas.append("NAT INCOMPLETO para %s (%s↔%s): srcnat=%s dstnat=%s — reparar a mano"
                            % (f["nombre"], f["ip"], f["publica"],
                               "ok" if tiene_src else "FALTA", "ok" if tiene_dst else "FALTA"))
+        # #22 (parcial — pendiente de Codex en #11): la entrada de address-list de la
+        # pública debe figurar TOMADA (deshabilitada X + comentada) mientras el VPS viva
+        okl, rl = mikrotik('/ip firewall address-list print terse where list=%s and address="%s"'
+                           % (f["pub_lista"], f["publica"]))
+        if not okl:
+            alertas.append("no pude verificar la address-list de %s" % f["nombre"])
+        else:
+            linea = next((l for l in rl.splitlines() if l.strip()), "")
+            if not linea:
+                alertas.append("la pública %s de %s NO está en la address-list %s — revisar"
+                               % (f["publica"], f["nombre"], f["pub_lista"]))
+            elif not re.match(r"^\s*\d+\s+X", linea) or "comment=" not in linea:
+                alertas.append("address-list: la pública %s de %s no figura TOMADA "
+                               "(deshabilitada+comentada) — ¿liberada por error?"
+                               % (f["publica"], f["nombre"]))
     job.detalle("%d VPS con pública verificados: %d NAT completos" % (len(con_publica), nat_ok))
 
     # 3. NetBox vs registro — REPARACIÓN idempotente (netbox_ip_add reutiliza por
@@ -1886,6 +1938,10 @@ def limpiar_actor(v):
 
 @app.route("/health")
 def health():
+    # #16: sin token (healthcheck del quadlet) o rol whmcs → mínimo, sin inventario;
+    # el detalle (modo/marcas/sabores) es solo para el rol admin (dashboard via proxy)
+    if auth() != "admin":
+        return jsonify({"ok": True})
     detalle = [{"marca": s["marca"], "slug": s["slug"], "nombre_web": s["nombre_web"],
                 "vcpu": s["vcpu"], "ram_mb": s["ram_mb"], "disco_gb": s["disco_gb"],
                 "activo": s.get("activo", True)} for s in SABORES.values()]
@@ -2100,12 +2156,17 @@ def accion():
         reg = guardarraices(vm)
     except RuntimeError as e:
         return jsonify({"error": str(e)}), 400
-    # una VM a medio eliminar SOLO acepta reintentar el eliminar (#7; la matriz
-    # completa de estados por operación es el hallazgo #17)
-    if reg.get("estado") == "eliminando" and acc != "eliminar":
-        return jsonify({"error": "la VM %s está a medio eliminar — solo se permite reintentar 'eliminar'" % vm}), 409
+    # #17: matriz de estados aptos por operación (reanudar sobre 'activo' se deja
+    # pasar: el flujo responde ok-noop y el Unsuspend de WHMCS depende de eso)
     if reg.get("estado") == "purgando":
         return jsonify({"error": "la VM %s está en purga definitiva (timer) — no admite acciones" % vm}), 409
+    aptos = {"suspender": ("activo",),
+             "reanudar": ("activo", "suspendido"),
+             "eliminar": ("activo", "suspendido", "creando", "eliminando")}[acc]
+    if reg.get("estado") not in aptos:
+        sugerencia = " — reintenta 'eliminar'" if reg.get("estado") == "eliminando" else ""
+        return jsonify({"error": "la VM %s está '%s': la acción '%s' no aplica%s"
+                        % (vm, reg.get("estado"), acc, sugerencia)}), 409
     # eliminar exige confirmación = nombre de la VM (o el serviceid si se identificó por él)
     if acc == "eliminar":
         conf = d.get("confirmacion")
@@ -2147,10 +2208,13 @@ def editar():
         reg = guardarraices(vm)
     except RuntimeError as e:
         return jsonify({"error": str(e)}), 400
-    if reg.get("estado") in ("eliminando", "purgando"):
-        return jsonify({"error": "la VM %s está a medio eliminar/purgar — no admite edición" % vm}), 409
+    # #17: editar solo sobre VMs operativas, y solo hacia sabores activos del catálogo
+    if reg.get("estado") not in ("activo", "suspendido"):
+        return jsonify({"error": "la VM %s está '%s': no admite cambio de plan" % (vm, reg.get("estado"))}), 409
     if (reg["marca"], sabor) not in SABORES:
         return jsonify({"error": "sabor desconocido para la marca %s" % reg["marca"]}), 400
+    if not SABORES[(reg["marca"], sabor)].get("activo", True):
+        return jsonify({"error": "el sabor %s no está activo" % sabor}), 400
     job, activo = lanzar_job_exclusivo("editar", vm, actor,
               ["Calcular cambio de plan (upgrade/downgrade)", "Aplicar CPU/RAM",
                "Ajustar disco (solo crece, nunca se achica)", "Actualizar registro"])
