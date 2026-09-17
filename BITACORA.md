@@ -28,7 +28,12 @@ purga). Filosofía del #12/#13: **reparar solo con propiedad propia; alertar tod
   pública (no solo el par NAT) — se puede sumar cuando toque el #22 (IDs únicos RouterOS); y
   asumir alertas transitorias si un job arranca justo después del snapshot (sin mutación, solo ruido).
 - Cómo se usa: `curl -X POST -H "X-Auth-Token: $ET" http://127.0.0.1:8224/reconciliar` (o botón
-  futuro en el dashboard); candidato a timer diario junto a la purga. PENDIENTE DEPLOY (contenedor).
+  futuro en el dashboard); candidato a timer diario junto a la purga.
+- **🚀 DESPLEGADO (OK del usuario) y PRIMERA CORRIDA REAL: 0 ALERTAS** — job 2e71397e689b:
+  0 VMs vigentes (todo en papelera, correcto), NAT/NetBox limpios, y **12 llaves referenciadas ·
+  12 en bóveda · 0 huérfanas**: toda la semana de pruebas dejó las 4 fuentes consistentes
+  (validación indirecta de todos los fixes). Nota cosmética anotada: el conteo "en tránsito"
+  incluye al propio job de mantención (vm='-') — pulir cuando se toque ese código.
 
 ## 2026-09-15 (lunes, noche) — Bloque 3: Gerardo VA A EXPLICAR su config (plan B del diff DESCARTADO)
 
