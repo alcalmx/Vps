@@ -22,7 +22,11 @@ Aplicados **sin Codex (sin cuota; anotados en docs/pendiente-revision-codex.md)*
 - Tests: 6 escenarios nuevos (#14 completo con TTL e idempotencia; 400/413 JSON; serviceid en
   3 endpoints; root_password/whmcs_serviceid/pubkey; actor saneado end-to-end hasta la tabla
   jobs) + regresión total de los 6 suites en verde.
-- PENDIENTE DEPLOY (contenedor).
+- **🚀 DESPLEGADO (OK del usuario) y VALIDADO EN VIVO:** 400/413/400 correctos contra el motor
+  real, y el barrido de secretos redactó **12 → 2** jobs con claves de Send vivas (las 2
+  restantes tienen <2 días y expiran solas). La mantención completa re-validada de paso
+  (purga ok + reconciliación ok). **Con esto: 6/6 críticos y 9/9 altos CERRADOS Y EN
+  PRODUCCIÓN.** Quedan 7 medios, 2 bajos, y la deuda de re-validación Codex (4 ítems, ~15-oct).
 
 ## 2026-09-17 (miércoles) — 🚀 DEPLOY #8+#9 con validación en vivo
 

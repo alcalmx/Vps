@@ -12,7 +12,7 @@
 | ⏳ | **vps-mantencion.sh** — versión final (ronda 3 de Codex quedó cortada por cuota; rondas 1-2 aplicadas) | `f036907` | Validado funcionalmente contra mock (feliz EXIT=0, error EXIT=1) y corrida real Succeeded. Revisar: la versión final del refactor poll_job/lanzar |
 | ⏳ | **Fix #9** — pinning de host keys (cliente_ssh_pinned/RejectPolicy, mikrotik estricto, known-hosts.sh, TOFU documentado en VPS) | `6afb991` | Revisar especialmente: manejo de rotación de llaves, formato [host]:puerto, y si el TOFU de VPS amerita endurecerse |
 
-| ⏳ | **Fix #14+#15** — expirar_secretos_jobs (TTL del Send) + límites de input (64KB/413, json_body 400, serviceid numérico, root_password≤128, actor saneado) | (commit de este cambio) | Revisar especialmente: charset del actor (¿demasiado restrictivo?), interacción del 413 con el módulo PHP, y si conviene redactar más campos del resultado |
+| ⏳ | **Fix #14+#15** — expirar_secretos_jobs (TTL del Send) + límites de input (64KB/413, json_body 400, serviceid numérico, root_password≤128, actor saneado) | `1c09236` | Revisar especialmente: charset del actor (¿demasiado restrictivo?), interacción del 413 con el módulo PHP, y si conviene redactar más campos del resultado |
 
 ## Cómo re-validar (cuando vuelva la cuota)
 
