@@ -32,7 +32,12 @@ Tanda final de la auditoría, **sin Codex (anotada en la deuda)**, tests en 8 su
   documentados con su justificación en el código.
 - **#24 (bajo) POSTERGADO** explícitamente: gunicorn + jobs durables es cambio de arquitectura
   (amarrado a multiproceso/locks→SQLite BEGIN IMMEDIATE) — sesión propia, idealmente con Codex.
-- PENDIENTE DEPLOY (contenedor).
+- **🚀 DESPLEGADO (OK del usuario) y VALIDADO EN VIVO**: /health mínimo sin token + detalle con
+  admin; healthcheck del quadlet OK; reconciliación ok con el check de address-list activo.
+  **🏁 AUDITORÍA CODEX: 23/24 hallazgos RESUELTOS Y EN PRODUCCIÓN** (+auto-reinicio, timer de
+  mantención, gap de purga). Pendientes finales: #24 (arquitectura, sesión propia), IDs únicos
+  NAT (#22 resto — decisión de negocio con el NOC), deuda de re-validación Codex (5 ítems,
+  docs/pendiente-revision-codex.md, ~15-oct), llave backup@esxi (Fabián).
 
 ## 2026-09-17 (miércoles) — FIX #14+#15 (ALTOS finales): secretos con expiración + límites de input
 
