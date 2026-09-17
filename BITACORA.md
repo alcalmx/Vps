@@ -5,6 +5,25 @@
 
 ---
 
+## 2026-09-17 (miércoles) — #22 resto CERRADO por decisión: el formato NAT es un CONTRATO (no se toca)
+
+Alcadio recordó el porqué del formato del comentario NAT y se VERIFICÓ contra el código del
+Monitoreo_externo (fastnetmon/Monitoreo_externo/app/server.js): el sync de targets (cada 5 min)
+toma los **srcnat** cuyo comentario empieza con `[NOC]` y parsea **grupo = lo que va tras la
+ÚLTIMA coma** (parseNocComment). Gracias a eso **cada VPS del motor entra SOLO al monitoreo**
+(grupo "VPS hosting.cl") sin intervención manual. Conclusiones:
+- El sufijo/tag propuesto para IDs únicos **habría roto la agrupación** (cada VPS caería en un
+  grupo propio) → DESCARTADO. El dstnat también queda SIN comentario (decisión estética de
+  agrupación de Alcadio). **El formato NAT completo es intocable.**
+- La identificación de reglas propias queda como está: par exacto de IPs (#6) + address-list
+  vigilada (#22 parcial) + reconciliación. Riesgo residual (regla manual duplicada con el mismo
+  par) aceptado y documentado.
+- **La decisión quedó blindada EN EL CÓDIGO**: docstring de crear_nat explica el contrato y
+  referencia el parser del monitoreo, para que nadie lo "mejore" sin saber.
+- Verificado también: el monitor IGNORA los dstnat por completo, y el dashboard no parsea
+  comentarios de NAT en alta/baja (solo address-lists). Con esto la AUDITORÍA queda 24/24
+  resuelta o cerrada por decisión (salvo #24 postergado a sesión de arquitectura).
+
 ## 2026-09-17 (miércoles) — MEDIOS #16-#23 barridos (queda solo #24 postergado)
 
 Tanda final de la auditoría, **sin Codex (anotada en la deuda)**, tests en 8 suites verdes:

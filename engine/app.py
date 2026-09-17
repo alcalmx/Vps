@@ -481,7 +481,16 @@ def crear_nat(privada, publica, lista, hostname, marca_nombre, job=None):
     """NAT 1:1 en RouterData, con el MISMO formato que 'Alta de Servicios' del NOC:
       - srcnat CON comentario '[NOC] <host> <ip-corta>, VPS <marca>'
       - dstnat SIN comentario (queda agrupado bajo el srcnat)
-      - la entrada de la address-list se comenta '<host> - VPS <marca>' y se deshabilita."""
+      - la entrada de la address-list se comenta '<host> - VPS <marca>' y se deshabilita.
+
+    ⚠️ EL FORMATO DEL COMENTARIO ES UN CONTRATO — NO CAMBIARLO (decisión Alcadio
+    2026-09-17, cierre del hallazgo #22): el Monitoreo_externo (fastnetmon/
+    Monitoreo_externo/app/server.js, parseNocComment) sincroniza cada 5 min los
+    srcnat que empiezan con '[NOC]' y toma como GRUPO lo que va tras la ÚLTIMA COMA
+    → cualquier sufijo/tag rompería la agrupación del monitoreo automático de los
+    VPS. El dstnat va SIN comentario a propósito (estética de agrupación en la
+    tabla). La identificación de reglas propias se resuelve por el par exacto de
+    IPs (#6) + address-list vigilada por la reconciliación (#22 parcial)."""
     # re-chequeo anti-carrera: ninguna de las 2 IPs debe tener NAT ya
     ok, out = mikrotik("/ip firewall nat print terse")
     if ok and re.search(r"=(?:%s|%s)\b" % (re.escape(privada), re.escape(publica)), out):
