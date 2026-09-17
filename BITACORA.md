@@ -5,6 +5,17 @@
 
 ---
 
+## 2026-09-17 (miércoles) — 🚀 DEPLOY #8+#9 con validación en vivo
+
+Desplegado el paquete (OK del usuario, cupos por DEFECTO 24 vCPU/64 GB/600 GB — ajustables en
+engine.env con HOST_MAX_* y DATASTORE_RESERVA_GB):
+- known_hosts PINNED generado en noc-monitor (**4 huellas**: ESXi ecdsa+rsa, RouterData y CCR
+  en [host]:2420); script instalado en /usr/local/bin/vps-known-hosts.sh para rotaciones.
+- Contenedor rebuild + restart, health 200.
+- **Validación en vivo:** reconciliación completa OK usando esxi_ssh PINNED (RejectPolicy contra
+  el ESXi real) y consulta estricta al RouterData con la huella (1025 reglas NAT). Anti-MITM
+  operativo en las 3 máquinas de infraestructura fija.
+
 ## 2026-09-17 (miércoles) — FIX #9 (ALTO): pinning de host keys SSH (ESXi + MikroTiks)
 
 Aplicado **sin Codex (sin cuota; anotado en docs/pendiente-revision-codex.md junto al #8 y el
