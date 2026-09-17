@@ -1594,6 +1594,140 @@ def flujo_purgar(job):
            "%d desaparecida/s conservada/s"
            % (len(purgadas), llaves_borradas, len(saltadas), len(ajenas), len(limpiadas), len(deriva_reg)))
 
+# ── FLUJO: reconciliar (#11) ─────────────────────────────────────────────────
+PASOS_RECONCILIAR = [
+    "Inventario ESXi vs registro",
+    "NAT en RouterData vs registro",
+    "NetBox (IPAM) vs registro — con reparación",
+    "Bóveda vs registro",
+    "Resumen y auditoría",
+]
+
+def flujo_reconciliar(job):
+    """#11: detecta desalineaciones entre el registro (SQLite) y el mundo real
+    (ESXi, RouterData, NetBox, bóveda). FILOSOFÍA (heredada de la purga): el motor
+    REPARA solo donde es dueño único y la escritura es idempotente (NetBox, nuestro
+    IPAM); todo lo demás genera ALERTA (job + auditoría) para revisión humana —
+    esta función NUNCA muta el ESXi ni RouterOS ni la bóveda. Las VMs con job
+    corriendo se excluyen (estado en tránsito legítimo, no anomalía)."""
+    alertas, reparadas = [], []
+
+    # 1. ESXi vs registro
+    job.paso()
+    en_esxi = set(listar_wrapper("list-vps"))
+    with DB_LOCK, db() as c:
+        filas = [dict(r) for r in c.execute(
+            "SELECT nombre, estado, ip, publica, pub_lista, hostname, nb_priv_id, nb_pub_id, "
+            "vault_item, updated_at FROM vms WHERE estado NOT IN ('papelera','purgando')")]
+        en_transito = {r["vm"] for r in c.execute(
+            "SELECT DISTINCT vm FROM jobs WHERE estado='corriendo'")}
+    filas = [f for f in filas if f["nombre"] not in en_transito]
+    reg_nombres = {f["nombre"] for f in filas}
+    for nombre in sorted(en_esxi - reg_nombres - en_transito):
+        alertas.append("VM %s existe en el ESXi pero NO está en el registro (deriva) — "
+                       "el motor no la toca; revisar a mano" % nombre)
+    for f in filas:
+        if f["nombre"] in en_esxi:
+            continue
+        if f["estado"] == "eliminando":
+            alertas.append("%s quedó a medio eliminar (sin carpeta en VPS/) — reintentar 'eliminar'" % f["nombre"])
+        else:
+            alertas.append("fila %s (estado %s, upd %s) SIN carpeta en VPS/ — ¿eliminada a mano "
+                           "o creación muerta? revisar a mano" % (f["nombre"], f["estado"], f["updated_at"]))
+    job.detalle("%d VM en ESXi · %d filas vigentes · %d en tránsito (excluidas) · %d alertas hasta aquí"
+                % (len(en_esxi), len(filas), len(en_transito), len(alertas)))
+
+    # 2. NAT vs registro — SOLO consultas (la tabla NAT es compartida con el NOC:
+    #    reparar/crear/quitar reglas es decisión humana, no del reconciliador)
+    job.paso()
+    con_publica = [f for f in filas if f.get("publica") and f.get("ip") and f["nombre"] in en_esxi]
+    nat_ok = 0
+    for f in con_publica:
+        oks, rs = mikrotik('/ip firewall nat print terse where chain=srcnat and src-address="%s" and to-addresses="%s"'
+                           % (f["ip"], f["publica"]))
+        okd, rd = mikrotik('/ip firewall nat print terse where chain=dstnat and dst-address="%s" and to-addresses="%s"'
+                           % (f["publica"], f["ip"]))
+        if not (oks and okd):
+            alertas.append("no pude VERIFICAR el NAT de %s (consulta a RouterData falló)" % f["nombre"])
+            continue
+        tiene_src = any(l.strip() for l in rs.splitlines())
+        tiene_dst = any(l.strip() for l in rd.splitlines())
+        if tiene_src and tiene_dst:
+            nat_ok += 1
+        else:
+            alertas.append("NAT INCOMPLETO para %s (%s↔%s): srcnat=%s dstnat=%s — reparar a mano"
+                           % (f["nombre"], f["ip"], f["publica"],
+                              "ok" if tiene_src else "FALTA", "ok" if tiene_dst else "FALTA"))
+    job.detalle("%d VPS con pública verificados: %d NAT completos" % (len(con_publica), nat_ok))
+
+    # 3. NetBox vs registro — REPARACIÓN idempotente (netbox_ip_add reutiliza por
+    #    address si ya existe; el peor caso re-escribe los mismos datos)
+    job.paso()
+    if NETBOX_URL and NETBOX_TOKEN:
+        for f in con_publica:
+            if f["estado"] not in ("activo", "suspendido"):
+                continue
+            desc = "%s - VPS (%s) · reconciliación vps-engine" % (f["hostname"], f["nombre"])
+            for campo, ip_val, cidr in (("nb_priv_id", f["ip"], "/24"), ("nb_pub_id", f["publica"], "/32")):
+                vigente = False
+                if f.get(campo):
+                    try:
+                        r = netbox_req("GET", "/api/ipam/ip-addresses/%d/" % int(f[campo]))
+                        vigente = (r.get("address", "").split("/")[0] == ip_val)
+                    except Exception:  # noqa: BLE001 — id muerto o NetBox caído: se intenta reparar
+                        vigente = False
+                if vigente:
+                    continue
+                nuevo = netbox_ip_add(ip_val + cidr, f["hostname"] or "", desc)
+                if nuevo:
+                    with DB_LOCK, db() as c:
+                        c.execute("UPDATE vms SET %s=? WHERE nombre=?" % campo, (nuevo, f["nombre"]))
+                    reparadas.append("%s: %s re-registrada en NetBox (id %s)" % (f["nombre"], ip_val, nuevo))
+                else:
+                    alertas.append("no pude reparar en NetBox la IP %s de %s — revisar IPAM" % (ip_val, f["nombre"]))
+        job.detalle("%d reparaciones NetBox" % len(reparadas))
+    else:
+        job.detalle("NetBox no configurado — verificación omitida")
+
+    # 4. Bóveda vs registro — solo lectura (/list de vps-provision)
+    job.paso()
+    if PROVISION_TOKEN:
+        try:
+            r = provision_post("/list", {})
+            items = r if isinstance(r, list) else (r.get("items") or r.get("keys") or r.get("llaves") or [])
+            ids_boveda = {str(it.get("id")) for it in items if it.get("id")}
+            with DB_LOCK, db() as c:
+                refs = {str(x["vault_item"]): x["nombre"] for x in c.execute(
+                    "SELECT nombre, vault_item FROM vms WHERE vault_item IS NOT NULL")}
+            for item_id, nombre in sorted(refs.items()):
+                if item_id not in ids_boveda:
+                    alertas.append("la llave de %s (item %s…) NO está en la bóveda — revisar" % (nombre, item_id[:8]))
+            huerfanas_bov = ids_boveda - set(refs)
+            if huerfanas_bov:
+                nombres = {str(it.get("id")): it.get("name", "?") for it in items}
+                for item_id in sorted(huerfanas_bov):
+                    alertas.append("llave huérfana en la bóveda sin fila en el registro: %s (item %s…) — "
+                                   "el motor NO la borra; revisar" % (nombres.get(item_id, "?"), item_id[:8]))
+            job.detalle("%d llaves referenciadas · %d en bóveda · %d huérfanas"
+                        % (len(refs), len(ids_boveda), len(huerfanas_bov)))
+        except Exception as e:  # noqa: BLE001
+            alertas.append("bóveda no consultable (%s) — verificación omitida" % str(e)[:80])
+            job.detalle("bóveda no consultable")
+    else:
+        job.detalle("PROVISION_TOKEN no configurado — verificación omitida")
+
+    # 5. resumen: alertas al job (visible en dashboard) + auditoría (persistente)
+    job.paso()
+    for a in alertas[:20]:
+        audit("timer", "reconciliar", "-", a, "aviso")
+    if len(alertas) > 20:
+        audit("timer", "reconciliar", "-", "(%d alertas más — ver job %s)" % (len(alertas) - 20, job.id), "aviso")
+    detalle_final = (" · ".join(["⚠ " + a for a in alertas[:6]]) +
+                     (" · (+%d más en auditoría)" % (len(alertas) - 6) if len(alertas) > 6 else "")) if alertas else "sin desalineaciones"
+    job.detalle(detalle_final)
+    job.ok("reconciliación: %d alertas · %d reparaciones NetBox · %d VM revisadas (%d con pública)"
+           % (len(alertas), len(reparadas), len(filas), len(con_publica)))
+
 # ── API ──────────────────────────────────────────────────────────────────────
 def auth():
     """Devuelve el ROL del token: 'admin' (dashboard/NOC, todo permitido) o 'whmcs'
@@ -1863,6 +1997,26 @@ def editar():
         return jsonify({"error": "la VM %s tiene un job en curso (%s, id %s) — reintenta cuando termine"
                         % (vm, activo["tipo"], activo["id"])}), 409
     err = lanzar_o_fallar(job, lambda j: flujo_editar(j, sabor))
+    if err:
+        return err
+    return jsonify({"ok": True, "job_id": job.id})
+
+@app.route("/reconciliar", methods=["POST"])
+def reconciliar():
+    """#11: barrido de consistencia registro ↔ ESXi/RouterData/NetBox/bóveda.
+    Solo admin. Idempotente: si ya hay una mantención corriendo (reconciliar o
+    purga — comparten el gate vm='-'), devuelve ese job en vez de duplicar."""
+    rol = auth()
+    if not rol:
+        return jsonify({"error": "unauthorized"}), 401
+    if rol != "admin":
+        return jsonify({"error": ERR_SOLO_ADMIN}), 403
+    actor = ((request.get_json(silent=True) or {}).get("actor") or "dashboard").strip()
+    job, activo = lanzar_job_exclusivo("reconciliar", "-", actor, PASOS_RECONCILIAR)
+    if not job:
+        return jsonify({"ok": True, "job_id": activo["id"],
+                        "nota": "mantención ya en curso (%s)" % activo["tipo"]})
+    err = lanzar_o_fallar(job, flujo_reconciliar)
     if err:
         return err
     return jsonify({"ok": True, "job_id": job.id})

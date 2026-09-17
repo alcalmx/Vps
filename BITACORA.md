@@ -5,6 +5,31 @@
 
 ---
 
+## 2026-09-17 (miércoles) — FIX #11 (ALTO): reconciliación registro ↔ ESXi/RouterData/NetBox/bóveda
+
+Aplicado y **aprobado por Codex a la primera**. Nuevo `flujo_reconciliar` + endpoint
+**POST /reconciliar** (solo admin; idempotente — comparte el gate de mantención vm='-' con la
+purga). Filosofía del #12/#13: **reparar solo con propiedad propia; alertar todo lo demás**:
+- **ESXi vs registro**: VMs vps-* sin fila → alerta de deriva (el "futuro" de SEGURIDAD.md ya
+  implementado); filas sin carpeta en VPS/ → alerta (mensaje específico si es un 'eliminando'
+  pendiente de reintento). VMs con job corriendo se excluyen (tránsito legítimo).
+- **NAT vs registro**: verificación del par exacto srcnat+dstnat por cada VPS con pública —
+  SOLO consulta; NAT incompleto o RouterData caído → alerta (jamás repara: tabla compartida).
+- **NetBox**: la ÚNICA reparación automática — ids muertos/perdidos se re-registran
+  (netbox_ip_add idempotente por address) y el id vuelve a la fila.
+- **Bóveda**: /list de vps-provision → llaves referenciadas inexistentes y llaves huérfanas sin
+  fila → alertas (el motor no borra nada de la bóveda aquí).
+- Alertas: al job (dashboard) + tabla de auditoría (cap 20 + resumen). GARANTÍA testeada: cero
+  mutaciones a ESXi/RouterOS/bóveda (el test falla ante cualquier intento).
+- Tests: escenario de 7 VMs (deriva, sin carpeta, eliminando, tránsito excluido, NAT incompleto
+  detectado, NetBox reparado y persistido, llave inexistente + huérfana, pruebas sin ruido) +
+  regresión completa (purga/saga/roles) verde.
+- **Pendientes anotados por Codex (menores):** validar también la entrada de address-list de la
+  pública (no solo el par NAT) — se puede sumar cuando toque el #22 (IDs únicos RouterOS); y
+  asumir alertas transitorias si un job arranca justo después del snapshot (sin mutación, solo ruido).
+- Cómo se usa: `curl -X POST -H "X-Auth-Token: $ET" http://127.0.0.1:8224/reconciliar` (o botón
+  futuro en el dashboard); candidato a timer diario junto a la purga. PENDIENTE DEPLOY (contenedor).
+
 ## 2026-09-15 (lunes, noche) — Bloque 3: Gerardo VA A EXPLICAR su config (plan B del diff DESCARTADO)
 
 Decisión del usuario: **Gerardo accedió a explicar** qué le configura a un cPanel antes de
