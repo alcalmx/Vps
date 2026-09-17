@@ -5,6 +5,29 @@
 
 ---
 
+## 2026-09-17 (miércoles, CIERRE) — 📌 ESTADO Y PENDIENTES para retomar
+
+**Estado del motor: endurecido, completo y en producción.** Esta semana (15→17):
+auditoría Codex **24/24 respondida** (22 fixes + #22-resto cerrado por decisión + #24
+postergado), auto-reinicio del primer boot, timer de mantención diaria (04:30, purga +
+reconciliación), **VPS Personalizado** (motor + dashboard v2, validado con prueba real de
+Alcadio: 0016 con 2vCPU/4GB/40GB verificados en el ESXi), y **Multi-host Fase A1** desplegada
+(tabla hosts, bootstrap esxi-245, 16 VMs adoptadas, GET /hosts con scan vivo).
+
+**PENDIENTES (orden sugerido para retomar):**
+1. **Multi-host Fase A2** (próxima sesión grande): flujos host-aware (govc/esxi_ssh por el host
+   de cada VM — hoy govc(host=) existe pero los flujos usan el principal), selección automática
+   al crear, CRUD /hosts. Luego **B** (pestaña Motor en dashboard) y **C** (enrolar-host para
+   el 192.168.200.121). Diseño completo en la entrada "diseño multi-host" del 17-09.
+2. **Sábado 19-09 04:30**: primera purga con borrado DEFINITIVO real (entradas del 11-09) —
+   revisar el job en el dashboard (debería purgar prueba7/prueba8 + llaves de bóveda).
+3. **~15-oct: vuelve la cuota de Codex** → reactivar gate (/codex:setup --enable-review-gate)
+   y pasar la DEUDA (7 ítems en docs/pendiente-revision-codex.md).
+4. **Negocio**: explicación de Gerardo (Bloque 3 post-cPanel), correo de bienvenida (SendEmail),
+   licencia cPanel #5 (¿Manage2?), checklist go-live 335/336/338.
+5. **Conversar**: llave backup@esxi sin restricciones (Fabián) · #24 gunicorn/jobs durables
+   (sesión de arquitectura) · si el host tendrá más RAM para clientes (límites HOST_MAX_*).
+
 ## 2026-09-17 (miércoles) — 🏗️ MULTI-HOST Fase A1: fundación (tabla hosts + scan + /hosts)
 
 Primera fase del frente multi-host (plan de 4 fases en la entrada anterior). **Cero cambio de
