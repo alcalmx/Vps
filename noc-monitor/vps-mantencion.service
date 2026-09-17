@@ -1,0 +1,9 @@
+[Unit]
+Description=Mantención diaria vps-engine: purga de papelera + reconciliación
+Wants=network-online.target
+Requires=vps-engine.service
+After=network-online.target vps-engine.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/vps-mantencion.sh

@@ -79,6 +79,7 @@ de VPS y al MikroTik.
 | Datos (registro) | `/opt/vps-engine/data/registry.db` | SQLite · VMs, jobs, auditoría · volumen `:/data` |
 | Llaves SSH | `/opt/vps-engine/keys/` | `vps_engine_esxi` (wrapper) · `vps_engine_mgmt` (gestión) · volumen `:/keys` ro |
 | API | `127.0.0.1:8224` | header `X-Auth-Token` |
+| Mantención diaria | `vps-mantencion.timer` (04:30) → purga + reconciliación | unidades en `/etc/systemd/system/`, script en `/usr/local/bin/` (repo: `noc-monitor/`) |
 
 **Secretos — nunca en el repo.** Solo en `engine.env` (600, root) y las llaves privadas
 en `keys/` (600). El repo solo lleva código, sabores y llaves públicas.

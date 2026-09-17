@@ -5,6 +5,23 @@
 
 ---
 
+## 2026-09-17 (miércoles) — ⏰ Timer de mantención diaria instalado (gap encontrado: la purga nunca corría sola)
+
+Pregunta del usuario sobre "la purga real" destapó que **la purga diaria del diseño nunca se
+automatizó** (sin timer/cron/scheduler — solo corría a mano). Instalado en noc-monitor (con OK):
+- **vps-mantencion.timer** (04:30 America/Santiago, Persistent=true) → **vps-mantencion.service**
+  (oneshot, Requires vps-engine) → **/usr/local/bin/vps-mantencion.sh**: POST /purgar-papelera →
+  poll hasta estado terminal → POST /reconciliar → poll; exit 0 SOLO si ambos jobs 'ok' (falla
+  visible como 'failed' en systemd). Archivos versionados en **noc-monitor/** del repo.
+- Codex revisó 2 rondas (abort sin job_id/terminal, capturas -sf, sed del token, Requires,
+  propagación del error al exit code — todo aplicado); validado contra mock HTTP (feliz EXIT=0,
+  job error EXIT=1) y **corrida real: Succeeded** (purga ok + reconciliación ok).
+- ⚠️ **Codex AGOTÓ SU CUOTA** en la ronda 3 (formalidad; se renueva ~15-oct). Regla del usuario
+  aplicada: se sigue sin Codex mencionándolo. **Review gate DESACTIVADO** mientras tanto
+  (reactivar con /codex:setup --enable-review-gate cuando vuelva la cuota).
+- **Primera purga con borrado definitivo: sábado 19-09 04:30** (las entradas del 11-09 ~19:00
+  cumplen 7 días exactos recién en la noche del 18) — revisar ese job en el dashboard.
+
 ## 2026-09-17 (miércoles) — FIX #11 (ALTO): reconciliación registro ↔ ESXi/RouterData/NetBox/bóveda
 
 Aplicado y **aprobado por Codex a la primera**. Nuevo `flujo_reconciliar` + endpoint

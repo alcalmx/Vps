@@ -1,0 +1,10 @@
+[Unit]
+Description=Timer diario de mantención vps-engine (madrugada)
+
+[Timer]
+OnCalendar=*-*-* 04:30:00
+Persistent=true
+Unit=vps-mantencion.service
+
+[Install]
+WantedBy=timers.target
