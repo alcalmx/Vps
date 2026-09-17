@@ -170,7 +170,7 @@ def init_db():
         for col, decl in (("publica", "TEXT"), ("pub_lista", "TEXT"),
                           ("vault_item", "TEXT"), ("send_url", "TEXT"), ("send_id", "TEXT"),
                           ("byo_pubkey_fp", "TEXT"), ("nb_priv_id", "TEXT"), ("nb_pub_id", "TEXT"),
-                          ("whmcs_serviceid", "TEXT")):
+                          ("whmcs_serviceid", "TEXT"), ("host", "TEXT")):
             try:
                 c.execute("ALTER TABLE vms ADD COLUMN %s %s" % (col, decl))
             except sqlite3.OperationalError as e:
@@ -188,6 +188,41 @@ def init_db():
         # ni queden girando eternamente en el dashboard
         c.execute("UPDATE jobs SET estado='error', error='interrumpido por reinicio del motor', "
                   "updated_at=datetime('now','localtime') WHERE estado='corriendo'")
+        # ── MULTI-HOST Fase A1 (2026-09-17) ──────────────────────────────────
+        # Registro de hosts VMware donde el motor puede actuar. Las CREDENCIALES
+        # nunca van aquí: api/ssh referencian rutas y NOMBRES de env vars del
+        # engine.env (pass_env). Los límites NULL heredan los HOST_MAX_* globales.
+        c.executescript("""
+        CREATE TABLE IF NOT EXISTS hosts(
+          id TEXT PRIMARY KEY,               -- slug: esxi-245
+          ip TEXT UNIQUE NOT NULL,
+          api_url TEXT,                      -- GOVC_URL de este host
+          govc_user TEXT,                    -- usuario API (svc-vps del host)
+          pass_env TEXT,                     -- NOMBRE de la env var con su password
+          datastore TEXT,
+          ssh_port INTEGER DEFAULT 22,
+          ssh_key TEXT,                      -- llave del wrapper de ESTE host
+          estado TEXT DEFAULT 'activo',      -- activo | pausado
+          prioridad INTEGER DEFAULT 100,     -- menor = preferido
+          max_vcpu INTEGER, max_ram_mb INTEGER, max_disco_gb INTEGER,
+          notas TEXT,
+          created_at TEXT DEFAULT (datetime('now','localtime')),
+          updated_at TEXT DEFAULT (datetime('now','localtime')));
+        """)
+        # bootstrap: el host actual de las env se auto-registra como principal y
+        # ADOPTA las VMs existentes (columna vms.host se agrega en la migración)
+        if not c.execute("SELECT 1 FROM hosts LIMIT 1").fetchone() and os.environ.get("ESXI_HOST"):
+            hid = "esxi-" + os.environ["ESXI_HOST"].split(".")[-1]
+            c.execute("INSERT INTO hosts(id, ip, api_url, govc_user, pass_env, datastore, "
+                      "ssh_port, ssh_key, notas) VALUES(?,?,?,?,?,?,?,?,?)",
+                      (hid, os.environ["ESXI_HOST"], os.environ.get("GOVC_URL", ""),
+                       os.environ.get("GOVC_USERNAME", ""), "GOVC_PASSWORD",
+                       os.environ.get("GOVC_DATASTORE", "DiscoA37245"),
+                       int(os.environ.get("ESXI_SSH_PORT", "22")),
+                       os.environ.get("ESXI_SSH_KEY", "/keys/vps_engine_esxi"),
+                       "host principal (bootstrap desde engine.env)"))
+        c.execute("UPDATE vms SET host=(SELECT id FROM hosts ORDER BY prioridad, created_at LIMIT 1) "
+                  "WHERE host IS NULL")
 
 def audit(actor, accion, vm, detalle, resultado):
     with DB_LOCK, db() as c:
@@ -298,11 +333,73 @@ def lanzar_o_fallar(job, fn):
         return jsonify({"error": "no se pudo lanzar el job (ver registro de operaciones)"}), 500
 
 # ── Acceso al ESXi: govc (API, usuario svc-vps) y SSH restringido (wrapper) ──
-def govc(*args, timeout=120):
-    r = subprocess.run([GOVC, *args], capture_output=True, text=True, timeout=timeout)
+def govc(*args, timeout=120, host=None):
+    """govc contra el host por defecto (env del contenedor) o contra un host del
+    registro multi-host (dict de la tabla hosts): se inyectan SUS credenciales al
+    subprocess (GOVC_URL/USERNAME/PASSWORD desde la env var que nombra pass_env)."""
+    env = None
+    if host:
+        env = dict(os.environ)
+        env["GOVC_URL"] = host.get("api_url") or env.get("GOVC_URL", "")
+        env["GOVC_USERNAME"] = host.get("govc_user") or env.get("GOVC_USERNAME", "")
+        env["GOVC_PASSWORD"] = os.environ.get(host.get("pass_env") or "GOVC_PASSWORD", "")
+        env["GOVC_DATASTORE"] = host.get("datastore") or env.get("GOVC_DATASTORE", "")
+        env["GOVC_INSECURE"] = env.get("GOVC_INSECURE", "1")
+    r = subprocess.run([GOVC, *args], capture_output=True, text=True, timeout=timeout, env=env)
     if r.returncode:
         raise RuntimeError("govc %s: %s" % (args[0], (r.stderr or r.stdout).strip()[:300]))
     return r.stdout.strip()
+
+# ── Multi-host (Fase A1): registro de hosts y scan de recursos ───────────────
+def host_get(hid):
+    with DB_LOCK, db() as c:
+        r = c.execute("SELECT * FROM hosts WHERE id=?", (hid,)).fetchone()
+    return dict(r) if r else None
+
+def hosts_lista():
+    with DB_LOCK, db() as c:
+        return [dict(r) for r in c.execute("SELECT * FROM hosts ORDER BY prioridad, created_at")]
+
+def host_recursos(h):
+    """Scan EN VIVO de un host: datastore libre, CPU/RAM del fierro y lo comprometido
+    por el motor en ese host. Cualquier falla → alcanzable=False (no lanza)."""
+    out = {"alcanzable": False, "datastore_libre_gb": None, "cpu_cores": None,
+           "mem_total_gb": None, "mem_uso_gb": None}
+    try:
+        raw = govc("datastore.info", "-json", h["datastore"], host=h)
+        data = json.loads(raw)
+        for ds in (data.get("datastores") or data.get("Datastores") or []):
+            s = ds.get("summary") or ds.get("Summary") or {}
+            if (s.get("name") or s.get("Name")) == h["datastore"]:
+                libre = s.get("freeSpace", s.get("FreeSpace"))
+                if libre is not None:
+                    out["datastore_libre_gb"] = int(libre) // (1024 ** 3)
+        raw = govc("host.info", "-json", host=h)
+        data = json.loads(raw)
+        hs = (data.get("hostSystems") or data.get("HostSystems") or [{}])[0]
+        summ = hs.get("summary") or hs.get("Summary") or {}
+        hw = summ.get("hardware") or summ.get("Hardware") or {}
+        qs = summ.get("quickStats") or summ.get("QuickStats") or {}
+        if hw.get("numCpuCores") or hw.get("NumCpuCores"):
+            out["cpu_cores"] = hw.get("numCpuCores", hw.get("NumCpuCores"))
+        mem = hw.get("memorySize", hw.get("MemorySize"))
+        if mem:
+            out["mem_total_gb"] = int(mem) // (1024 ** 3)
+        uso = qs.get("overallMemoryUsage", qs.get("OverallMemoryUsage"))
+        if uso:
+            out["mem_uso_gb"] = int(uso) // 1024   # viene en MB
+        out["alcanzable"] = out["datastore_libre_gb"] is not None
+    except Exception as e:  # noqa: BLE001 — el scan informa, no rompe
+        out["error"] = str(e)[:120]
+    with DB_LOCK, db() as c:
+        r = c.execute("SELECT COALESCE(SUM(vcpu),0) v, COALESCE(SUM(ram_mb),0) m, "
+                      "COALESCE(SUM(disco_gb),0) d, COUNT(*) n FROM vms "
+                      "WHERE host=? AND estado NOT IN ('papelera','purgando')", (h["id"],)).fetchone()
+    out["comprometido"] = {"vcpu": r["v"], "ram_mb": r["m"], "disco_gb": r["d"], "vms": r["n"]}
+    out["limites"] = {"vcpu": h.get("max_vcpu") or HOST_MAX_VCPU or None,
+                      "ram_mb": h.get("max_ram_mb") or HOST_MAX_RAM_MB or None,
+                      "disco_gb": h.get("max_disco_gb") or HOST_MAX_DISCO_GB or None}
+    return out
 
 def cliente_ssh_pinned():
     """Cliente paramiko con host key PINNED (#9): carga KNOWN_HOSTS_PATH y RECHAZA
@@ -2258,6 +2355,22 @@ def editar():
     if err:
         return err
     return jsonify({"ok": True, "job_id": job.id})
+
+@app.route("/hosts")
+def hosts_get():
+    """Multi-host A1: lista de hosts VMware del motor con recursos EN VIVO (scan por
+    host: datastore, CPU/RAM del fierro, comprometido y límites). Solo admin."""
+    rol = auth()
+    if not rol:
+        return jsonify({"error": "unauthorized"}), 401
+    if rol != "admin":
+        return jsonify({"error": ERR_SOLO_ADMIN}), 403
+    salida = []
+    for h in hosts_lista():
+        d = {k: h[k] for k in ("id", "ip", "datastore", "estado", "prioridad", "notas", "created_at")}
+        d["recursos"] = host_recursos(h)
+        salida.append(d)
+    return jsonify({"hosts": salida})
 
 @app.route("/reconciliar", methods=["POST"])
 def reconciliar():

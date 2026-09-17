@@ -5,6 +5,28 @@
 
 ---
 
+## 2026-09-17 (miércoles) — 🏗️ MULTI-HOST Fase A1: fundación (tabla hosts + scan + /hosts)
+
+Primera fase del frente multi-host (plan de 4 fases en la entrada anterior). **Cero cambio de
+comportamiento**: los flujos siguen operando el host principal; esto es la FUNDACIÓN.
+- **Tabla `hosts`** en el registro: id, ip, api_url, govc_user, **pass_env** (NOMBRE de la env
+  var con la password — los secretos siguen SOLO en engine.env), datastore, ssh_port/ssh_key
+  (llave por host), estado activo|pausado, prioridad, límites max_* por host (NULL = hereda
+  los HOST_MAX_* globales). + columna **vms.host**.
+- **Bootstrap automático**: al arrancar, si la tabla está vacía, el host de las env actuales se
+  auto-registra como `esxi-245` (principal) y las VMs existentes lo ADOPTAN (host IS NULL).
+- **govc(host=...)**: inyecta las credenciales DEL host al subprocess (URL/usuario/password/
+  datastore) — la base para operar múltiples ESXi con credenciales independientes.
+- **host_recursos()** (scan en vivo por host): datastore libre, CPU cores y RAM total/uso del
+  fierro (govc host.info), lo COMPROMETIDO por el motor en ese host (SUM per-host) y los
+  límites efectivos. Host caído → alcanzable=false con el error, sin romper nada.
+- **GET /hosts** (solo admin): la API que alimentará la pestaña "Motor" del dashboard.
+- Tests: 5 escenarios (bootstrap, adopción, credenciales por host inyectadas, /hosts con scan
+  simulado y comprometido por host, host caído) + regresión completa de las 9 suites.
+- Sin Codex (en la deuda). **Siguiente: Fase A2** — flujos host-aware (govc/esxi_ssh resuelven
+  el host de cada VM), selección automática al crear, CRUD de hosts. Luego B (pestaña) y C
+  (script enrolar-host para el 192.168.200.121).
+
 ## 2026-09-17 (miércoles) — ✨ VPS PERSONALIZADO (motor + dashboard) desplegado · diseño multi-host anotado
 
 **Feature pedida por Alcadio**: opción "Personalizado" en el tab Crear del dashboard.

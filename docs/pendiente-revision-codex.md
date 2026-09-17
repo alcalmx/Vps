@@ -18,6 +18,8 @@
 
 | ⏳ | **VPS personalizado** — sabor 'personalizado' en /crear (solo admin, specs 1-24/1024-65536/25-600, sabor_def a flujo_crear, cupo #8 aplica) + UI en dashboard | (commits Vps + fastnetmon) | Revisar: rangos, interacción con /editar sobre filas personalizadas, y la UI |
 
+| ⏳ | **Multi-host A1** — tabla hosts + bootstrap/adopción + govc(host=) con credenciales inyectadas + host_recursos + GET /hosts | (commit A1) | Revisar: modelo de credenciales pass_env, parser de host.info entre versiones govc, y el plan A2 (flujos host-aware) ANTES de implementarlo |
+
 ## Cómo re-validar (cuando vuelva la cuota)
 
 1. `/codex:setup --enable-review-gate` (reactivar el gate).
