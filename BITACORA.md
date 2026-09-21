@@ -28,8 +28,10 @@ el motor por capacidad** (eso se automatizará cuando él quiera):
   pausar/activar/prioridad/límites/notas (pausado = sin creaciones nuevas, gestión normal);
   DELETE solo sin VMs (papelera incluida).
 - Compat single-host TOTAL: con solo esxi-245 activo todo se comporta idéntico a ayer.
-- PENDIENTE DEPLOY. Quedan: **Fase B** (pestaña Motor en dashboard) y **Fase C** (enrolar-host
-  para el 192.168.200.121).
+- **🚀 DESPLEGADO Y VALIDADO EN VIVO**: /hosts con scan ok; host desconocido → 400; con el
+  único host PAUSADO, /crear → 409 "no hay hosts ACTIVOS" (control del usuario operando);
+  reactivado y mantención completa por-host ok (purga + reconciliación). Quedan: **Fase B**
+  (pestaña Motor en dashboard) y **Fase C** (enrolar-host para el 192.168.200.121).
 
 ## 2026-09-21 (lunes) — ✅ PRIMERA PURGA REAL VALIDADA: falla transitoria + convergencia automática
 
