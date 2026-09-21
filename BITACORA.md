@@ -5,6 +5,32 @@
 
 ---
 
+## 2026-09-21 (lunes) — 🏗️ MULTI-HOST Fase A2: flujos host-aware + selección del USUARIO + CRUD
+
+La fase grande del multi-host, **sin Codex (en la deuda)**, 10 escenarios nuevos + 11 suites de
+regresión verdes. DECISIÓN DE DISEÑO DE ALCADIO: **la selección de host la controla él, nunca
+el motor por capacidad** (eso se automatizará cuando él quiera):
+- **Selección en /crear**: (a) admin/dashboard puede FORZAR host con el param `host` (403 para
+  whmcs, 400 desconocido, 409 pausado); (b) sin param → el host ACTIVO de mejor PRIORIDAD (campo
+  que administra el usuario). Si el elegido no tiene cupo/espacio → FALLA con motivo (sin failover).
+- **Flujos host-aware**: crear/eliminar/editar/purga/reconciliación/vms resuelven el host de cada
+  VM (vms.host) y le hablan con SUS credenciales/datastore/llave: govc(host=), esxi_ssh(host=),
+  listar_wrapper(host=), power_state/apagar_graceful(host=), datastore_libre_gb(host). Probado:
+  un eliminar de VM en esxi-121 opera SOLO esxi-121 en todas las llamadas.
+- **Purga y reconciliación POR HOST**: barren cada host del registro (pausados incluidos — sus
+  VMs se siguen gestionando); un host CAÍDO → alerta + sus filas se saltan ese día (los demás
+  purgan igual; SEMÁNTICA NUEVA: ya no aborta el job completo). La reconciliación de huérfanas
+  exige listado fresco DEL host de la fila (evidencia real por host).
+- **Cupo PER-HOST**: límites max_* propios (NULL hereda HOST_MAX_* globales), atómico con la
+  reserva; mensajes con el nombre del host.
+- **CRUD /hosts** (solo admin): POST enrola CON VALIDACIÓN EN VIVO (govc about + wrapper pong +
+  datastore legible — exige host ya preparado: svc-vps/llave/wrapper/huella, Fase C); PATCH
+  pausar/activar/prioridad/límites/notas (pausado = sin creaciones nuevas, gestión normal);
+  DELETE solo sin VMs (papelera incluida).
+- Compat single-host TOTAL: con solo esxi-245 activo todo se comporta idéntico a ayer.
+- PENDIENTE DEPLOY. Quedan: **Fase B** (pestaña Motor en dashboard) y **Fase C** (enrolar-host
+  para el 192.168.200.121).
+
 ## 2026-09-21 (lunes) — ✅ PRIMERA PURGA REAL VALIDADA: falla transitoria + convergencia automática
 
 El ciclo de purga definitiva se estrenó el fin de semana EXACTAMENTE como fue diseñado:

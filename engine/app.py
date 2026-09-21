@@ -356,6 +356,25 @@ def host_get(hid):
         r = c.execute("SELECT * FROM hosts WHERE id=?", (hid,)).fetchone()
     return dict(r) if r else None
 
+def host_principal():
+    """El host ACTIVO de mejor prioridad (menor número) — lo administra el usuario
+    desde la gestión (A2: la selección NO es automática por capacidad; si el
+    preferido no da, la creación falla con mensaje claro y el humano decide)."""
+    with DB_LOCK, db() as c:
+        r = c.execute("SELECT * FROM hosts WHERE estado='activo' "
+                      "ORDER BY prioridad, created_at LIMIT 1").fetchone()
+    if not r:
+        raise RuntimeError("no hay hosts ACTIVOS en el registro — revisar GET /hosts")
+    return dict(r)
+
+def host_de_vm(nombre):
+    """Host donde VIVE una VM (columna vms.host); fallback al principal para filas
+    antiguas sin host (no debería ocurrir tras la adopción del bootstrap A1)."""
+    with DB_LOCK, db() as c:
+        r = c.execute("SELECT host FROM vms WHERE nombre=?", (nombre,)).fetchone()
+    h = host_get(r["host"]) if (r and r["host"]) else None
+    return h or host_principal()
+
 def hosts_lista():
     with DB_LOCK, db() as c:
         return [dict(r) for r in c.execute("SELECT * FROM hosts ORDER BY prioridad, created_at")]
@@ -413,16 +432,17 @@ def cliente_ssh_pinned():
     cli.set_missing_host_key_policy(paramiko.RejectPolicy())
     return cli
 
-def esxi_ssh(comando, timeout=300):
-    """Ejecuta un subcomando del wrapper restringido. El authorized_keys fuerza
-    command= → lo que enviamos llega como SSH_ORIGINAL_COMMAND al wrapper.
+def esxi_ssh(comando, timeout=300, host=None):
+    """Ejecuta un subcomando del wrapper restringido EN EL HOST indicado (dict de la
+    tabla hosts; None = host principal). El authorized_keys fuerza command= → lo que
+    enviamos llega como SSH_ORIGINAL_COMMAND al wrapper de ESE host, con SU llave.
     La sesión autentica como root (vmkfstools/mv del datastore lo exigen en ESXi)
     pero la llave NO da shell: command= + no-pty + no-forwarding (capa 4 de
-    SEGURIDAD.md, verificado en el host 2026-09-15) — el confinamiento es el
-    forced-command, no la identidad. Host key PINNED (#9)."""
+    SEGURIDAD.md) — el confinamiento es el forced-command. Host key PINNED (#9)."""
+    h = host or host_principal()
     cli = cliente_ssh_pinned()
-    cli.connect(ESXI_HOST, port=ESXI_SSH_PORT, username="root",
-                key_filename=ESXI_SSH_KEY, timeout=20,
+    cli.connect(h["ip"], port=int(h.get("ssh_port") or 22), username="root",
+                key_filename=h.get("ssh_key") or ESXI_SSH_KEY, timeout=20,
                 allow_agent=False, look_for_keys=False)
     try:
         _, out, err = cli.exec_command(comando, timeout=timeout)
@@ -972,67 +992,80 @@ def siguiente_nombre(marca_cfg, cliente):
     base = "%s-%04d" % (pref, nxt)
     return ("%s-%s" % (base, slug)) if slug else base
 
-def cupo_comprometido():
-    """Recursos ya comprometidos con clientes: filas vigentes del registro (todo lo
-    que no está en papelera/purgando — un 'eliminando' aún ocupa su disco)."""
+def cupo_comprometido(host_id=None):
+    """Recursos ya comprometidos con clientes EN UN HOST (o global si None): filas
+    vigentes del registro (papelera/purgando no cuentan; 'eliminando' aún ocupa)."""
+    q = "SELECT COALESCE(SUM(vcpu),0) v, COALESCE(SUM(ram_mb),0) m, " \
+        "COALESCE(SUM(disco_gb),0) d FROM vms WHERE estado NOT IN ('papelera','purgando')"
+    args = ()
+    if host_id:
+        q += " AND host=?"
+        args = (host_id,)
     with DB_LOCK, db() as c:
-        r = c.execute("SELECT COALESCE(SUM(vcpu),0) v, COALESCE(SUM(ram_mb),0) m, "
-                      "COALESCE(SUM(disco_gb),0) d FROM vms "
-                      "WHERE estado NOT IN ('papelera','purgando')").fetchone()
+        r = c.execute(q, args).fetchone()
     return r["v"], r["m"], r["d"]
 
-def validar_cupo(d_vcpu, d_ram_mb, d_disco_gb):
-    """#8: lanza RuntimeError si (comprometido + delta) excede el cupo del host.
-    Límite en 0 = sin límite. Los deltas negativos (downgrades) siempre pasan."""
-    v, m, d = cupo_comprometido()
+def validar_cupo(d_vcpu, d_ram_mb, d_disco_gb, host=None):
+    """#8 (per-host desde A2): lanza RuntimeError si (comprometido del host + delta)
+    excede sus límites (columnas max_* del host; NULL hereda los HOST_MAX_* globales;
+    0 = sin límite). Deltas negativos (downgrades) siempre pasan."""
+    hid = (host or {}).get("id")
+    lim_v = (host or {}).get("max_vcpu") if (host or {}).get("max_vcpu") is not None else HOST_MAX_VCPU
+    lim_m = (host or {}).get("max_ram_mb") if (host or {}).get("max_ram_mb") is not None else HOST_MAX_RAM_MB
+    lim_d = (host or {}).get("max_disco_gb") if (host or {}).get("max_disco_gb") is not None else HOST_MAX_DISCO_GB
+    v, m, d = cupo_comprometido(hid)
+    etiqueta = ("host %s" % hid) if hid else "host"
     problemas = []
-    if HOST_MAX_VCPU and v + d_vcpu > HOST_MAX_VCPU:
-        problemas.append("vCPU %d+%d > máx %d" % (v, d_vcpu, HOST_MAX_VCPU))
-    if HOST_MAX_RAM_MB and m + d_ram_mb > HOST_MAX_RAM_MB:
-        problemas.append("RAM %d+%d MB > máx %d" % (m, d_ram_mb, HOST_MAX_RAM_MB))
-    if HOST_MAX_DISCO_GB and d + d_disco_gb > HOST_MAX_DISCO_GB:
-        problemas.append("disco %d+%d GB > máx %d" % (d, d_disco_gb, HOST_MAX_DISCO_GB))
+    if lim_v and v + d_vcpu > lim_v:
+        problemas.append("vCPU %d+%d > máx %d" % (v, d_vcpu, lim_v))
+    if lim_m and m + d_ram_mb > lim_m:
+        problemas.append("RAM %d+%d MB > máx %d" % (m, d_ram_mb, lim_m))
+    if lim_d and d + d_disco_gb > lim_d:
+        problemas.append("disco %d+%d GB > máx %d" % (d, d_disco_gb, lim_d))
     if problemas:
-        raise RuntimeError("cupo del host excedido: " + "; ".join(problemas) +
-                           " — liberar recursos o ajustar HOST_MAX_* en engine.env")
+        raise RuntimeError("cupo del %s excedido: " % etiqueta + "; ".join(problemas) +
+                           " — liberar recursos, ajustar límites del host o elegir otro host")
 
-def datastore_libre_gb():
-    """GB libres del datastore según la API (bytes exactos, no df -h). Lanza si no
+def datastore_libre_gb(host=None):
+    """GB libres del datastore DEL HOST según la API (bytes exactos). Lanza si no
     puede obtenerse — la creación debe abortar antes de clonar (fail-closed)."""
-    out = govc("datastore.info", "-json", DATASTORE)
+    ds_nombre = (host or {}).get("datastore") or DATASTORE
+    out = govc("datastore.info", "-json", ds_nombre, host=host)
     data = json.loads(out)
     for ds in (data.get("datastores") or data.get("Datastores") or []):
         s = ds.get("summary") or ds.get("Summary") or {}
-        if (s.get("name") or s.get("Name")) == DATASTORE:
+        if (s.get("name") or s.get("Name")) == ds_nombre:
             libre = s.get("freeSpace", s.get("FreeSpace"))
             if libre is not None:
                 return int(libre) // (1024 ** 3)
-    raise RuntimeError("no pude obtener el espacio libre del datastore %s" % DATASTORE)
+    raise RuntimeError("no pude obtener el espacio libre del datastore %s" % ds_nombre)
 
-def reservar_vm(marca, marca_cfg, sabor_slug, sabor, cliente, hostname, whmcs_serviceid=None):
-    """Elige el siguiente nombre y lo RESERVA (INSERT estado='creando') en una sola
-    sección crítica. Antes el nombre se calculaba en el endpoint y se insertaba
-    después en el hilo del job: dos creaciones simultáneas podían calcular el mismo
-    número. Con la reserva atómica, la segunda ve la fila de la primera y toma el
-    número siguiente. (nombre es PRIMARY KEY: tercera capa por si acaso.)"""
+def reservar_vm(marca, marca_cfg, sabor_slug, sabor, cliente, hostname, whmcs_serviceid=None,
+                host=None):
+    """Elige el siguiente nombre y lo RESERVA (INSERT estado='creando', CON su host)
+    en una sola sección crítica. Antes el nombre se calculaba en el endpoint y se
+    insertaba después en el hilo del job: dos creaciones simultáneas podían calcular
+    el mismo número. Con la reserva atómica, la segunda ve la fila de la primera y
+    toma el número siguiente. (nombre es PRIMARY KEY: tercera capa por si acaso.)"""
     with NOMBRE_LOCK:
-        # #8: cupo verificado ATÓMICO con la reserva — la fila insertada ya cuenta
-        # como comprometida para la siguiente reserva concurrente (sin sobreventa)
-        validar_cupo(sabor["vcpu"], sabor["ram_mb"], sabor["disco_gb"])
+        # #8 per-host (A2): cupo del HOST elegido, atómico con la reserva — la fila
+        # insertada ya cuenta como comprometida en ese host (sin sobreventa)
+        validar_cupo(sabor["vcpu"], sabor["ram_mb"], sabor["disco_gb"], host=host)
         nombre = siguiente_nombre(marca_cfg, cliente)
         with DB_LOCK, db() as c:
-            c.execute("INSERT INTO vms(nombre,marca,sabor,cliente,hostname,estado,vcpu,ram_mb,disco_gb,whmcs_serviceid) "
-                      "VALUES(?,?,?,?,?,'creando',?,?,?,?)",
+            c.execute("INSERT INTO vms(nombre,marca,sabor,cliente,hostname,estado,vcpu,ram_mb,disco_gb,whmcs_serviceid,host) "
+                      "VALUES(?,?,?,?,?,'creando',?,?,?,?,?)",
                       (nombre, marca, sabor_slug, cliente, hostname,
-                       sabor["vcpu"], sabor["ram_mb"], sabor["disco_gb"], whmcs_serviceid))
+                       sabor["vcpu"], sabor["ram_mb"], sabor["disco_gb"], whmcs_serviceid,
+                       (host or {}).get("id")))
     return nombre
 
 def red_activa(marca_cfg, modo):
     return marca_cfg["red_pruebas"] if modo == "pruebas" else marca_cfg["red_default"]
 
-def power_state(nombre):
+def power_state(nombre, host=None):
     try:
-        out = govc("vm.info", "-json", nombre)
+        out = govc("vm.info", "-json", nombre, host=host)
         vms = json.loads(out).get("virtualMachines") or json.loads(out).get("VirtualMachines") or []
         if vms:
             return vms[0].get("runtime", vms[0].get("Runtime", {})).get("powerState",
@@ -1041,23 +1074,24 @@ def power_state(nombre):
         pass           # caído); los callers lo tratan explícitamente (saga #7)
     return "?"
 
-def apagar_graceful(job, nombre, espera=60):
-    """Shutdown por Tools; si a los `espera` s sigue prendida, power off duro."""
+def apagar_graceful(job, nombre, espera=60, host=None):
+    """Shutdown por Tools EN EL HOST de la VM; si a los `espera` s sigue prendida,
+    power off duro."""
     try:
-        govc("vm.power", "-s", nombre)
+        govc("vm.power", "-s", nombre, host=host)
     except RuntimeError as e:
         if "already" in str(e) or "powered off" in str(e).lower():
             return
-        govc("vm.power", "-off", nombre)
+        govc("vm.power", "-off", nombre, host=host)
         return
     t0 = time.time()
     while time.time() - t0 < espera:
-        if power_state(nombre) == "poweredOff":
+        if power_state(nombre, host=host) == "poweredOff":
             return
         time.sleep(4)
         job.detalle("esperando apagado graceful (%ds)…" % int(time.time() - t0))
     job.detalle("no apagó graceful en %ds → power off forzado" % espera)
-    govc("vm.power", "-off", nombre)
+    govc("vm.power", "-off", nombre, host=host)
 
 # ── FLUJO: crear ─────────────────────────────────────────────────────────────
 PASOS_CREAR = [
@@ -1103,10 +1137,13 @@ def set_root_password(ip, password):
 
 def flujo_crear(job, marca, sabor_slug, cliente, hostname, instalar_cpanel, modo,
                 pubkey_cliente=None, root_password=None, whmcs_serviceid=None,
-                sabor_def=None):
+                sabor_def=None, host=None):
     marca_cfg = MARCAS[marca]
     # sabor_def viene resuelto desde /crear (catálogo o PERSONALIZADO con specs propias)
     sabor = sabor_def or SABORES[(marca, sabor_slug)]
+    # A2: el host viene ELEGIDO desde /crear (selección del usuario o prioridad);
+    # snapshot del dict — si lo pausan a mitad de creación, este job termina igual
+    h = host or host_de_vm(job.vm)
     red = red_activa(marca_cfg, modo)
     prefijo = ipaddress.ip_network(red["subred"]).prefixlen
     nombre = job.vm
@@ -1117,8 +1154,8 @@ def flujo_crear(job, marca, sabor_slug, cliente, hostname, instalar_cpanel, modo
     reg = vm_registrada(nombre)
     if not reg or reg.get("estado") != "creando":
         raise RuntimeError("reserva de %s no encontrada o en estado inesperado" % nombre)
-    job.detalle("%s · %s (%d vCPU / %d MB / %d GB) · modo %s"
-                % (nombre, sabor["nombre_web"], sabor["vcpu"], sabor["ram_mb"], sabor["disco_gb"], modo))
+    job.detalle("%s · %s (%d vCPU / %d MB / %d GB) · modo %s · host %s"
+                % (nombre, sabor["nombre_web"], sabor["vcpu"], sabor["ram_mb"], sabor["disco_gb"], modo, h["id"]))
 
     # 2. IP privada libre — RouterData en producción, barrido local en pruebas.
     #    Bajo IP_PRIV_LOCK: elegir y GRABAR es atómico entre jobs (ambos flujos
@@ -1134,18 +1171,18 @@ def flujo_crear(job, marca, sabor_slug, cliente, hostname, instalar_cpanel, modo
 
     # 3. espacio REAL del datastore (#8, fail-closed): antes solo se mostraba el df
     job.paso()
-    libre_gb = datastore_libre_gb()
+    libre_gb = datastore_libre_gb(h)
     requerido = sabor["disco_gb"] + DATASTORE_RESERVA_GB
     if libre_gb < requerido:
-        raise RuntimeError("espacio insuficiente en %s: %d GB libres < %d requeridos "
+        raise RuntimeError("espacio insuficiente en %s (%s): %d GB libres < %d requeridos "
                            "(plan %d GB + reserva de seguridad %d GB)"
-                           % (DATASTORE, libre_gb, requerido, sabor["disco_gb"], DATASTORE_RESERVA_GB))
-    job.detalle("datastore %s: %d GB libres ≥ %d requeridos (plan %d + reserva %d) — OK"
-                % (DATASTORE, libre_gb, requerido, sabor["disco_gb"], DATASTORE_RESERVA_GB))
+                           % (h["datastore"], h["id"], libre_gb, requerido, sabor["disco_gb"], DATASTORE_RESERVA_GB))
+    job.detalle("datastore %s (%s): %d GB libres ≥ %d requeridos (plan %d + reserva %d) — OK"
+                % (h["datastore"], h["id"], libre_gb, requerido, sabor["disco_gb"], DATASTORE_RESERVA_GB))
 
     # 4. clonar
     job.paso("IP %s reservada" % ip)
-    esxi_ssh("mkdir-vm %s" % nombre)
+    esxi_ssh("mkdir-vm %s" % nombre, host=h)
     # catálogo de doradas: 2 por SO — base y '-cpanel' (preinstalado). Si el plan
     # lleva cPanel se clona la variante (entrega ~7 min); si aún no existe, se cae
     # al plan B: base + instalación post-creación (30-60 min).
@@ -1153,7 +1190,7 @@ def flujo_crear(job, marca, sabor_slug, cliente, hostname, instalar_cpanel, modo
     if instalar_cpanel:
         try:
             job.detalle("clonando %s-cpanel → %s (thin, cPanel preinstalado)…" % (DORADA_DEFAULT, nombre))
-            esxi_ssh("clone-disk %s-cpanel %s" % (DORADA_DEFAULT, nombre), timeout=900)
+            esxi_ssh("clone-disk %s-cpanel %s" % (DORADA_DEFAULT, nombre), timeout=900, host=h)
             cpanel_preinstalado = True
         except RuntimeError as e:
             if "plantilla no existe" in str(e):
@@ -1162,11 +1199,11 @@ def flujo_crear(job, marca, sabor_slug, cliente, hostname, instalar_cpanel, modo
                 raise
     if not cpanel_preinstalado:
         job.detalle("clonando %s → %s (thin)…" % (DORADA_DEFAULT, nombre))
-        esxi_ssh("clone-disk %s %s" % (DORADA_DEFAULT, nombre), timeout=900)
+        esxi_ssh("clone-disk %s %s" % (DORADA_DEFAULT, nombre), timeout=900, host=h)
 
     # 5. crecer disco
     job.paso()
-    esxi_ssh("grow-disk %s %d" % (nombre, sabor["disco_gb"]))
+    esxi_ssh("grow-disk %s %d" % (nombre, sabor["disco_gb"]), host=h)
     job.detalle("disco extendido a %d GB (el guest lo crece al boot)" % sabor["disco_gb"])
 
     # 6. vmx
@@ -1175,14 +1212,14 @@ def flujo_crear(job, marca, sabor_slug, cliente, hostname, instalar_cpanel, modo
                               portgroup=red["portgroup"])
     with open("/tmp/%s.vmx" % nombre, "w") as fh:
         fh.write(vmx)
-    govc("datastore.upload", "-ds", DATASTORE, "/tmp/%s.vmx" % nombre,
-         "VPS/%s/%s.vmx" % (nombre, nombre))
+    govc("datastore.upload", "-ds", h["datastore"], "/tmp/%s.vmx" % nombre,
+         "VPS/%s/%s.vmx" % (nombre, nombre), host=h)
     os.unlink("/tmp/%s.vmx" % nombre)
     job.detalle("VM con CBT activo (ctkEnabled) — lista para backups incrementales")
 
     # 7. registrar en ESXi
     job.paso()
-    govc("vm.register", "-ds", DATASTORE, "VPS/%s/%s.vmx" % (nombre, nombre))
+    govc("vm.register", "-ds", h["datastore"], "VPS/%s/%s.vmx" % (nombre, nombre), host=h)
 
     # 8. cloud-init vía guestinfo
     job.paso()
@@ -1193,18 +1230,18 @@ def flujo_crear(job, marca, sabor_slug, cliente, hostname, instalar_cpanel, modo
          "-e", "guestinfo.metadata=%s" % _gz64(md),
          "-e", "guestinfo.metadata.encoding=gzip+base64",
          "-e", "guestinfo.userdata=%s" % _gz64(ud),
-         "-e", "guestinfo.userdata.encoding=gzip+base64")
+         "-e", "guestinfo.userdata.encoding=gzip+base64", host=h)
 
     # 9. power on
     job.paso()
-    govc("vm.power", "-on", nombre)
+    govc("vm.power", "-on", nombre, host=h)
 
     # 10. esperar IP
     job.paso()
     t0, ip_real = time.time(), ""
     while time.time() - t0 < 420:
         try:
-            ip_real = govc("vm.ip", "-wait", "30s", nombre, timeout=45)
+            ip_real = govc("vm.ip", "-wait", "30s", nombre, timeout=45, host=h)
         except RuntimeError:
             ip_real = ""
         if ip_real:
@@ -1247,12 +1284,12 @@ def flujo_crear(job, marca, sabor_slug, cliente, hostname, instalar_cpanel, modo
                     # govc puede fallar con RuntimeError (exit != 0) o TimeoutExpired
                     # (subprocess) — ninguno debe abortar la espera de SSH
                     try:
-                        govc("vm.power", "-r", nombre)
+                        govc("vm.power", "-r", nombre, host=h)
                         job.detalle("sin SSH tras %ds — reinicio automático de la VM (1 vez): "
                                     "el primer boot a veces no aplica la IP estática" % transcurrido)
                     except (RuntimeError, subprocess.TimeoutExpired):
                         try:
-                            govc("vm.power", "-reset", nombre)
+                            govc("vm.power", "-reset", nombre, host=h)
                             job.detalle("sin SSH tras %ds — reset automático de la VM (reboot por Tools no disponible)"
                                         % transcurrido)
                         except (RuntimeError, subprocess.TimeoutExpired) as e3:
@@ -1478,20 +1515,21 @@ def flujo_eliminar(job):
     recupera simplemente REINTENTANDO la acción — sin cirugía manual. El estado
     'eliminando' queda visible en el registro/dashboard mientras corre o si aborta."""
     vm = guardarraices(job.vm)
+    h = host_de_vm(job.vm)   # A2: se opera el host donde VIVE la VM
     job.paso()
     set_estado(job.vm, "eliminando")
-    job.paso("VM %s validada (registro + prefijo)" % job.vm)  # → apagar
-    ps = power_state(job.vm)
+    job.paso("VM %s validada (registro + prefijo, host %s)" % (job.vm, h["id"]))  # → apagar
+    ps = power_state(job.vm, host=h)
     if ps == "?":
         job.detalle("la VM no aparece en el ESXi (probable reintento tras des-registro previo) — se omite apagar")
     elif ps != "poweredOff":
-        apagar_graceful(job, job.vm)
+        apagar_graceful(job, job.vm, host=h)
     job.paso("apagada")  # → unregister
     try:
-        govc("vm.unregister", job.vm)
+        govc("vm.unregister", job.vm, host=h)
     except RuntimeError as e:
         # no basta el texto del error: se CONFIRMA contra el inventario real
-        if "not found" in str(e).lower() and power_state(job.vm) == "?":
+        if "not found" in str(e).lower() and power_state(job.vm, host=h) == "?":
             job.detalle("ya estaba des-registrada del ESXi (verificado en inventario) — sigo")
         else:
             raise
@@ -1522,7 +1560,7 @@ def flujo_eliminar(job):
         job.detalle("sin enlace de entrega que borrar")
     job.paso("enlace de entrega cerrado")  # → papelera (la llave de la bóveda se conserva hasta la purga)
     try:
-        out = esxi_ssh("trash-vm %s" % job.vm)
+        out = esxi_ssh("trash-vm %s" % job.vm, host=h)
         entrada = out.replace("OK", "").strip()
     except RuntimeError as e:
         if "no existe" not in str(e):
@@ -1531,9 +1569,9 @@ def flujo_eliminar(job):
         # la carpeta no debe seguir en VPS/ y debe existir SU entrada en _papelera
         # (la movió un intento anterior; así se recupera la entrada REAL aunque aquel
         # intento muriera antes de registrarla). Listados con sentinel verificado.
-        if job.vm in listar_wrapper("list-vps"):
+        if job.vm in listar_wrapper("list-vps", host=h):
             raise RuntimeError("trash-vm dijo 'no existe' pero %s SIGUE en VPS/ — revisar a mano" % job.vm)
-        entradas = [l for l in listar_wrapper("list-trash") if l.endswith("-" + job.vm)]
+        entradas = [l for l in listar_wrapper("list-trash", host=h) if l.endswith("-" + job.vm)]
         if not entradas:
             raise RuntimeError("la carpeta de %s no está en VPS/ ni en _papelera — revisar a mano" % job.vm)
         entrada = sorted(entradas)[-1]  # la más reciente (prefijo AAAAMMDD-HHMMSS ordena bien)
@@ -1548,6 +1586,7 @@ def flujo_editar(job, sabor_slug):
       quitar CPU/RAM en caliente). El disco NUNCA se achica (corrompería el
       filesystem del cliente): se mantiene el tamaño actual."""
     vm = guardarraices(job.vm)
+    h = host_de_vm(job.vm)   # A2: se opera el host donde VIVE la VM
     sabor = SABORES[(vm["marca"], sabor_slug)]
 
     # 1. calcular el cambio
@@ -1576,7 +1615,7 @@ def flujo_editar(job, sabor_slug):
     # #8: el upgrade también consume cupo (deltas negativos de downgrade pasan solos).
     # Nota: chequeo no atómico con otros editar simultáneos (raro, admin) — el cupo
     # duro de las CREACIONES sí es atómico (reservar_vm).
-    validar_cupo(d_cpu, d_ram, disco_final - vm["disco_gb"])
+    validar_cupo(d_cpu, d_ram, disco_final - vm["disco_gb"], host=h)
     requiere_reinicio = d_cpu < 0 or d_ram < 0
     tipo = "DOWNGRADE (requiere reinicio breve)" if requiere_reinicio else "UPGRADE en caliente"
     job.paso("%s: %s" % (tipo, ", ".join(cambios)))  # → aplicar CPU/RAM
@@ -1584,18 +1623,18 @@ def flujo_editar(job, sabor_slug):
     # 2. CPU/RAM: subir = hot-add sin corte; bajar = apagar→cambiar→encender
     if d_cpu or d_ram:
         if requiere_reinicio:
-            encendida = power_state(job.vm) == "poweredOn"
+            encendida = power_state(job.vm, host=h) == "poweredOn"
             if encendida:
                 job.detalle("apagando para bajar CPU/RAM (no existe hot-remove)…")
-                apagar_graceful(job, job.vm)
-            govc("vm.change", "-vm", job.vm, "-c", str(sabor["vcpu"]), "-m", str(sabor["ram_mb"]))
+                apagar_graceful(job, job.vm, host=h)
+            govc("vm.change", "-vm", job.vm, "-c", str(sabor["vcpu"]), "-m", str(sabor["ram_mb"]), host=h)
             if encendida:
-                govc("vm.power", "-on", job.vm)
+                govc("vm.power", "-on", job.vm, host=h)
                 job.detalle("CPU/RAM ajustados a la baja; VM encendida de nuevo (corte ~1-2 min)")
             else:
                 job.detalle("CPU/RAM ajustados (la VM estaba apagada)")
         else:
-            govc("vm.change", "-vm", job.vm, "-c", str(sabor["vcpu"]), "-m", str(sabor["ram_mb"]))
+            govc("vm.change", "-vm", job.vm, "-c", str(sabor["vcpu"]), "-m", str(sabor["ram_mb"]), host=h)
             job.detalle("CPU/RAM aplicados en caliente (hot-add), sin reinicio")
     else:
         job.detalle("CPU/RAM sin cambios")
@@ -1604,13 +1643,13 @@ def flujo_editar(job, sabor_slug):
     # 3. disco: intentar hot-extend por API; si el vCenter lo bloquea, ciclo breve
     #    apagar→crecer→encender. Luego expandir el filesystem del guest por SSH.
     if crecer:
-        encendida = power_state(job.vm) == "poweredOn"
+        encendida = power_state(job.vm, host=h) == "poweredOn"
         hot_ok = False
         if encendida:
             try:
                 govc("vm.disk.change", "-vm", job.vm, "-disk.filePath",
-                     "[%s] VPS/%s/%s.vmdk" % (DATASTORE, job.vm, job.vm),
-                     "-size", "%dG" % sabor["disco_gb"])
+                     "[%s] VPS/%s/%s.vmdk" % (h["datastore"], job.vm, job.vm),
+                     "-size", "%dG" % sabor["disco_gb"], host=h)
                 hot_ok = True
                 job.detalle("vmdk extendido EN CALIENTE a %d GB" % sabor["disco_gb"])
             except RuntimeError as e:
@@ -1621,11 +1660,11 @@ def flujo_editar(job, sabor_slug):
                     raise
         if not hot_ok:
             if encendida:
-                apagar_graceful(job, job.vm)
-            esxi_ssh("grow-disk %s %d" % (job.vm, sabor["disco_gb"]))
+                apagar_graceful(job, job.vm, host=h)
+            esxi_ssh("grow-disk %s %d" % (job.vm, sabor["disco_gb"]), host=h)
             job.detalle("vmdk extendido a %d GB (VM apagada)" % sabor["disco_gb"])
             if encendida:
-                govc("vm.power", "-on", job.vm)
+                govc("vm.power", "-on", job.vm, host=h)
                 job.detalle("VM encendida de nuevo; esperando SSH para expandir el filesystem…")
         # expandir el FS del guest (con reintentos por si viene de un boot)
         if MGMT_PRIVKEY_PATH and vm.get("ip"):
@@ -1725,11 +1764,11 @@ def expirar_secretos_jobs():
             limpiados += 1
     return limpiados
 
-def listar_wrapper(cmd):
-    """Listado CONFIABLE vía wrapper: exige el sentinel 'OK' final (el wrapper ahora
-    falla cerrado si no puede leer el directorio; un listado sin OK = respuesta
+def listar_wrapper(cmd, host=None):
+    """Listado CONFIABLE vía wrapper del host indicado: exige el sentinel 'OK' final
+    (el wrapper falla cerrado si no puede leer; un listado sin OK = respuesta
     truncada/no confiable → se aborta en vez de asumir 'vacío')."""
-    lineas = [l.strip() for l in (esxi_ssh(cmd) or "").splitlines() if l.strip()]
+    lineas = [l.strip() for l in (esxi_ssh(cmd, host=host) or "").splitlines() if l.strip()]
     if not lineas or lineas[-1] != "OK":
         raise RuntimeError("%s no devolvió el sentinel OK — listado no confiable" % cmd)
     return lineas[:-1]
@@ -1761,10 +1800,23 @@ def flujo_purgar(job):
     job.paso()
     # #14: de pasada, redactar los secretos de entrega ya expirados de jobs antiguos
     secretos = expirar_secretos_jobs()
-    en_papelera = [l for l in listar_wrapper("list-trash") if VALID_TRASH_RE.match(l)]
+    # A2: la purga barre CADA host del registro (pausado incluido: sus VMs se siguen
+    # gestionando). Un host caído se ALERTA y se salta — sus entradas esperan al
+    # próximo día; los demás hosts purgan igual.
+    en_papelera, hosts_caidos, host_de_entrada = [], [], {}
+    for _h in hosts_lista():
+        try:
+            for l in listar_wrapper("list-trash", host=_h):
+                if VALID_TRASH_RE.match(l):
+                    en_papelera.append(l)
+                    host_de_entrada[l] = _h
+        except Exception as e:  # noqa: BLE001 — host caído no bloquea a los demás
+            hosts_caidos.append(_h["id"])
+            job.detalle("⚠ host %s no purgable hoy (%s) — sus entradas esperan" % (_h["id"], str(e)[:60]))
+            audit("timer", "purgar-papelera", "-", "host %s inalcanzable en purga: %s" % (_h["id"], str(e)[:100]), "aviso")
     with DB_LOCK, db() as c:
-        registradas = {r["papelera_entrada"]: {"vault": r["vault_item"], "estado": r["estado"]}
-                       for r in c.execute("SELECT papelera_entrada, vault_item, estado FROM vms "
+        registradas = {r["papelera_entrada"]: {"vault": r["vault_item"], "estado": r["estado"], "host": r["host"]}
+                       for r in c.execute("SELECT papelera_entrada, vault_item, estado, host FROM vms "
                                           "WHERE estado IN ('papelera','purgando') "
                                           "AND papelera_entrada IS NOT NULL")}
     limite = time.strftime("%Y%m%d-%H%M%S", time.localtime(time.time() - 7 * 86400))
@@ -1779,6 +1831,7 @@ def flujo_purgar(job):
     purgadas, llaves_borradas, saltadas = [], 0, []
     for entrada in purgables:
         vault_item = registradas[entrada]["vault"]
+        _h = host_de_entrada[entrada]
         if vault_item:
             # #13: la bóveda PRIMERO — si falla (o no hay token para operarla), la
             # entrada se conserva completa y se reintenta en la corrida diaria
@@ -1802,7 +1855,7 @@ def flujo_purgar(job):
         with DB_LOCK, db() as c:
             c.execute("UPDATE vms SET estado='purgando' WHERE papelera_entrada=?", (entrada,))
         try:
-            esxi_ssh("purge-entry %s" % entrada, timeout=300)
+            esxi_ssh("purge-entry %s" % entrada, timeout=300, host=_h)
         except RuntimeError as e:
             saltadas.append(entrada)
             job.detalle("purge-entry falló para %s (%s) — se reintenta en la próxima corrida"
@@ -1818,18 +1871,33 @@ def flujo_purgar(job):
     # OJO: se re-leen registro y _papelera FRESCOS — los snapshots del inicio ya no
     # sirven (este mismo loop borró filas, y un eliminar concurrente pudo agregar
     # entradas nuevas a _papelera durante la corrida → serían deriva falsa).
-    en_papelera2 = set(l for l in listar_wrapper("list-trash") if VALID_TRASH_RE.match(l))
+    en_papelera2, hosts_ok2 = set(), set()
+    for _h in hosts_lista():
+        if _h["id"] in hosts_caidos:
+            continue
+        try:
+            en_papelera2 |= {l for l in listar_wrapper("list-trash", host=_h) if VALID_TRASH_RE.match(l)}
+            hosts_ok2.add(_h["id"])
+        except Exception:  # noqa: BLE001
+            hosts_caidos.append(_h["id"])
     with DB_LOCK, db() as c:
-        registro2 = {r["papelera_entrada"]: {"vault": r["vault_item"], "estado": r["estado"]}
-                     for r in c.execute("SELECT papelera_entrada, vault_item, estado FROM vms "
+        registro2 = {r["papelera_entrada"]: {"vault": r["vault_item"], "estado": r["estado"], "host": r["host"]}
+                     for r in c.execute("SELECT papelera_entrada, vault_item, estado, host FROM vms "
                                         "WHERE estado IN ('papelera','purgando') "
                                         "AND papelera_entrada IS NOT NULL")}
-    ausentes = sorted(set(registro2) - en_papelera2)
+    # solo se reconcilian filas cuyo HOST respondió el listado fresco (evidencia real)
+    ausentes = sorted(e for e in set(registro2) - en_papelera2
+                      if (registro2[e]["host"] or "") in hosts_ok2)
     limpiadas, deriva_reg = [], []
     if ausentes:
-        en_vps = set(listar_wrapper("list-vps"))
         for entrada in ausentes:
             nombre_vm = entrada[16:]
+            _hf = host_get(registro2[entrada]["host"]) or host_principal()
+            try:
+                en_vps = set(listar_wrapper("list-vps", host=_hf))
+            except Exception:  # noqa: BLE001 — sin listado confiable no se toca
+                deriva_reg.append(entrada)
+                continue
             if nombre_vm in en_vps:
                 job.detalle("⚠ %s figura '%s' en el registro pero la VM está en VPS/ "
                             "(¿restore manual?) — revisar el registro a mano"
@@ -1876,16 +1944,26 @@ def flujo_reconciliar(job):
     corriendo se excluyen (estado en tránsito legítimo, no anomalía)."""
     alertas, reparadas = [], []
 
-    # 1. ESXi vs registro
+    # 1. ESXi vs registro — POR HOST (A2): cada host se lista con SUS credenciales;
+    #    host caído → alerta y sus filas se saltan este barrido (sin falsos positivos)
     job.paso()
-    en_esxi = set(listar_wrapper("list-vps"))
+    en_esxi, hosts_ok, hosts_mal = set(), set(), []
+    for _h in hosts_lista():
+        try:
+            en_esxi |= set(listar_wrapper("list-vps", host=_h))
+            hosts_ok.add(_h["id"])
+        except Exception as e:  # noqa: BLE001
+            hosts_mal.append(_h["id"])
+            alertas.append("host %s INALCANZABLE para reconciliar (%s)" % (_h["id"], str(e)[:60]))
     with DB_LOCK, db() as c:
         filas = [dict(r) for r in c.execute(
             "SELECT nombre, estado, ip, publica, pub_lista, hostname, nb_priv_id, nb_pub_id, "
-            "vault_item, updated_at FROM vms WHERE estado NOT IN ('papelera','purgando')")]
+            "vault_item, updated_at, host FROM vms WHERE estado NOT IN ('papelera','purgando')")]
         en_transito = {r["vm"] for r in c.execute(
             "SELECT DISTINCT vm FROM jobs WHERE estado='corriendo'")}
     filas = [f for f in filas if f["nombre"] not in en_transito]
+    # filas de hosts caídos: sin listado confiable no se afirma nada sobre ellas
+    filas = [f for f in filas if (f.get("host") or "") in hosts_ok]
     reg_nombres = {f["nombre"] for f in filas}
     for nombre in sorted(en_esxi - reg_nombres - en_transito):
         alertas.append("VM %s existe en el ESXi pero NO está en el registro (deriva) — "
@@ -2139,6 +2217,24 @@ def crear():
     whmcs_serviceid = (str(d.get("whmcs_serviceid")).strip() if d.get("whmcs_serviceid") else None)
     if whmcs_serviceid and not SERVICEID_RE.match(whmcs_serviceid):
         return jsonify({"error": "whmcs_serviceid inválido (numérico)"}), 400
+    # A2: SELECCIÓN DE HOST — decisión del USUARIO, nunca automática por capacidad:
+    # (a) dashboard/admin puede forzar host con el param `host`; (b) sin param (WHMCS
+    # o dashboard por defecto) → el host activo de MEJOR PRIORIDAD (la administra el
+    # usuario). Si el elegido no tiene cupo/espacio, la creación FALLA con motivo.
+    host_req = (d.get("host") or "").strip()
+    try:
+        if host_req:
+            if rol != "admin":
+                return jsonify({"error": "solo el NOC puede elegir host"}), 403
+            host_sel = host_get(host_req)
+            if not host_sel:
+                return jsonify({"error": "host desconocido: %s (ver GET /hosts)" % host_req}), 400
+            if host_sel["estado"] != "activo":
+                return jsonify({"error": "el host %s está PAUSADO — reactívalo o elige otro" % host_req}), 409
+        else:
+            host_sel = host_principal()
+    except RuntimeError as e:
+        return jsonify({"error": str(e)}), 409
     nombre, job = None, None
     try:
         # reserva del nombre + creación del job BAJO EL MISMO GATE: sin esto hay una
@@ -2147,14 +2243,14 @@ def crear():
         # y pasaría el gate, lanzando un eliminar sobre una VM a medio nacer
         with JOB_GATE_LOCK:
             nombre = reservar_vm(marca, MARCAS[marca], sabor, sabor_def,
-                                 cliente, hostname, whmcs_serviceid)
+                                 cliente, hostname, whmcs_serviceid, host=host_sel)
             job = Job("crear", nombre, actor, PASOS_CREAR)
         run_job(job, lambda j: flujo_crear(j, marca, sabor, cliente, hostname, cpanel, modo,
                                            pubkey_cliente or None, root_password, whmcs_serviceid,
-                                           sabor_def=sabor_def))
+                                           sabor_def=sabor_def, host=host_sel))
     except Exception as e:
         # cupo excedido: rechazo LIMPIO con el motivo (no es un error interno)
-        if "cupo del host excedido" in str(e):
+        if "cupo del" in str(e) and "excedido" in str(e):
             audit(actor, "crear", "-", str(e), "rechazado")
             return jsonify({"error": str(e)}), 409
         # deshacer lo que alcanzó a quedar: el job se marca error (libera el gate) y
@@ -2215,8 +2311,9 @@ def vms_list():
             "SELECT * FROM vms WHERE estado != 'papelera' ORDER BY nombre").fetchall()]
         papelera = [dict(r) for r in c.execute(
             "SELECT nombre,papelera_entrada,updated_at FROM vms WHERE estado='papelera'").fetchall()]
+    hcache = {h["id"]: h for h in hosts_lista()}
     for r in rows:
-        r["power"] = power_state(r["nombre"])
+        r["power"] = power_state(r["nombre"], host=hcache.get(r.get("host")))
     return jsonify({"vms": rows, "papelera": papelera})
 
 ACCIONES = {"suspender": (flujo_suspender, ["Validar guardarraíles", "Bloquear IP pública (address-list)", "Marcar suspendido"]),
@@ -2371,6 +2468,125 @@ def hosts_get():
         d["recursos"] = host_recursos(h)
         salida.append(d)
     return jsonify({"hosts": salida})
+
+HOST_ID_RE = re.compile(r"^[a-z0-9][a-z0-9-]{1,30}$")
+ENV_NAME_RE = re.compile(r"^[A-Z][A-Z0-9_]{1,60}$")
+
+@app.route("/hosts", methods=["POST"])
+def hosts_add():
+    """A2: enrolar un host al registro. NO se acepta a ciegas: se valida EN VIVO que
+    la API responda con esas credenciales y que el wrapper conteste pong (lo que
+    exige que el host ya esté preparado: svc-vps + llave + wrapper + huella en
+    known_hosts — ver Fase C / noc-monitor/enrolar-host)."""
+    rol = auth()
+    if not rol:
+        return jsonify({"error": "unauthorized"}), 401
+    if rol != "admin":
+        return jsonify({"error": ERR_SOLO_ADMIN}), 403
+    d = json_body()
+    if d is None:
+        return jsonify({"error": ERR_BODY}), 400
+    hid = (d.get("id") or "").strip()
+    ip = (d.get("ip") or "").strip()
+    if not HOST_ID_RE.match(hid):
+        return jsonify({"error": "id inválido (minúsculas/dígitos/guiones, 2-31)"}), 400
+    if not re.match(r"^\d{1,3}(\.\d{1,3}){3}$", ip):
+        return jsonify({"error": "ip inválida"}), 400
+    pass_env = (d.get("pass_env") or "").strip()
+    if not ENV_NAME_RE.match(pass_env):
+        return jsonify({"error": "pass_env inválido (nombre de variable en engine.env)"}), 400
+    if not os.environ.get(pass_env):
+        return jsonify({"error": "la variable %s no existe en el entorno del motor — "
+                                 "agregarla a engine.env y reiniciar" % pass_env}), 400
+    if host_get(hid):
+        return jsonify({"error": "el host %s ya existe" % hid}), 409
+    candidato = {"id": hid, "ip": ip,
+                 "api_url": (d.get("api_url") or "https://%s/sdk" % ip).strip(),
+                 "govc_user": (d.get("govc_user") or "svc-vps").strip(),
+                 "pass_env": pass_env,
+                 "datastore": (d.get("datastore") or "").strip(),
+                 "ssh_port": int(d.get("ssh_port") or 22),
+                 "ssh_key": (d.get("ssh_key") or "").strip()}
+    if not candidato["datastore"] or not candidato["ssh_key"]:
+        return jsonify({"error": "datastore y ssh_key son obligatorios"}), 400
+    try:
+        govc("about", host=candidato, timeout=30)
+        pong = esxi_ssh("ping", host=candidato, timeout=30)
+        if pong.strip() != "pong":
+            raise RuntimeError("el wrapper no respondió pong: %r" % pong[:40])
+        libre = datastore_libre_gb(candidato)
+    except Exception as e:  # noqa: BLE001
+        return jsonify({"error": "host NO enrolable — falló la validación en vivo: %s "
+                                 "(¿svc-vps/llave/wrapper/huella instalados? ver enrolar-host)"
+                                 % str(e)[:200]}), 400
+    with DB_LOCK, db() as c:
+        c.execute("INSERT INTO hosts(id, ip, api_url, govc_user, pass_env, datastore, ssh_port, "
+                  "ssh_key, estado, prioridad, max_vcpu, max_ram_mb, max_disco_gb, notas) "
+                  "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                  (hid, ip, candidato["api_url"], candidato["govc_user"], pass_env,
+                   candidato["datastore"], candidato["ssh_port"], candidato["ssh_key"],
+                   "pausado" if d.get("pausado") else "activo",
+                   int(d.get("prioridad") or 100),
+                   d.get("max_vcpu"), d.get("max_ram_mb"), d.get("max_disco_gb"),
+                   (d.get("notas") or "").strip()[:200]))
+    audit(limpiar_actor(d.get("actor") or "dashboard"), "host-add", hid,
+          "host enrolado: %s (%s, ds %s, %d GB libres)" % (hid, ip, candidato["datastore"], libre), "ok")
+    return jsonify({"ok": True, "host": hid, "datastore_libre_gb": libre})
+
+@app.route("/hosts/<hid>", methods=["PATCH"])
+def hosts_patch(hid):
+    """A2: pausar/activar, prioridad, límites y notas. Pausado = no recibe creaciones
+    nuevas; sus VMs existentes se siguen gestionando (eliminar/editar/purga)."""
+    rol = auth()
+    if not rol:
+        return jsonify({"error": "unauthorized"}), 401
+    if rol != "admin":
+        return jsonify({"error": ERR_SOLO_ADMIN}), 403
+    if not host_get(hid):
+        return jsonify({"error": "host desconocido: %s" % hid}), 404
+    d = json_body()
+    if d is None:
+        return jsonify({"error": ERR_BODY}), 400
+    sets, vals = [], []
+    if "estado" in d:
+        if d["estado"] not in ("activo", "pausado"):
+            return jsonify({"error": "estado inválido (activo|pausado)"}), 400
+        sets.append("estado=?"); vals.append(d["estado"])
+    for campo in ("prioridad", "max_vcpu", "max_ram_mb", "max_disco_gb"):
+        if campo in d:
+            if d[campo] is not None and (not isinstance(d[campo], int) or d[campo] < 0):
+                return jsonify({"error": "%s inválido" % campo}), 400
+            sets.append("%s=?" % campo); vals.append(d[campo])
+    if "notas" in d:
+        sets.append("notas=?"); vals.append((d.get("notas") or "").strip()[:200])
+    if not sets:
+        return jsonify({"error": "nada que cambiar"}), 400
+    with DB_LOCK, db() as c:
+        c.execute("UPDATE hosts SET %s, updated_at=datetime('now','localtime') WHERE id=?"
+                  % ", ".join(sets), (*vals, hid))
+    audit(limpiar_actor(d.get("actor") or "dashboard"), "host-edit", hid,
+          "cambios: %s" % ", ".join(k for k in d if k != "actor"), "ok")
+    return jsonify({"ok": True, "host": host_get(hid)})
+
+@app.route("/hosts/<hid>", methods=["DELETE"])
+def hosts_delete(hid):
+    """A2: quitar un host del registro — SOLO si no tiene ninguna VM (ni en papelera:
+    sus carpetas viven en el datastore de ese host)."""
+    rol = auth()
+    if not rol:
+        return jsonify({"error": "unauthorized"}), 401
+    if rol != "admin":
+        return jsonify({"error": ERR_SOLO_ADMIN}), 403
+    if not host_get(hid):
+        return jsonify({"error": "host desconocido: %s" % hid}), 404
+    with DB_LOCK, db() as c:
+        n = c.execute("SELECT COUNT(*) n FROM vms WHERE host=?", (hid,)).fetchone()["n"]
+        if n:
+            return jsonify({"error": "el host %s tiene %d VM(s) en el registro (incl. papelera) — "
+                                     "no se puede quitar" % (hid, n)}), 409
+        c.execute("DELETE FROM hosts WHERE id=?", (hid,))
+    audit("dashboard", "host-del", hid, "host quitado del registro", "ok")
+    return jsonify({"ok": True})
 
 @app.route("/reconciliar", methods=["POST"])
 def reconciliar():
