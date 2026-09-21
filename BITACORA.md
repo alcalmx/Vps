@@ -5,6 +5,20 @@
 
 ---
 
+## 2026-09-21 (lunes) — 🧰 MULTI-HOST Fase C: script enrolar-host LISTO (instalado, sin correr)
+
+**`/usr/local/bin/vps-enrolar-host.sh`** en noc-monitor (repo: noc-monitor/enrolar-host.sh) +
+wrapper fuente en /opt/vps-engine/build/vps-wrapper.sh. Uso: `vps-enrolar-host.sh esxi-121
+192.168.200.121 <Datastore>` con la password de root del ESXi nuevo a mano (se usa 2 veces —
+API y SSH — y NO se guarda). Automatiza: llave rsa4096 dedicada del host; rol **VpsOperator con
+los 46 privilegios EXACTOS extraídos del esxi-245** (via govc con credenciales root temporales);
+usuario svc-vps con password GENERADA (si existía, la rota); estructura VPS/ + wrapper con su
+BASE correcto + authorized_keys con forced-command (capa 4); huella al known_hosts pinned (#9).
+QUEDA MANUAL: copiar doradas a _plantillas (decidir método: vCenter clone / vmkfstools),
+agregar GOVC_PASSWORD_<ID>=<generada> a engine.env + restart, y el clic "Validar y enrolar" en
+la pestaña Motor. **El multi-host queda 100% construido — solo falta ejecutar el enrolamiento
+cuando el host nuevo esté disponible.** Sin Codex (deuda A2+B+C).
+
 ## 2026-09-21 (lunes) — 🖥️ MULTI-HOST Fase B: pestaña "Motor" en el dashboard — DESPLEGADA
 
 La cara visual del multi-host (repo fastnetmon, commit 6ddd360; parche con backup .bak-20260921):
