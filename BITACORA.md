@@ -5,6 +5,21 @@
 
 ---
 
+## 2026-09-21 (lunes) — ✅ PRIMERA PURGA REAL VALIDADA: falla transitoria + convergencia automática
+
+El ciclo de purga definitiva se estrenó el fin de semana EXACTAMENTE como fue diseñado:
+- **Sáb 19 04:30**: 2 entradas del 11-09 elegibles → 1 llave de bóveda borrada, pero las 2
+  entradas SALTADAS (falla transitoria a esa hora — sospecha: ventana de backups nocturnos del
+  ESXi; el diseño conservador conservó todo para el reintento).
+- **Dom 20 04:30**: reintento diario → **las 2 purgadas** (una sin re-tocar la bóveda: su
+  vault_item ya estaba NULL — la idempotencia del #13 operando). + **2 secretos de entrega
+  expirados** (TTL del #14, los Send del 0013/0014).
+- **Lun 21**: 0/0/0 limpio. Papelera actual: lote del 14-09 (purga mañana). Timer impecable
+  los 4 días (purga + reconciliación ok cada madrugada).
+**Conclusión: purga + saltadas + convergencia + expiración de secretos = validado en producción
+sin intervención humana.** Observación menor: si las saltadas de las 04:30 se repiten seguido,
+considerar mover el timer a 05:30 (fuera de la ventana de backups).
+
 ## 2026-09-17 (miércoles, CIERRE) — 📌 ESTADO Y PENDIENTES para retomar
 
 **Estado del motor: endurecido, completo y en producción.** Esta semana (15→17):
