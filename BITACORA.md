@@ -5,6 +5,24 @@
 
 ---
 
+## 2026-09-21 (lunes) — 🖥️ MULTI-HOST Fase B: pestaña "Motor" en el dashboard — DESPLEGADA
+
+La cara visual del multi-host (repo fastnetmon, commit 6ddd360; parche con backup .bak-20260921):
+- **Pestaña Motor** (4ª, junto a Crear/Gestión/Jobs): tabla de hosts con scan EN VIVO por host
+  (datastore libre, cores y RAM del fierro, comprometido vs límites, alcanzable ✓/✗ con el
+  error), **prioridad editable inline** (la palanca del usuario: decide a dónde van las
+  creaciones de WHMCS), botones pausar/activar y quitar (solo sin VMs), y **formulario
+  "Enrolar host nuevo"** que usa la validación en vivo del motor (API + wrapper pong +
+  datastore) — la Fase C solo tendrá que preparar el host y llenar ese form.
+- **Selector "Host VMware" en el tab Crear**: default "Automático — mejor prioridad" o forzar
+  un host activo (los pausados no aparecen).
+- 3 proxys nuevos en el dashboard: GET/POST /api/vpseng/hosts, PATCH/DELETE
+  /api/vpseng/hosts/<id> (permiso vps_engine, actor = usuario de sesión, timeout 90 s).
+- Validado: página sirviendo la pestaña, rutas protegidas (401 sin sesión), contenedor sano.
+- Sin Codex (deuda: junto a A2). **Queda solo la Fase C**: preparar el 192.168.200.121
+  (svc-vps + llave/wrapper + huella + GOVC_PASSWORD_* en engine.env) y enrolarlo desde la
+  pestaña. El script noc-monitor/enrolar-host se hará en esa sesión.
+
 ## 2026-09-21 (lunes) — 🏗️ MULTI-HOST Fase A2: flujos host-aware + selección del USUARIO + CRUD
 
 La fase grande del multi-host, **sin Codex (en la deuda)**, 10 escenarios nuevos + 11 suites de

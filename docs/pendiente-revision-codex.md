@@ -20,7 +20,7 @@
 
 | ⏳ | **Multi-host A1** — tabla hosts + bootstrap/adopción + govc(host=) con credenciales inyectadas + host_recursos + GET /hosts | (commit A1) | Revisar: modelo de credenciales pass_env, parser de host.info entre versiones govc, y el plan A2 (flujos host-aware) ANTES de implementarlo |
 
-| ⏳ | **Multi-host A2** — flujos host-aware completos, selección por prioridad del usuario (sin failover automático), cupo per-host, purga/reconciliación por host con semántica host-caído=alerta, CRUD con validación en vivo | (commit A2) | Revisar A FONDO: es el refactor más invasivo sin Codex — rutas de host en cada flujo, la semántica nueva de purga con host caído, y el enrolamiento |
+| ⏳ | **Multi-host A2+B (pestaña Motor + proxys dashboard)** — flujos host-aware completos, selección por prioridad del usuario (sin failover automático), cupo per-host, purga/reconciliación por host con semántica host-caído=alerta, CRUD con validación en vivo | Vps `253a975` + fnm `6ddd360` | Revisar A FONDO: es el refactor más invasivo sin Codex — rutas de host en cada flujo, la semántica nueva de purga con host caído, y el enrolamiento |
 
 ## Cómo re-validar (cuando vuelva la cuota)
 
