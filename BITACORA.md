@@ -5,6 +5,18 @@
 
 ---
 
+## 2026-09-25 (jueves) — 🧹 Limpieza: registros huérfanos de las doradas quitados del inventario ESXi
+
+En el inventario del ESXi aparecían `dorada-almalinux9.7` y `dorada-almalinux9.7-cpanel`
+como VMs *(huérfanas)* — registros muertos de cuando las plantillas se movieron a
+`VPS/_plantillas/`. Alcadio las quitó con **"Quitar del inventario"** (unregister, NUNCA
+delete-from-disk). Verificado post-limpieza: ambas plantillas **intactas y completas** en
+`/vmfs/volumes/DiscoA37245/VPS/_plantillas/` (vmx + vmdk + flat + vmsd), inventario en 10
+VMs sin fantasmas, papelera normal. El motor clona igual que siempre. (Contexto del día:
+migraciones UniFi y rsyslogmk a noc-monitor — ver ServerVmware/BITACORA.md.)
+
+---
+
 ## 2026-09-21 (lunes) — 🧰 MULTI-HOST Fase C: script enrolar-host LISTO (instalado, sin correr)
 
 **`/usr/local/bin/vps-enrolar-host.sh`** en noc-monitor (repo: noc-monitor/enrolar-host.sh) +
