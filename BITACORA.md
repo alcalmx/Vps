@@ -24,9 +24,16 @@ acceso de diagnóstico.
     SSH multiplexado. Header con la regla RSA-only de ESXi 8. `sh -n` OK.
   - Nuevo **`docs/RUNBOOK-ENROLAR-HOST.md`**: procedimiento completo Fase 0→C con el ejemplo
     trabajado de esxi-20051 y troubleshooting.
-- PENDIENTE: Fase A (securizar: svc-vps + rol mínimo + wrapper + huella), Fase B (engine.env +
-  doradas + enrolar en dashboard), Fase C (cupo + prueba + demos). Decidido por Alcadio: armar
-  el runbook primero (hecho) antes de ejecutar.
+- **Fase A EJECUTADA** (2026-09-28): Alcadio corrió `enrolar-host.sh esxi-20051 192.168.200.51
+  datastore1` en noc-monitor → rol VpsOperator + svc-vps + wrapper (BASE /vmfs/volumes/datastore1/VPS)
+  + huella pinneada (SHA256 verificada). Llave del motor: /keys/vps_engine_esxi_esxi_20051.
+- **Fase B EJECUTADA** (parcial): GOVC_PASSWORD_ESXI_20051 agregado a engine.env (600 root) +
+  restart (health 200); **host ENROLADO vía POST /hosts** (validación en vivo OK: API+pong+datastore),
+  quedó **estado=pausado** (staging, sin doradas aún). El motor ve 2 hosts, esxi-20051 alcanzable=true
+  (20c, 127GB, 764GB libres, límites heredados 24vcpu/64GB/600GB).
+- PENDIENTE: copiar **doradas** a datastore1/VPS/_plantillas/ (paso pesado, vCenter/vmkfstools);
+  luego **activar** el host (despausar) + **prueba E2E** (crear/eliminar un VPS de test); Fase C
+  (cupo definitivo + demos → producción cambiando discos).
 
 ## 2026-09-28 (lunes) — ✅ Re-validación Codex: vps-mantencion.sh APROBADO (4 rondas)
 
