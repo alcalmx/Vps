@@ -209,20 +209,48 @@ def init_db():
           created_at TEXT DEFAULT (datetime('now','localtime')),
           updated_at TEXT DEFAULT (datetime('now','localtime')));
         """)
-        # bootstrap: el host actual de las env se auto-registra como principal y
-        # ADOPTA las VMs existentes (columna vms.host se agrega en la migración)
-        if not c.execute("SELECT 1 FROM hosts LIMIT 1").fetchone() and os.environ.get("ESXI_HOST"):
-            hid = "esxi-" + os.environ["ESXI_HOST"].split(".")[-1]
-            c.execute("INSERT INTO hosts(id, ip, api_url, govc_user, pass_env, datastore, "
-                      "ssh_port, ssh_key, notas) VALUES(?,?,?,?,?,?,?,?,?)",
-                      (hid, os.environ["ESXI_HOST"], os.environ.get("GOVC_URL", ""),
-                       os.environ.get("GOVC_USERNAME", ""), "GOVC_PASSWORD",
-                       os.environ.get("GOVC_DATASTORE", "DiscoA37245"),
-                       int(os.environ.get("ESXI_SSH_PORT", "22")),
-                       os.environ.get("ESXI_SSH_KEY", "/keys/vps_engine_esxi"),
-                       "host principal (bootstrap desde engine.env)"))
-        c.execute("UPDATE vms SET host=(SELECT id FROM hosts ORDER BY prioridad, created_at LIMIT 1) "
-                  "WHERE host IS NULL")
+        # bootstrap: el host actual de las env se auto-registra como principal y ADOPTA
+        # las VMs previas — SOLO en la migración inicial (tabla hosts vacía). La
+        # adopción se hace UNA vez, al host legacy IDENTIFICADO por ESXI_HOST, dentro
+        # de este mismo bloque (nunca en cada arranque ni "al de mejor prioridad": eso
+        # reasignaría una fila host=NULL al host equivocado y anularía la protección de
+        # host_de_vm — hallazgo Codex A1 #1). api_url se DERIVA de ESXI_HOST (no del
+        # GOVC_URL literal, que podría traer credenciales embebidas — #3b).
+        # marca de migración PERSISTENTE (PRAGMA user_version): la adopción legacy corre
+        # UNA sola vez en la vida de la BD — no basta "tabla hosts vacía" (podría
+        # re-vaciarse). user_version 0 = BD previa al multi-host → migrar; ≥1 = ya migrada.
+        migrada = c.execute("PRAGMA user_version").fetchone()[0]
+        if not migrada and os.environ.get("ESXI_HOST"):
+            esxi_ip = os.environ["ESXI_HOST"]
+            # el host legacy se identifica por IP (no por slug, que podría colisionar
+            # con otra IP — hallazgo Codex A1 ronda3 #1). Si ya existe por IP, se reusa
+            # su id; si no, se crea con slug único.
+            fila = c.execute("SELECT id FROM hosts WHERE ip=?", (esxi_ip,)).fetchone()
+            if fila:
+                hid = fila["id"]
+            else:
+                base_slug = "esxi-" + esxi_ip.split(".")[-1]
+                hid = base_slug
+                if c.execute("SELECT 1 FROM hosts WHERE id=?", (hid,)).fetchone():
+                    hid = "esxi-" + esxi_ip.replace(".", "-")   # slug por IP completa
+                    n = 1                                        # y si AÚN colisiona, sufijo
+                    while c.execute("SELECT 1 FROM hosts WHERE id=?", (hid,)).fetchone():
+                        n += 1
+                        hid = "esxi-%s-%d" % (esxi_ip.replace(".", "-"), n)
+                c.execute("INSERT INTO hosts(id, ip, api_url, govc_user, pass_env, datastore, "
+                          "ssh_port, ssh_key, notas) VALUES(?,?,?,?,?,?,?,?,?)",
+                          (hid, esxi_ip, "https://%s/sdk" % esxi_ip,
+                           os.environ.get("GOVC_USERNAME", "svc-vps"), "GOVC_PASSWORD",
+                           os.environ.get("GOVC_DATASTORE", "DiscoA37245"),
+                           int(os.environ.get("ESXI_SSH_PORT", "22")),
+                           os.environ.get("ESXI_SSH_KEY", "/keys/vps_engine_esxi"),
+                           "host principal (bootstrap desde engine.env)"))
+            # adopción única de las filas legacy hacia ESTE host (no por prioridad)
+            c.execute("UPDATE vms SET host=? WHERE host IS NULL", (hid,))
+            c.execute("PRAGMA user_version=1")   # migración completada — no se repite
+            # todo esto ocurre dentro del mismo with DB_LOCK/db (transacción única)
+        # en arranques posteriores NO se reparan los host=NULL: si aparece alguno,
+        # host_de_vm() lo rechaza y la reconciliación lo denuncia.
 
 def audit(actor, accion, vm, detalle, resultado):
     with DB_LOCK, db() as c:
@@ -332,22 +360,56 @@ def lanzar_o_fallar(job, fn):
         job.fail("no se pudo lanzar el hilo del job: %s" % e)
         return jsonify({"error": "no se pudo lanzar el job (ver registro de operaciones)"}), 500
 
+CREDS_URL_RE = re.compile(r"//[^/@\s]*@")   # //user:pass@  en una URL
+# variables de sistema que el subprocess govc necesita (allowlist; el resto NO se hereda
+# al ejecutar contra un host explícito — ver govc()). GOVC_BIN se resuelve por la ruta
+# absoluta GOVC, no por env.
+GOVC_ENV_SISTEMA = ("PATH", "HOME", "LANG", "LC_ALL", "LC_CTYPE", "TZ", "TMPDIR", "TMP",
+                    "TEMP", "SSL_CERT_FILE", "SSL_CERT_DIR", "USER", "LOGNAME")
+
+def _redact(txt):
+    """Redacta credenciales embebidas en URLs de un texto de error antes de exponerlo
+    a HTTP/logs (#3a Codex A1): //user:pass@host → //***@host."""
+    return CREDS_URL_RE.sub("//***@", txt or "")
+
 # ── Acceso al ESXi: govc (API, usuario svc-vps) y SSH restringido (wrapper) ──
 def govc(*args, timeout=120, host=None):
     """govc contra el host por defecto (env del contenedor) o contra un host del
-    registro multi-host (dict de la tabla hosts): se inyectan SUS credenciales al
-    subprocess (GOVC_URL/USERNAME/PASSWORD desde la env var que nombra pass_env)."""
-    env = None
-    if host:
-        env = dict(os.environ)
-        env["GOVC_URL"] = host.get("api_url") or env.get("GOVC_URL", "")
-        env["GOVC_USERNAME"] = host.get("govc_user") or env.get("GOVC_USERNAME", "")
-        env["GOVC_PASSWORD"] = os.environ.get(host.get("pass_env") or "GOVC_PASSWORD", "")
-        env["GOVC_DATASTORE"] = host.get("datastore") or env.get("GOVC_DATASTORE", "")
-        env["GOVC_INSECURE"] = env.get("GOVC_INSECURE", "1")
+    registro multi-host (dict de la tabla hosts). Con host: se EXIGE su configuración
+    completa (api_url/govc_user/datastore/pass_env) y que el secreto exista — NUNCA se
+    heredan los GOVC_* globales (una op de B jamás debe caer al A por un campo vacío —
+    hallazgo Codex A1 #2). El env del subprocess se construye sobreescribiendo TODOS
+    los GOVC_* con los del host."""
+    # secreto por defecto = el password global (host=None opera el host principal por
+    # env): así el filtrado literal del error cubre AMBAS ramas (Codex A1 ronda4 obs.2)
+    env, secreto = None, os.environ.get("GOVC_PASSWORD")
+    if host is not None:
+        faltan = [k for k in ("api_url", "govc_user", "datastore", "pass_env") if not host.get(k)]
+        if faltan:
+            raise RuntimeError("host %s con configuración incompleta (faltan %s) — no se opera"
+                               % (host.get("id"), ", ".join(faltan)))
+        secreto = os.environ.get(host["pass_env"])
+        if not secreto:
+            raise RuntimeError("host %s: la variable %s no está en el entorno del motor"
+                               % (host["id"], host["pass_env"]))
+        # entorno por ALLOWLIST (no denylist): SOLO las variables de sistema que el
+        # subprocess govc necesita + los GOVC_* de ESTE host. Así ningún secreto del
+        # motor ni de otros hosts (incluido un pass_env con nombre arbitrario) llega al
+        # subprocess — hallazgo Codex A1 ronda3 #2.
+        env = {k: os.environ[k] for k in GOVC_ENV_SISTEMA if k in os.environ}
+        env["GOVC_URL"] = host["api_url"]
+        env["GOVC_USERNAME"] = host["govc_user"]
+        env["GOVC_PASSWORD"] = secreto
+        env["GOVC_DATASTORE"] = host["datastore"]
+        # política TLS: se respeta la del entorno (default 1 = ESXi autofirmado); NO se
+        # fuerza a 1 para no desactivar la verificación donde ya estaba activa (#1 ronda2)
+        env["GOVC_INSECURE"] = os.environ.get("GOVC_INSECURE", "1")
     r = subprocess.run([GOVC, *args], capture_output=True, text=True, timeout=timeout, env=env)
     if r.returncode:
-        raise RuntimeError("govc %s: %s" % (args[0], (r.stderr or r.stdout).strip()[:300]))
+        msg = (r.stderr or r.stdout).strip()
+        if secreto:                       # #3a: quitar el valor LITERAL del secreto PRIMERO,
+            msg = msg.replace(secreto, "***")   # luego redactar URLs con credenciales embebidas
+        raise RuntimeError("govc %s: %s" % (args[0], _redact(msg)[:300]))
     return r.stdout.strip()
 
 # ── Multi-host (Fase A1): registro de hosts y scan de recursos ───────────────
@@ -388,13 +450,22 @@ def hosts_lista():
     with DB_LOCK, db() as c:
         return [dict(r) for r in c.execute("SELECT * FROM hosts ORDER BY prioridad, created_at")]
 
+SCAN_TIMEOUT = int(os.environ.get("HOST_SCAN_TIMEOUT", "15"))   # #4: presupuesto corto por consulta
+
+def _lim(valor_host, global_):
+    """Límite efectivo: el del host si no es None (0 = sin límite, como validar_cupo);
+    si el host no define, hereda el global (0/None → None = sin límite) — #5 Codex A1."""
+    v = valor_host if valor_host is not None else global_
+    return v or None
+
 def host_recursos(h):
     """Scan EN VIVO de un host: datastore libre, CPU/RAM del fierro y lo comprometido
-    por el motor en ese host. Cualquier falla → alcanzable=False (no lanza)."""
+    por el motor en ese host. Cualquier falla → alcanzable=False (no lanza). Timeout
+    corto por consulta para que un host lento no bloquee el listado (#4)."""
     out = {"alcanzable": False, "datastore_libre_gb": None, "cpu_cores": None,
            "mem_total_gb": None, "mem_uso_gb": None}
     try:
-        raw = govc("datastore.info", "-json", h["datastore"], host=h)
+        raw = govc("datastore.info", "-json", h["datastore"], host=h, timeout=SCAN_TIMEOUT)
         data = json.loads(raw)
         for ds in (data.get("datastores") or data.get("Datastores") or []):
             s = ds.get("summary") or ds.get("Summary") or {}
@@ -402,31 +473,37 @@ def host_recursos(h):
                 libre = s.get("freeSpace", s.get("FreeSpace"))
                 if libre is not None:
                     out["datastore_libre_gb"] = int(libre) // (1024 ** 3)
-        raw = govc("host.info", "-json", host=h)
+        raw = govc("host.info", "-json", host=h, timeout=SCAN_TIMEOUT)
         data = json.loads(raw)
         hs = (data.get("hostSystems") or data.get("HostSystems") or [{}])[0]
         summ = hs.get("summary") or hs.get("Summary") or {}
         hw = summ.get("hardware") or summ.get("Hardware") or {}
         qs = summ.get("quickStats") or summ.get("QuickStats") or {}
-        if hw.get("numCpuCores") or hw.get("NumCpuCores"):
-            out["cpu_cores"] = hw.get("numCpuCores", hw.get("NumCpuCores"))
+        cores = hw.get("numCpuCores", hw.get("NumCpuCores"))
+        if cores is not None:
+            out["cpu_cores"] = cores
         mem = hw.get("memorySize", hw.get("MemorySize"))
-        if mem:
+        if mem is not None:
             out["mem_total_gb"] = int(mem) // (1024 ** 3)
         uso = qs.get("overallMemoryUsage", qs.get("OverallMemoryUsage"))
-        if uso:
+        if uso is not None:                    # #5: 0 es válido (host recién arrancado)
             out["mem_uso_gb"] = int(uso) // 1024   # viene en MB
         out["alcanzable"] = out["datastore_libre_gb"] is not None
     except Exception as e:  # noqa: BLE001 — el scan informa, no rompe
-        out["error"] = str(e)[:120]
-    with DB_LOCK, db() as c:
-        r = c.execute("SELECT COALESCE(SUM(vcpu),0) v, COALESCE(SUM(ram_mb),0) m, "
-                      "COALESCE(SUM(disco_gb),0) d, COUNT(*) n FROM vms "
-                      "WHERE host=? AND estado NOT IN ('papelera','purgando')", (h["id"],)).fetchone()
-    out["comprometido"] = {"vcpu": r["v"], "ram_mb": r["m"], "disco_gb": r["d"], "vms": r["n"]}
-    out["limites"] = {"vcpu": h.get("max_vcpu") or HOST_MAX_VCPU or None,
-                      "ram_mb": h.get("max_ram_mb") or HOST_MAX_RAM_MB or None,
-                      "disco_gb": h.get("max_disco_gb") or HOST_MAX_DISCO_GB or None}
+        out["error"] = _redact(str(e))[:120]   # #3a: sin credenciales embebidas
+    try:
+        with DB_LOCK, db() as c:
+            r = c.execute("SELECT COALESCE(SUM(vcpu),0) v, COALESCE(SUM(ram_mb),0) m, "
+                          "COALESCE(SUM(disco_gb),0) d, COUNT(*) n FROM vms "
+                          "WHERE host=? AND estado NOT IN ('papelera','purgando')", (h["id"],)).fetchone()
+        out["comprometido"] = {"vcpu": r["v"], "ram_mb": r["m"], "disco_gb": r["d"], "vms": r["n"]}
+    except Exception as e:  # noqa: BLE001 — el scan nunca lanza; pero no inventa 0
+        # comprometido DESCONOCIDO (no 0 ficticio, que aparentaría capacidad libre)
+        out["comprometido"] = None
+        out["error_inventario"] = _redact(str(e))[:120]
+    out["limites"] = {"vcpu": _lim(h.get("max_vcpu"), HOST_MAX_VCPU),
+                      "ram_mb": _lim(h.get("max_ram_mb"), HOST_MAX_RAM_MB),
+                      "disco_gb": _lim(h.get("max_disco_gb"), HOST_MAX_DISCO_GB)}
     return out
 
 def cliente_ssh_pinned():

@@ -34,6 +34,23 @@ y encontró **6 hallazgos reales** que se corrigieron:
 - Quedan en la deuda: #8, mantención.sh, #9, #14+#15, medios #16-23, personalizado, multi-host
   A1, y B/C. (Ver docs/pendiente-revision-codex.md.)
 
+## 2026-09-28 (lunes) — ✅ Re-validación Codex: multi-host A1 APROBADO (5 rondas)
+
+Saldado el 2º ítem de la deuda (la fundación multi-host). Codex encontró y se corrigieron:
+- **Adopción de VMs**: corría en cada arranque eligiendo host por prioridad → una fila host=NULL
+  se re-adoptaba al host equivocado. Ahora: adopción ÚNICA (marca PRAGMA user_version), al host
+  legacy identificado POR IP (no por slug colisionable), en transacción única. Arranques
+  posteriores NO reparan NULL (host_de_vm los rechaza, la reconciliación los denuncia).
+- **govc(host=)**: (a) regresión TLS que introduje (forzaba GOVC_INSECURE=1) → ahora respeta el
+  entorno; (b) heredaba secretos → ahora ALLOWLIST de entorno (solo vars de sistema + GOVC_* del
+  host; ni tokens del motor ni passwords de otros hosts llegan al subprocess); (c) exige config
+  completa (host={} rechazado); (d) redacta el secreto literal del error (ambas ramas).
+- **host_recursos**: timeout corto de scan (15s), comprometido=None ante fallo de BD (no 0
+  ficticio), mem_uso 0 válido, límite 0 del host = sin límite.
+- Tests: test_multihost.py con 8 escenarios (rondas 1-3 de hallazgos) + 12 suites regresión.
+- ⚠️ Sin exposición en producción hoy (1 host); pero son bugs que morderían al enrolar el 2º.
+  **A desplegar junto con A2** (mismo commit).
+
 ## 2026-09-25 (jueves) — 🧹 Limpieza: registros huérfanos de las doradas quitados del inventario ESXi
 
 En el inventario del ESXi aparecían `dorada-almalinux9.7` y `dorada-almalinux9.7-cpanel`
