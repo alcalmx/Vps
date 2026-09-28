@@ -577,17 +577,22 @@ def ip_libre_pruebas(subred, gateway, job=None):
 
 # ── Producción: MikroTik RouterData (IP privada/pública + NAT) ────────────────
 def mikrotik(cmd, host=None, timeout=25):
-    """Corre un comando en el MikroTik por SSH (mismo acceso claude@2420 del NOC)."""
+    """Corre un comando en el MikroTik por SSH (mismo acceso claude@2420 del NOC).
+    #9: host key PINNED con confianza EXCLUSIVA al KNOWN_HOSTS_PATH del motor —
+    `-F /dev/null` ignora cualquier config heredada (~/.ssh/config, KnownHostsCommand)
+    y GlobalKnownHostsFile=/dev/null anula /etc/ssh/ssh_known_hosts: así una huella
+    ausente de nuestro archivo NO puede aceptarse por otra fuente (Codex #9 obs.2)."""
     host = host or ROUTERDATA
-    # #9: host key PINNED — known_hosts generado en el deploy; huella distinta o
-    # host desconocido → la conexión falla (anti-MITM). Antes: StrictHostKeyChecking=no.
     r = subprocess.run(
-        ["ssh", "-i", MIKROTIK_KEY, "-o", "UserKnownHostsFile=%s" % KNOWN_HOSTS_PATH,
+        ["ssh", "-F", "/dev/null", "-i", MIKROTIK_KEY,
+         "-o", "UserKnownHostsFile=%s" % KNOWN_HOSTS_PATH,
+         "-o", "GlobalKnownHostsFile=/dev/null",
          "-o", "StrictHostKeyChecking=yes", "-o", "BatchMode=yes",
          "-o", "LogLevel=ERROR", "-o", "ConnectTimeout=10", "-p", MIKROTIK_PORT,
          "%s@%s" % (MIKROTIK_USER, host), cmd],
         capture_output=True, text=True, timeout=timeout)
-    return r.returncode == 0, r.stdout
+    # ante fallo se conserva stderr (ahí informa SSH el rechazo de host key) — #9 obs.5
+    return r.returncode == 0, (r.stdout if r.returncode == 0 else (r.stderr or r.stdout))
 
 
 def _octs(texto, red):
@@ -887,7 +892,16 @@ def instalar_pubkey_en_vm(ip, pub):
     """Agrega una llave pública al authorized_keys de la VM (vía llave de gestión).
     La llave viaja por STDIN (mismo patrón que set_root_password/chpasswd): el comando
     remoto es fijo, así el contenido no puede inyectar shell aunque el comentario
-    traiga $, backticks, etc. Lanza RuntimeError si la instalación falla."""
+    traiga $, backticks, etc. Lanza RuntimeError si la instalación falla.
+
+    TOFU DELIBERADO (a diferencia de la infra fija con pinning #9): la llave del VPS
+    nace con la VM y sus IPs privadas se REUTILIZAN entre altas/bajas, así que un
+    known_hosts permanente por IP chocaría. LÍMITE ACEPTADO (Codex #9 obs.4): un MITM
+    en la red de VPS, o una IP mal asignada, podría dirigir esta operación a otra VM.
+    Mitigado por: la IP privada se elige y verifica libre en RouterData bajo IP_PRIV_LOCK
+    (#2) antes de asignarla, y esta llave es la de gestión (no un secreto del cliente).
+    OJO: set_root_password sí envía un secreto del cliente por este canal — su riesgo
+    residual es el mismo modelo TOFU, aceptado para el aprovisionamiento aislado."""
     cli = paramiko.SSHClient()
     cli.set_missing_host_key_policy(paramiko.AutoAddPolicy())
     cli.connect(ip, username="root", key_filename=MGMT_PRIVKEY_PATH, timeout=15,

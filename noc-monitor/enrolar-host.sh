@@ -105,14 +105,29 @@ ssh $CTL "root@$HIP" "grep -qF '$(echo "$PUB" | awk '{print $2}' | cut -c1-40)' 
 ssh $CTL -O exit "root@$HIP" 2>/dev/null || true
 
 # ── 4. huella al known_hosts pinned (#9) ─────────────────────────────────────
-TMP=$(mktemp)
+# ssh-keyscan confía en quien responde: se MUESTRA la huella SHA256 y se exige
+# confirmación humana contra la consola del ESXi antes de pinnearla (Codex #9 obs.1).
+TMP=$(mktemp "$(dirname "$KH")/.kh.XXXXXX")   # mismo FS que $KH → mv atómico
 ssh-keyscan -T 10 -p "$HPORT" "$HIP" > "$TMP" 2>/dev/null
 grep -q . "$TMP" || { echo "ERROR: keyscan vacío de $HIP" >&2; rm -f "$TMP"; exit 1; }
-# quitar huellas viejas de esta ip y agregar las frescas
-grep -v "^$HIP " "$KH" 2>/dev/null > "$KH.tmp" || true
-cat "$KH.tmp" "$TMP" > "$KH" && rm -f "$KH.tmp" "$TMP"
-chmod 644 "$KH"
-echo "[4/5] huella de $HIP agregada al known_hosts pinned"
+echo "== Huella(s) SHA256 de $HIP — VERIFICAR contra la consola del ESXi =="
+ssh-keygen -E sha256 -lf "$TMP" | sort -u
+if [ "${KH_CONFIRM:-}" != "si" ]; then
+  printf "¿Coincide con la consola del host (canal autenticado)? [escribe 'si']: "
+  read -r RESP
+  [ "$RESP" = "si" ] || { echo "Cancelado — host no enrolado." >&2; rm -f "$TMP"; exit 1; }
+fi
+# preservar el resto y quitar solo las entradas de ESTA ip (literal, punto escapado);
+# se arma en un temp del mismo dir y se reemplaza con mv ATÓMICO (no truncar $KH en vivo)
+IPRE=$(printf '%s' "$HIP" | sed 's/\./\\./g')
+NEW=$(mktemp "$(dirname "$KH")/.kh.XXXXXX")
+grep -vE "^(${IPRE} |\[${IPRE}\]:)" "$KH" 2>/dev/null >> "$NEW" || true
+cat "$TMP" >> "$NEW"
+sort -u "$NEW" -o "$NEW"
+chmod 644 "$NEW"
+mv "$NEW" "$KH"
+rm -f "$TMP"
+echo "[4/5] huella de $HIP verificada y agregada al known_hosts pinned"
 
 # ── 5. resumen y pasos manuales ──────────────────────────────────────────────
 echo

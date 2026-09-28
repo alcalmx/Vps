@@ -34,6 +34,22 @@ y encontró **6 hallazgos reales** que se corrigieron:
 - Quedan en la deuda: #8, mantención.sh, #9, #14+#15, medios #16-23, personalizado, multi-host
   A1, y B/C. (Ver docs/pendiente-revision-codex.md.)
 
+## 2026-09-28 (lunes) — ✅ Re-validación Codex: #9 (pinning host keys) APROBADO
+
+4º ítem saldado (2 rondas). Codex aprobó el core del pinning; se corrigieron:
+- **Verificación de huellas**: known-hosts.sh y enrolar-host.sh ahora MUESTRAN las huellas SHA256
+  y EXIGEN confirmación humana contra la consola del equipo antes de instalar (ssh-keyscan confía
+  en quien responde → un MITM en el scan pinnearía su huella). Modo CI: KH_CONFIRM=si.
+- **mikrotik()**: `-F /dev/null` + `GlobalKnownHostsFile=/dev/null` → confianza EXCLUSIVA a nuestro
+  known_hosts (ninguna otra fuente de OpenSSH puede aceptar una huella); y conserva stderr ante
+  fallo (ahí SSH informa el rechazo de host key).
+- **Scripts robustos**: mv atómico (temp en el mismo FS), preservación de entradas de otros hosts
+  (ya no regeneran a ciegas), IPs escapadas en los filtros, ssh-keygen -E sha256.
+- **TOFU de VPS**: documentado como límite aceptado (llave efímera + IPs reutilizadas; mitigado
+  por los locks de IP #2; la llave es la de gestión).
+- Test en test_pinning.py (flags de aislamiento + stderr). Regresión verde.
+- Pendiente menor (no bloqueante): verificación automática de huellas en CI, lock entre scripts.
+
 ## 2026-09-28 (lunes) — ✅ Re-validación Codex: #8 (cupo + datastore) APROBADO
 
 3er ítem de la deuda saldado (2 rondas). Codex halló un bug REAL en validar_cupo: los
