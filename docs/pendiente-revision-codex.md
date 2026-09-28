@@ -18,6 +18,8 @@
 
 | ⏳ | **VPS personalizado** — sabor 'personalizado' en /crear (solo admin, specs 1-24/1024-65536/25-600, sabor_def a flujo_crear, cupo #8 aplica) + UI en dashboard | (commits Vps + fastnetmon) | Revisar: rangos, interacción con /editar sobre filas personalizadas, y la UI |
 
+| ⏳ | **enrolar-host.sh #DIAG** — instalación opcional de llave de diagnóstico IA (DIAG_PUBKEY, shell pleno sin command=, validación RSA por ESXi 8) + RUNBOOK-ENROLAR-HOST.md | (commit 2026-09-28) | Revisar: idempotencia del bloque 3b, que la validación `ssh-rsa *` sea suficiente, y que reusar el socket de control no rompa si DIAG_PUBKEY falla; sintaxis `sh -n` OK |
+
 | ✅ 2026-09-28 | **Multi-host A1 (fundación: tabla hosts, bootstrap, govc(host=), scan)** — APROBADO por Codex tras 5 rondas: corregidos adopción única por IP+PRAGMA user_version, govc con allowlist de entorno (no filtra secretos ajenos) + TLS respetado + redacción del secreto literal, comprometido=None ante fallo BD, parser de ceros/límites. Tests en test_multihost.py (8 escenarios) | `47bad6b` + correcciones (commit de hoy) | CERRADO |
 
 | ✅ 2026-09-28 | **Multi-host A2 (flujos host-aware + CRUD /hosts)** — APROBADO por Codex tras 4 rondas: corregidos 6 hallazgos (aislamiento por (host,entrada) en purga/reconciliación, host_de_vm falla explícito, api_url derivada de ip, validación numérica POST/PATCH). Nuevos tests: test_a2_hardening.py | Vps `253a975` + correcciones (commit de hoy) | CERRADO. Pendiente aún: B (pestaña Motor, fnm 6ddd360) y C (enrolar-host.sh) |

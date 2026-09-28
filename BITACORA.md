@@ -5,6 +5,29 @@
 
 ---
 
+## 2026-09-28 (lunes) — 🆕 Host nuevo esxi-20051 + estandarización de enrolamiento
+
+Alcadio levantó un ESXi nuevo (`esxi20051cl.dedicados.cl` = **192.168.200.51**, ESXi 8.0.3,
+20c/40t, ~128 GB RAM, datastore `datastore1` ~765 GB libres, sin VMs). Plan: STAGING para
+probar el flujo con VPS nuevos + demos a gerencia; si aprueban, pasa a ser el **1er host de
+producción** (cambiando discos). Objetivo: **estandarizar el enrolamiento** e incluir mi
+acceso de diagnóstico.
+
+- **Conectividad:** la red `.200.x` estaba aislada; Alcadio abrió ruta. Verificado: noc-monitor
+  → host (443+22) OK, este VPS → host (22) OK.
+- **Mi acceso (Claude):** llave RSA dedicada `~/.ssh/claude_esxi_20051_rsa`, autorizada en
+  `/etc/ssh/keys-root/authorized_keys` con shell root pleno. **LECCIÓN: ESXi 8.0 RECHAZA
+  ed25519** (`Permission denied` pese a llave correcta); solo aceptó RSA. Confirmado en vivo.
+- **Estandarización (queda en DEUDA de Codex):**
+  - `enrolar-host.sh`: nuevo bloque 3b opcional (`DIAG_PUBKEY`) que instala la llave de
+    diagnóstico (shell pleno, sin command=, validando que sea `ssh-rsa`), reusando el socket
+    SSH multiplexado. Header con la regla RSA-only de ESXi 8. `sh -n` OK.
+  - Nuevo **`docs/RUNBOOK-ENROLAR-HOST.md`**: procedimiento completo Fase 0→C con el ejemplo
+    trabajado de esxi-20051 y troubleshooting.
+- PENDIENTE: Fase A (securizar: svc-vps + rol mínimo + wrapper + huella), Fase B (engine.env +
+  doradas + enrolar en dashboard), Fase C (cupo + prueba + demos). Decidido por Alcadio: armar
+  el runbook primero (hecho) antes de ejecutar.
+
 ## 2026-09-28 (lunes) — ✅ Re-validación Codex: vps-mantencion.sh APROBADO (4 rondas)
 
 6º ítem de deuda saldado. Codex fue implacable: 8 hallazgos ronda 1, 5 bloqueantes ronda 2,

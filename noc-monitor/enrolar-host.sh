@@ -7,10 +7,17 @@
 #      con password generada — vía govc con credenciales root TEMPORALES (no se guardan)
 #   3. Estructura VPS/{_plantillas,_papelera,_bin} en el datastore + wrapper con su
 #      BASE correcto + authorized_keys con forced-command (capa 4 de SEGURIDAD.md)
+#   3b. (opcional) llave de diagnóstico IA/humano con shell root — si DIAG_PUBKEY apunta
+#       a un .pub RSA. Va SIN command= (acceso pleno, separado de la del motor confinada).
 #   4. Huella del host al known_hosts pinned del motor (#9)
 # QUEDA MANUAL: copiar las doradas a _plantillas/ (pesado — vía vCenter o vmkfstools),
 # agregar GOVC_PASSWORD_<ID> a engine.env + restart, y el clic "Validar y enrolar"
 # en la pestaña Motor del dashboard.
+#
+# OJO ESXi 8.0: su sshd RECHAZA llaves ed25519 → TODAS las llaves de ESXi deben ser RSA
+# (la del motor ya se genera con -t rsa; la de DIAG_PUBKEY se valida que sea ssh-rsa).
+#
+# Uso: [DIAG_PUBKEY=/ruta/diag_rsa.pub] ./enrolar-host.sh <id> <ip> <datastore> [ssh_port]
 set -eu
 
 [ $# -ge 3 ] || { echo "uso: $0 <id ej. esxi-121> <ip> <datastore> [ssh_port=22]" >&2; exit 1; }
@@ -100,6 +107,29 @@ echo "$LINEA" | ssh $CTL "root@$HIP" \
 # shellcheck disable=SC2086
 ssh $CTL "root@$HIP" "grep -qF '$(echo "$PUB" | awk '{print $2}' | cut -c1-40)' /etc/ssh/keys-root/authorized_keys 2>/dev/null" || \
   echo "$LINEA" | ssh $CTL "root@$HIP" "cat >> /etc/ssh/keys-root/authorized_keys && echo '  llave agregada con forced-command'"
+
+# ── 3b. llave de diagnóstico IA/humano (opcional): shell root PLENO, SIN command= ─
+# Separada de la del motor (confinada). Solo si DIAG_PUBKEY apunta a un .pub RSA
+# (ESXi 8 rechaza ed25519). Reutiliza el mismo socket SSH (no vuelve a pedir password).
+if [ -n "${DIAG_PUBKEY:-}" ]; then
+  [ -f "$DIAG_PUBKEY" ] || { echo "ERROR: DIAG_PUBKEY=$DIAG_PUBKEY no existe" >&2; exit 1; }
+  DPUB=$(cat "$DIAG_PUBKEY")
+  case "$DPUB" in
+    ssh-rsa\ *) : ;;
+    *) echo "ERROR: la llave de diagnóstico debe ser RSA (ESXi 8 rechaza ed25519): $DIAG_PUBKEY" >&2; exit 1 ;;
+  esac
+  DFP=$(echo "$DPUB" | awk '{print $2}' | cut -c1-40)
+  # shellcheck disable=SC2086
+  if ssh $CTL "root@$HIP" "grep -qF '$DFP' /etc/ssh/keys-root/authorized_keys 2>/dev/null"; then
+    echo "[3b] llave de diagnóstico ya estaba en authorized_keys"
+  else
+    # shellcheck disable=SC2086
+    printf '%s\n' "$DPUB" | ssh $CTL "root@$HIP" \
+      "cat >> /etc/ssh/keys-root/authorized_keys && echo '  llave de diagnóstico IA agregada (full shell)'"
+    echo "[3b] llave de diagnóstico instalada (shell root pleno, sin command=)"
+  fi
+fi
+
 # cerrar el socket de control
 # shellcheck disable=SC2086
 ssh $CTL -O exit "root@$HIP" 2>/dev/null || true
