@@ -36,12 +36,16 @@ acceso de diagnóstico.
   claude_esxi→245, claude_esxi_20051_rsa→20051; las llaves del motor están confinadas al wrapper).
   Streaming byte-exacto: `ssh 245 "tar cf - <dorada> | gzip -1" | ssh 20051 "gzip -dc | tar xf -"`.
   El flat queda thick en destino (tar rellena ceros) → se re-adelgaza con `vmkfstools -K` (punch-zero).
-  - `dorada-almalinux9.7` (2.9G): COPIADA (7m45s) + re-thin OK (10G→2.8G). Descriptor idéntico.
-  - `dorada-almalinux9.7-cpanel` (40G prov/7.1G real): **transfiriendo** (background) al cierre del
-    28-09. Falta: su punch-zero + copiar `ks-oemdrv.iso` (55KB).
-- **CONTINÚA MAÑANA (29-09):** terminar cpanel (verificar + punch-zero), copiar ks-oemdrv.iso,
-  **activar** esxi-20051 (despausar), definir cupo, y **prueba E2E** (crear/eliminar un VPS de test
-  en el host nuevo). Luego demos → producción (cambiando discos).
+  - `dorada-almalinux9.7` (2.9G): COPIADA (7m45s) + re-thin OK (10G→2.8G). md5 descriptor idéntico.
+  - `dorada-almalinux9.7-cpanel` (40G prov/7.1G real): COPIADA (32m47s) + re-thin OK (40G→7.0G).
+    md5 descriptor idéntico.
+  - `ks-oemdrv.iso` (55KB): COPIADO, md5 idéntico.
+  - **DORADAS COMPLETAS Y VERIFICADAS** en datastore1/VPS/_plantillas/ (754 GB libres). Integridad:
+    gzip CRC en el stream (exit 0) + md5 de descriptores/iso coincidentes origen↔destino.
+- **CONTINÚA MAÑANA (29-09):** **activar** esxi-20051 (despausar vía dashboard/PATCH), definir
+  **cupo** del host, y **prueba E2E** (crear/eliminar un VPS de test en el host nuevo para validar
+  clone-disk + NAT + SSH). Si OK → demos a gerencia → producción (cambiando discos).
+  Ojo: revisar que el motor cree VPS en esxi-20051 (host forzado o prioridad) sin tocar esxi-245.
 
 ## 2026-09-28 (lunes) — ✅ Re-validación Codex: vps-mantencion.sh APROBADO (4 rondas)
 
