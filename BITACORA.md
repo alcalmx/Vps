@@ -48,6 +48,8 @@ y encontró **6 hallazgos reales** que se corrigieron:
 - **#14 ventana de exposición**: además de la purga, **redacción EN LECTURA** en /job (admin) —
   secretos de jobs > TTL se muestran "(expirado)" aunque la purga no haya corrido (sin mutar BD).
 - Tests en test_inputs.py (rondas 1+2+3). Regresión verde.
+- **Desplegado** en noc-monitor (commit 9a364e6): build md5 9cc7d468 idéntico dentro del
+  contenedor, /health 200, healthcheck podman OK.
 - Menor documentado (no migrado): send_expires_at UTC — la expiración se mide desde created_at
   del job; dif. real de minutos (Send se crea segundos después) y a lo sumo 1h en cambios de
   horario, sobre TTL de 2 días.
