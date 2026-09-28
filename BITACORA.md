@@ -29,8 +29,9 @@ propósito (exit code = alerta de systemd). Correcciones:
 - **systemd**: `TimeoutStartSec=1200` (oneshot desactiva el timeout por defecto); readiness de
   /health al inicio (cubre Persistent=true tras reboot).
 
-Commit `118ea1e` (código) + doc. **PENDIENTE deploy**: hoy corre la versión vieja sin revisar
-(md5 c969d092 en /usr/local/bin); el timer dispara mañana 04:30. Deploy espera OK del usuario.
+Commit `118ea1e` (código) + doc. **DESPLEGADO** con OK del usuario: /usr/local/bin/vps-mantencion.sh
+(md5 6d584b43, respaldo .bak-20260928) + .service con TimeoutStartSec=20min (respaldo .bak),
+daemon-reload; sintaxis OK en el host; timer confirmado para mañana 04:30 con la versión revisada.
 
 ## 2026-09-28 (lunes) — ✅ Codex REACTIVADO (cuenta empresa) + re-validación multi-host A2 APROBADA
 
