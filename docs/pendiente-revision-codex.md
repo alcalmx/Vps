@@ -14,7 +14,7 @@
 
 | ✅ 2026-09-28 | **Fix #14+#15 — secretos con expiración + límites de input** — APROBADO por Codex (3 rondas): corregidos 500 por .strip() sobre no-str (actor/marca/sabor/hostname/modo/vm/accion/pubkey/root_password), fullmatch en IDs (no match), root_password NO se modifica (se preserva exacta), redacción-en-lectura de secretos vencidos en /job | `1c09236` + correcciones hoy | CERRADO. Menor documentado: send_expires_at UTC (dif. de minutos/1h, no migrado) |
 
-| ⏳ | **Medios #16-#23** — health por rol, matriz de estados, rc en chpasswd, growfs robusto (FS_OK/ERR/SKIP), migraciones estrictas, address-list en reconciliación | `bef0f41` | Revisar especialmente: matriz de estados vs flujos WHMCS reales, script growfs (¿casos de partición no numerada?), y el supuesto "duplicate column name" en versiones futuras de SQLite |
+| 🔧 REVISADO 2026-09-28 | **Medios #16-#23** — Codex: ✅ #16/#17/#21/#23 aprobados; ❌ **#18 (chpasswd), #19 (growfs), #22 (address-list) con BLOQUEANTES** | `bef0f41` | Hallazgos detallados en [medios-hallazgos-codex.md](medios-hallazgos-codex.md). Corregir los 3, re-enviar a Codex, deploy, marcar ✅. Falta revisar **#20** (no se incluyó) |
 
 | ⏳ | **VPS personalizado** — sabor 'personalizado' en /crear (solo admin, specs 1-24/1024-65536/25-600, sabor_def a flujo_crear, cupo #8 aplica) + UI en dashboard | (commits Vps + fastnetmon) | Revisar: rangos, interacción con /editar sobre filas personalizadas, y la UI |
 
