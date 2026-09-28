@@ -5,6 +5,35 @@
 
 ---
 
+## 2026-09-28 (lunes) — ✅ Codex REACTIVADO (cuenta empresa) + re-validación multi-host A2 APROBADA
+
+Codex volvió: migrada la cuenta de personal (elalcalmx.cl@gmail.com) a la de EMPRESA
+(alcadio@hosting.cl) con codex logout/login; review gate reactivado. Nota: la licencia de
+Codex del panel Empresa (1, de Gerardo) es para el Codex web/IDE; el Codex CLI funciona por
+OAuth con el plan Business estándar (probado). Pendiente por si se acaban tokens.
+
+**Saldada la 1ª (y mayor) deuda de re-validación: multi-host A2.** Codex la revisó en 4 rondas
+y encontró **6 hallazgos reales** que se corrigieron:
+- **#3 (ALTO)** `host_de_vm` caía al host PRINCIPAL si una fila no tenía host o apuntaba a uno
+  inexistente → un eliminar/editar podía operar el host equivocado. Ahora **falla explícito**.
+- **#1 (ALTO)** purga identificaba por nombre global → una copia del mismo nombre en otro host
+  podía autorizar purga/borrado de bóveda cruzado. Ahora se identifica por **(host, entrada)**:
+  solo purga si la entrada aparece EXACTAMENTE en su host registrado; lo demás = deriva (alerta,
+  no toca). La reconciliación conserva la evidencia de deriva toda la corrida (aunque el otro
+  host caiga en el 2º barrido).
+- **#2 (ALTO)** reconciliación unía inventarios globales → ahora conjuntos de pares (host,nombre);
+  deriva de VMs no registradas se calcula POR HOST.
+- **#4 (ALTO)** enrolar permitía api_url≠ip (clonar en uno, registrar en otro) → api_url se
+  **deriva siempre de la ip** validada.
+- **#5/#6 (MEDIO)** validación del CRUD: ip con ipaddress real, tipos no-str rechazados,
+  enteros acotados (evita OverflowError/500), prioridad 0 respetada y null rechazado en PATCH.
+- Tests nuevos (scratchpad test_a2_hardening.py, 8 escenarios) + 11 suites de regresión verdes.
+- ⚠️ **Producción hoy NO estaba expuesta** (1 solo host: los bugs de aislamiento entre hosts y
+  del CRUD solo muerden al agregar el 2º) — pero son exactamente los que romperían al enrolar,
+  así que el fix debe desplegarse ANTES de sumar el 192.168.200.121.
+- Quedan en la deuda: #8, mantención.sh, #9, #14+#15, medios #16-23, personalizado, multi-host
+  A1, y B/C. (Ver docs/pendiente-revision-codex.md.)
+
 ## 2026-09-25 (jueves) — 🧹 Limpieza: registros huérfanos de las doradas quitados del inventario ESXi
 
 En el inventario del ESXi aparecían `dorada-almalinux9.7` y `dorada-almalinux9.7-cpanel`

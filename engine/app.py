@@ -368,12 +368,21 @@ def host_principal():
     return dict(r)
 
 def host_de_vm(nombre):
-    """Host donde VIVE una VM (columna vms.host); fallback al principal para filas
-    antiguas sin host (no debería ocurrir tras la adopción del bootstrap A1)."""
+    """Host donde VIVE una VM (columna vms.host). FALLA explícito si la fila no tiene
+    host o si apunta a un host que ya no está en el registro — NUNCA cae al principal:
+    resolver mal el host de una VM EXISTENTE llevaría una operación destructiva
+    (apagar/eliminar/editar) al host equivocado (hallazgo Codex A2 #3). El bootstrap
+    A1 adoptó todas las filas previas, así que 'sin host' aquí = anomalía a revisar."""
     with DB_LOCK, db() as c:
         r = c.execute("SELECT host FROM vms WHERE nombre=?", (nombre,)).fetchone()
-    h = host_get(r["host"]) if (r and r["host"]) else None
-    return h or host_principal()
+    if not r or not r["host"]:
+        raise RuntimeError("la VM %s no tiene host asociado en el registro — revisar a mano "
+                           "(no se opera para no tocar el host equivocado)" % nombre)
+    h = host_get(r["host"])
+    if not h:
+        raise RuntimeError("la VM %s apunta al host '%s' que ya no está en el registro — "
+                           "revisar a mano" % (nombre, r["host"]))
+    return h
 
 def hosts_lista():
     with DB_LOCK, db() as c:
@@ -1800,16 +1809,18 @@ def flujo_purgar(job):
     job.paso()
     # #14: de pasada, redactar los secretos de entrega ya expirados de jobs antiguos
     secretos = expirar_secretos_jobs()
-    # A2: la purga barre CADA host del registro (pausado incluido: sus VMs se siguen
-    # gestionando). Un host caído se ALERTA y se salta — sus entradas esperan al
-    # próximo día; los demás hosts purgan igual.
-    en_papelera, hosts_caidos, host_de_entrada = [], [], {}
+    # A2 (endurecido tras Codex #1): la purga barre CADA host del registro (pausado
+    # incluido). Se registra cada aparición física como (entrada → set de host_id):
+    # una entrada SOLO es purgable si aparece EXACTAMENTE en el host que dice su
+    # registro. Si aparece en otro host, en varios, o en ninguno-registrado → deriva
+    # (NO se toca): así una copia/restore manual del mismo nombre en otro host jamás
+    # autoriza purgar en el host equivocado ni borrar la llave de la fila de otro host.
+    apariciones, hosts_caidos = {}, []
     for _h in hosts_lista():
         try:
             for l in listar_wrapper("list-trash", host=_h):
                 if VALID_TRASH_RE.match(l):
-                    en_papelera.append(l)
-                    host_de_entrada[l] = _h
+                    apariciones.setdefault(l, set()).add(_h["id"])
         except Exception as e:  # noqa: BLE001 — host caído no bloquea a los demás
             hosts_caidos.append(_h["id"])
             job.detalle("⚠ host %s no purgable hoy (%s) — sus entradas esperan" % (_h["id"], str(e)[:60]))
@@ -1820,18 +1831,40 @@ def flujo_purgar(job):
                                           "WHERE estado IN ('papelera','purgando') "
                                           "AND papelera_entrada IS NOT NULL")}
     limite = time.strftime("%Y%m%d-%H%M%S", time.localtime(time.time() - 7 * 86400))
-    purgables = [e for e in en_papelera if e in registradas and e[:15] < limite]
-    ajenas = sorted(set(en_papelera) - set(registradas))
+    purgables, ajenas, deriva_host = [], [], []
+    entradas_deriva = set()   # entradas en host != registrado: excluidas de TODA limpieza
+                              # esta corrida (aunque el otro host caiga en el 2º barrido)
+    for entrada, hosts_fis in apariciones.items():
+        reg = registradas.get(entrada)
+        if not reg:
+            ajenas.append(entrada)                       # física en _papelera sin registro
+            continue
+        if hosts_fis != {reg["host"]}:
+            # registrada en un host pero física en otro(s) / duplicada → NUNCA tocar
+            deriva_host.append("%s registrada en %s pero física en {%s}"
+                               % (entrada, reg["host"], ",".join(sorted(hosts_fis))))
+            entradas_deriva.add(entrada)
+            continue
+        if entrada[:15] < limite:
+            purgables.append(entrada)
     if ajenas:
-        # deriva: hay basura en _papelera que el motor no creó/registró — alertar, no tocar
         job.detalle("⚠ %d entrada/s en _papelera fuera del registro (deriva) — NO se tocan: %s"
-                    % (len(ajenas), ", ".join(ajenas[:5])))
+                    % (len(ajenas), ", ".join(sorted(ajenas)[:5])))
         audit("timer", "purgar-papelera", "-",
-              "deriva en _papelera (no tocadas): %s" % ", ".join(ajenas[:10]), "aviso")
+              "deriva en _papelera (no tocadas): %s" % ", ".join(sorted(ajenas)[:10]), "aviso")
+    if deriva_host:
+        job.detalle("⚠ %d entrada/s en host distinto al registrado (posible copia/restore) — NO se tocan: %s"
+                    % (len(deriva_host), "; ".join(deriva_host[:3])))
+        audit("timer", "purgar-papelera", "-",
+              "entradas en host equivocado (no tocadas): %s" % "; ".join(deriva_host[:8]), "aviso")
     purgadas, llaves_borradas, saltadas = [], 0, []
     for entrada in purgables:
-        vault_item = registradas[entrada]["vault"]
-        _h = host_de_entrada[entrada]
+        reg = registradas[entrada]
+        _h = host_get(reg["host"])
+        if not _h or _h["id"] in hosts_caidos:           # su host cayó tras el listado
+            saltadas.append(entrada)
+            continue
+        vault_item = reg["vault"]
         if vault_item:
             # #13: la bóveda PRIMERO — si falla (o no hay token para operarla), la
             # entrada se conserva completa y se reintenta en la corrida diaria
@@ -1847,13 +1880,15 @@ def flujo_purgar(job):
             # purga no re-intente borrar una llave inexistente en la próxima corrida
             # (y si el proceso cae justo aquí, _vault_borrar tolera el 404 al reintentar)
             with DB_LOCK, db() as c:
-                c.execute("UPDATE vms SET vault_item=NULL WHERE papelera_entrada=?", (entrada,))
+                c.execute("UPDATE vms SET vault_item=NULL WHERE papelera_entrada=? AND host=?",
+                          (entrada, _h["id"]))
         # MARCA PERSISTIDA de "purga física iniciada" ANTES del borrado real: si el
         # proceso cae entre purge-entry y el DELETE, la próxima corrida reconoce la
         # fila 'purgando' como purga PROPIA confirmada y la limpia. Una fila
         # 'papelera' ausente de _papelera SIN esta marca jamás se limpia sola.
         with DB_LOCK, db() as c:
-            c.execute("UPDATE vms SET estado='purgando' WHERE papelera_entrada=?", (entrada,))
+            c.execute("UPDATE vms SET estado='purgando' WHERE papelera_entrada=? AND host=?",
+                      (entrada, _h["id"]))
         try:
             esxi_ssh("purge-entry %s" % entrada, timeout=300, host=_h)
         except RuntimeError as e:
@@ -1862,7 +1897,7 @@ def flujo_purgar(job):
                         % (entrada, str(e)[:80]))
             continue
         with DB_LOCK, db() as c:
-            c.execute("DELETE FROM vms WHERE papelera_entrada=?", (entrada,))
+            c.execute("DELETE FROM vms WHERE papelera_entrada=? AND host=?", (entrada, _h["id"]))
         purgadas.append(entrada)
     # reconciliación: filas cuya entrada YA NO está en _papelera. SOLO se limpian
     # solas las que llevan NUESTRA marca 'purgando' (purga propia interrumpida antes
@@ -1871,12 +1906,15 @@ def flujo_purgar(job):
     # OJO: se re-leen registro y _papelera FRESCOS — los snapshots del inicio ya no
     # sirven (este mismo loop borró filas, y un eliminar concurrente pudo agregar
     # entradas nuevas a _papelera durante la corrida → serían deriva falsa).
+    # frescos POR HOST: conjunto de pares (host_id, entrada) presentes físicamente
     en_papelera2, hosts_ok2 = set(), set()
     for _h in hosts_lista():
         if _h["id"] in hosts_caidos:
             continue
         try:
-            en_papelera2 |= {l for l in listar_wrapper("list-trash", host=_h) if VALID_TRASH_RE.match(l)}
+            for l in listar_wrapper("list-trash", host=_h):
+                if VALID_TRASH_RE.match(l):
+                    en_papelera2.add((_h["id"], l))
             hosts_ok2.add(_h["id"])
         except Exception:  # noqa: BLE001
             hosts_caidos.append(_h["id"])
@@ -1885,34 +1923,58 @@ def flujo_purgar(job):
                      for r in c.execute("SELECT papelera_entrada, vault_item, estado, host FROM vms "
                                         "WHERE estado IN ('papelera','purgando') "
                                         "AND papelera_entrada IS NOT NULL")}
-    # solo se reconcilian filas cuyo HOST respondió el listado fresco (evidencia real)
-    ausentes = sorted(e for e in set(registro2) - en_papelera2
-                      if (registro2[e]["host"] or "") in hosts_ok2)
+    # ausente = su par (host_registrado, entrada) NO está físico Y su host respondió
+    # el listado fresco (evidencia real por host; sin cruce por nombre entre hosts).
+    # Se EXCLUYEN las entradas ya detectadas como deriva en el 1er barrido: si su copia
+    # vive en otro host, una caída de ESE host en el 2º barrido no debe convertirse en
+    # autorización para borrar (evidencia de deriva conservada toda la corrida).
+    ausentes = sorted(e for e, reg in registro2.items()
+                      if (reg["host"] or "") in hosts_ok2
+                      and (reg["host"], e) not in en_papelera2
+                      and e not in entradas_deriva)
+    # índice entrada → hosts donde aparece FÍSICAMENTE (para no limpiar una fila cuya
+    # copia vive en otro host — cierra la ruta que la reconciliación dejaba abierta)
+    fis_por_entrada = {}
+    for hid_f, e_f in en_papelera2:
+        fis_por_entrada.setdefault(e_f, set()).add(hid_f)
     limpiadas, deriva_reg = [], []
     if ausentes:
         for entrada in ausentes:
+            reg = registro2[entrada]
             nombre_vm = entrada[16:]
-            _hf = host_get(registro2[entrada]["host"]) or host_principal()
+            otros = fis_por_entrada.get(entrada, set())
+            if otros:
+                # la entrada existe físicamente en OTRO host (copia/restore/movida) →
+                # NUNCA limpiar fila+bóveda: quedaría una carpeta sin registro ni llave
+                job.detalle("⚠ %s ausente de su host %s pero PRESENTE en {%s} — conservada, "
+                            "revisar a mano" % (entrada, reg["host"], ",".join(sorted(otros))))
+                deriva_reg.append(entrada)
+                continue
+            _hf = host_get(reg["host"])
+            if not _hf:                                   # host desapareció del registro
+                deriva_reg.append(entrada)
+                continue
             try:
                 en_vps = set(listar_wrapper("list-vps", host=_hf))
             except Exception:  # noqa: BLE001 — sin listado confiable no se toca
                 deriva_reg.append(entrada)
                 continue
             if nombre_vm in en_vps:
-                job.detalle("⚠ %s figura '%s' en el registro pero la VM está en VPS/ "
+                job.detalle("⚠ %s figura '%s' en el registro pero la VM está en VPS/ de %s "
                             "(¿restore manual?) — revisar el registro a mano"
-                            % (nombre_vm, registro2[entrada]["estado"]))
+                            % (nombre_vm, reg["estado"], reg["host"]))
                 continue
-            if registro2[entrada]["estado"] != "purgando":
+            if reg["estado"] != "purgando":
                 deriva_reg.append(entrada)
                 continue
-            vault_item = registro2[entrada]["vault"]  # normalmente NULL a esta altura
+            vault_item = reg["vault"]  # normalmente NULL a esta altura
             if vault_item:
                 if not PROVISION_TOKEN or not _vault_borrar(vault_item, job, entrada):
                     continue
                 llaves_borradas += 1
             with DB_LOCK, db() as c:
-                c.execute("DELETE FROM vms WHERE papelera_entrada=? AND estado='purgando'", (entrada,))
+                c.execute("DELETE FROM vms WHERE papelera_entrada=? AND host=? AND estado='purgando'",
+                          (entrada, reg["host"]))
             limpiadas.append(entrada)
             job.detalle("purga propia interrumpida completada (marca 'purgando'): %s" % entrada)
     if deriva_reg:
@@ -1944,13 +2006,19 @@ def flujo_reconciliar(job):
     corriendo se excluyen (estado en tránsito legítimo, no anomalía)."""
     alertas, reparadas = [], []
 
-    # 1. ESXi vs registro — POR HOST (A2): cada host se lista con SUS credenciales;
-    #    host caído → alerta y sus filas se saltan este barrido (sin falsos positivos)
+    # 1. ESXi vs registro — POR HOST (A2, endurecido tras Codex #2): el inventario se
+    #    indexa como pares (host_id, nombre) — nunca un set global de nombres — para
+    #    que una copia del mismo nombre en otro host no enmascare una ausencia real ni
+    #    oculte una VM sin registrar. Host caído → alerta y sus filas se saltan.
     job.paso()
-    en_esxi, hosts_ok, hosts_mal = set(), set(), []
+    en_esxi = set()          # pares (host_id, nombre) presentes físicamente
+    por_host = {}            # host_id -> set(nombres) para la deriva por host
+    hosts_ok, hosts_mal = set(), []
     for _h in hosts_lista():
         try:
-            en_esxi |= set(listar_wrapper("list-vps", host=_h))
+            nombres = set(listar_wrapper("list-vps", host=_h))
+            por_host[_h["id"]] = nombres
+            en_esxi |= {(_h["id"], n) for n in nombres}
             hosts_ok.add(_h["id"])
         except Exception as e:  # noqa: BLE001
             hosts_mal.append(_h["id"])
@@ -1964,12 +2032,18 @@ def flujo_reconciliar(job):
     filas = [f for f in filas if f["nombre"] not in en_transito]
     # filas de hosts caídos: sin listado confiable no se afirma nada sobre ellas
     filas = [f for f in filas if (f.get("host") or "") in hosts_ok]
-    reg_nombres = {f["nombre"] for f in filas}
-    for nombre in sorted(en_esxi - reg_nombres - en_transito):
-        alertas.append("VM %s existe en el ESXi pero NO está en el registro (deriva) — "
-                       "el motor no la toca; revisar a mano" % nombre)
+    # deriva por host: VMs vps-* presentes en un host que NO están registradas EN ESE host
+    reg_por_host = {}
     for f in filas:
-        if f["nombre"] in en_esxi:
+        reg_por_host.setdefault(f["host"], set()).add(f["nombre"])
+    for hid in hosts_ok:
+        for nombre in sorted(por_host.get(hid, set()) - reg_por_host.get(hid, set())):
+            if nombre in en_transito:
+                continue
+            alertas.append("VM %s existe en %s pero NO está registrada en ese host (deriva) — "
+                           "el motor no la toca; revisar a mano" % (nombre, hid))
+    for f in filas:
+        if (f["host"], f["nombre"]) in en_esxi:           # presente EN SU host
             continue
         if f["estado"] == "eliminando":
             alertas.append("%s quedó a medio eliminar (sin carpeta en VPS/) — reintentar 'eliminar'" % f["nombre"])
@@ -1982,7 +2056,8 @@ def flujo_reconciliar(job):
     # 2. NAT vs registro — SOLO consultas (la tabla NAT es compartida con el NOC:
     #    reparar/crear/quitar reglas es decisión humana, no del reconciliador)
     job.paso()
-    con_publica = [f for f in filas if f.get("publica") and f.get("ip") and f["nombre"] in en_esxi]
+    con_publica = [f for f in filas if f.get("publica") and f.get("ip")
+                   and (f["host"], f["nombre"]) in en_esxi]
     nat_ok = 0
     for f in con_publica:
         oks, rs = mikrotik('/ip firewall nat print terse where chain=srcnat and src-address="%s" and to-addresses="%s"'
@@ -2313,7 +2388,10 @@ def vms_list():
             "SELECT nombre,papelera_entrada,updated_at FROM vms WHERE estado='papelera'").fetchall()]
     hcache = {h["id"]: h for h in hosts_lista()}
     for r in rows:
-        r["power"] = power_state(r["nombre"], host=hcache.get(r.get("host")))
+        _h = hcache.get(r.get("host"))
+        # host inválido/ausente → no se consulta el principal por error (mostraría el
+        # power del host equivocado); se marca "?" (solo lectura, no destructivo)
+        r["power"] = power_state(r["nombre"], host=_h) if _h else "?"
     return jsonify({"vms": rows, "papelera": papelera})
 
 ACCIONES = {"suspender": (flujo_suspender, ["Validar guardarraíles", "Bloquear IP pública (address-list)", "Marcar suspendido"]),
@@ -2472,6 +2550,34 @@ def hosts_get():
 HOST_ID_RE = re.compile(r"^[a-z0-9][a-z0-9-]{1,30}$")
 ENV_NAME_RE = re.compile(r"^[A-Z][A-Z0-9_]{1,60}$")
 
+# tope superior de los límites: entero grande pero muy por debajo del máx de SQLite
+# (evita OverflowError al bindear; holgado para cualquier host real)
+LIMITE_MAX = 1_000_000_000
+
+def _entero_opt(v, nombre, minimo=0, maximo=LIMITE_MAX, requerido=False):
+    """Valida un entero opcional (#5/#6 Codex A2): None pasa salvo `requerido`; bool y
+    no-enteros → error; rango [minimo, maximo] SIEMPRE acotado (maximo por defecto
+    LIMITE_MAX para no romper el bind de SQLite). Lanza ValueError con mensaje claro."""
+    if v is None:
+        if requerido:
+            raise ValueError("%s es obligatorio" % nombre)
+        return None
+    if isinstance(v, bool) or not isinstance(v, int):
+        raise ValueError("%s debe ser un entero" % nombre)
+    if v < minimo or v > maximo:
+        raise ValueError("%s fuera de rango (%s-%s)" % (nombre, minimo, maximo))
+    return v
+
+def _str_campo(d, clave):
+    """Lee un campo string del body de forma segura: None→'', y rechaza tipos no-str
+    (evita 500 por .strip() sobre int/list — #6 Codex A2)."""
+    v = d.get(clave)
+    if v is None:
+        return ""
+    if not isinstance(v, str):
+        raise ValueError("%s debe ser texto" % clave)
+    return v.strip()
+
 @app.route("/hosts", methods=["POST"])
 def hosts_add():
     """A2: enrolar un host al registro. NO se acepta a ciegas: se valida EN VIVO que
@@ -2486,29 +2592,46 @@ def hosts_add():
     d = json_body()
     if d is None:
         return jsonify({"error": ERR_BODY}), 400
-    hid = (d.get("id") or "").strip()
-    ip = (d.get("ip") or "").strip()
+    try:
+        hid = _str_campo(d, "id")
+        ip = _str_campo(d, "ip")
+        pass_env = _str_campo(d, "pass_env")
+        datastore = _str_campo(d, "datastore")
+        ssh_key = _str_campo(d, "ssh_key")
+        govc_user = _str_campo(d, "govc_user") or "svc-vps"
+        notas = _str_campo(d, "notas")[:200]
+        # #5: validación de enteros ANTES de cualquier llamada remota; prioridad
+        # admite 0 explícito (no usar `or`, que lo convertiría en el default)
+        ssh_port = _entero_opt(d.get("ssh_port"), "ssh_port", 1, 65535)
+        ssh_port = 22 if ssh_port is None else ssh_port
+        prioridad = _entero_opt(d.get("prioridad"), "prioridad", 0, 100000)
+        prioridad = 100 if prioridad is None else prioridad   # POST: None → default 100
+        max_vcpu = _entero_opt(d.get("max_vcpu"), "max_vcpu", 0)
+        max_ram_mb = _entero_opt(d.get("max_ram_mb"), "max_ram_mb", 0)
+        max_disco_gb = _entero_opt(d.get("max_disco_gb"), "max_disco_gb", 0)
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
     if not HOST_ID_RE.match(hid):
         return jsonify({"error": "id inválido (minúsculas/dígitos/guiones, 2-31)"}), 400
-    if not re.match(r"^\d{1,3}(\.\d{1,3}){3}$", ip):
+    try:
+        ip = str(ipaddress.IPv4Address(ip))   # #6: validación real, no sintáctica
+    except ValueError:
         return jsonify({"error": "ip inválida"}), 400
-    pass_env = (d.get("pass_env") or "").strip()
     if not ENV_NAME_RE.match(pass_env):
         return jsonify({"error": "pass_env inválido (nombre de variable en engine.env)"}), 400
     if not os.environ.get(pass_env):
         return jsonify({"error": "la variable %s no existe en el entorno del motor — "
                                  "agregarla a engine.env y reiniciar" % pass_env}), 400
+    if not datastore or not ssh_key:
+        return jsonify({"error": "datastore y ssh_key son obligatorios"}), 400
     if host_get(hid):
         return jsonify({"error": "el host %s ya existe" % hid}), 409
-    candidato = {"id": hid, "ip": ip,
-                 "api_url": (d.get("api_url") or "https://%s/sdk" % ip).strip(),
-                 "govc_user": (d.get("govc_user") or "svc-vps").strip(),
-                 "pass_env": pass_env,
-                 "datastore": (d.get("datastore") or "").strip(),
-                 "ssh_port": int(d.get("ssh_port") or 22),
-                 "ssh_key": (d.get("ssh_key") or "").strip()}
-    if not candidato["datastore"] or not candidato["ssh_key"]:
-        return jsonify({"error": "datastore y ssh_key son obligatorios"}), 400
+    # #4: la URL de la API se DERIVA de la IP validada (conexión directa a ESXi) — no
+    # se acepta api_url libre, para que SSH (ip) y API no puedan apuntar a hosts
+    # distintos (clonar en uno y registrar en otro).
+    candidato = {"id": hid, "ip": ip, "api_url": "https://%s/sdk" % ip,
+                 "govc_user": govc_user, "pass_env": pass_env,
+                 "datastore": datastore, "ssh_port": ssh_port, "ssh_key": ssh_key}
     try:
         govc("about", host=candidato, timeout=30)
         pong = esxi_ssh("ping", host=candidato, timeout=30)
@@ -2523,12 +2646,10 @@ def hosts_add():
         c.execute("INSERT INTO hosts(id, ip, api_url, govc_user, pass_env, datastore, ssh_port, "
                   "ssh_key, estado, prioridad, max_vcpu, max_ram_mb, max_disco_gb, notas) "
                   "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                  (hid, ip, candidato["api_url"], candidato["govc_user"], pass_env,
-                   candidato["datastore"], candidato["ssh_port"], candidato["ssh_key"],
+                  (hid, ip, candidato["api_url"], govc_user, pass_env,
+                   datastore, ssh_port, ssh_key,
                    "pausado" if d.get("pausado") else "activo",
-                   int(d.get("prioridad") or 100),
-                   d.get("max_vcpu"), d.get("max_ram_mb"), d.get("max_disco_gb"),
-                   (d.get("notas") or "").strip()[:200]))
+                   prioridad, max_vcpu, max_ram_mb, max_disco_gb, notas))
     audit(limpiar_actor(d.get("actor") or "dashboard"), "host-add", hid,
           "host enrolado: %s (%s, ds %s, %d GB libres)" % (hid, ip, candidato["datastore"], libre), "ok")
     return jsonify({"ok": True, "host": hid, "datastore_libre_gb": libre})
@@ -2552,13 +2673,21 @@ def hosts_patch(hid):
         if d["estado"] not in ("activo", "pausado"):
             return jsonify({"error": "estado inválido (activo|pausado)"}), 400
         sets.append("estado=?"); vals.append(d["estado"])
-    for campo in ("prioridad", "max_vcpu", "max_ram_mb", "max_disco_gb"):
-        if campo in d:
-            if d[campo] is not None and (not isinstance(d[campo], int) or d[campo] < 0):
-                return jsonify({"error": "%s inválido" % campo}), 400
-            sets.append("%s=?" % campo); vals.append(d[campo])
-    if "notas" in d:
-        sets.append("notas=?"); vals.append((d.get("notas") or "").strip()[:200])
+    # #5: misma validación que el POST (rechaza bool y no-enteros; prioridad admite 0
+    # pero NO null — un NULL iría primero en el ORDER BY y volvería principal al host;
+    # los max_* SÍ admiten null = quitar el límite/heredar el global)
+    try:
+        if "prioridad" in d:
+            val = _entero_opt(d["prioridad"], "prioridad", 0, 100000, requerido=True)
+            sets.append("prioridad=?"); vals.append(val)
+        for campo in ("max_vcpu", "max_ram_mb", "max_disco_gb"):
+            if campo in d:
+                val = _entero_opt(d[campo], campo, 0)         # None permitido (quita el límite)
+                sets.append("%s=?" % campo); vals.append(val)
+        if "notas" in d:
+            sets.append("notas=?"); vals.append(_str_campo(d, "notas")[:200])
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
     if not sets:
         return jsonify({"error": "nada que cambiar"}), 400
     with DB_LOCK, db() as c:

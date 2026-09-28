@@ -20,7 +20,7 @@
 
 | ⏳ | **Multi-host A1** — tabla hosts + bootstrap/adopción + govc(host=) con credenciales inyectadas + host_recursos + GET /hosts | (commit A1) | Revisar: modelo de credenciales pass_env, parser de host.info entre versiones govc, y el plan A2 (flujos host-aware) ANTES de implementarlo |
 
-| ⏳ | **Multi-host A2+B+C (flujos, pestaña Motor, enrolar-host.sh)** — flujos host-aware completos, selección por prioridad del usuario (sin failover automático), cupo per-host, purga/reconciliación por host con semántica host-caído=alerta, CRUD con validación en vivo | Vps `253a975` + fnm `6ddd360` | Revisar A FONDO: es el refactor más invasivo sin Codex — rutas de host en cada flujo, la semántica nueva de purga con host caído, y el enrolamiento |
+| ✅ 2026-09-28 | **Multi-host A2 (flujos host-aware + CRUD /hosts)** — APROBADO por Codex tras 4 rondas: corregidos 6 hallazgos (aislamiento por (host,entrada) en purga/reconciliación, host_de_vm falla explícito, api_url derivada de ip, validación numérica POST/PATCH). Nuevos tests: test_a2_hardening.py | Vps `253a975` + correcciones (commit de hoy) | CERRADO. Pendiente aún: B (pestaña Motor, fnm 6ddd360) y C (enrolar-host.sh) |
 
 ## Cómo re-validar (cuando vuelva la cuota)
 
