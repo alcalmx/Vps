@@ -34,6 +34,19 @@ y encontró **6 hallazgos reales** que se corrigieron:
 - Quedan en la deuda: #8, mantención.sh, #9, #14+#15, medios #16-23, personalizado, multi-host
   A1, y B/C. (Ver docs/pendiente-revision-codex.md.)
 
+## 2026-09-28 (lunes) — ✅ Re-validación Codex: #8 (cupo + datastore) APROBADO
+
+3er ítem de la deuda saldado (2 rondas). Codex halló un bug REAL en validar_cupo: los
+**downgrades podían rechazarse** si el host ya estaba por encima de un límite (posible tras
+bajar HOST_MAX_*/max_* con VMs ya creadas) — evaluaba el total aun con delta ≤ 0. Corregido:
+**solo se chequea el límite en las dimensiones que AUMENTAN** (delta > 0); downgrades y
+sin-cambios siempre pasan. Modelo de capacidad VALIDADO con Codex: el cupo lógico es la barrera
+ATÓMICA ENTRE CREACIONES (disco provisionado, bajo NOMBRE_LOCK); el chequeo físico del datastore
+es salvaguarda fail-closed. Documentadas las condiciones operativas (límite de disco ≤ capacidad
+útil; suma de presupuestos si hosts comparten datastore) y el límite conocido (carrera
+editar-crear, pendiente de endurecer). flujo_editar confirma que guarda disco_final (el disco
+real, nunca baja). Test nuevo en test_cupo.py (host excedido → downgrade pasa). Regresión verde.
+
 ## 2026-09-28 (lunes) — ✅ Re-validación Codex: multi-host A1 APROBADO (5 rondas)
 
 Saldado el 2º ítem de la deuda (la fundación multi-host). Codex encontró y se corrigieron:

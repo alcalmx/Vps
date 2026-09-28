@@ -8,7 +8,7 @@
 
 | Estado | Ítem | Commits | Notas |
 |---|---|---|---|
-| ⏳ | **Fix #8** — cupo del host (HOST_MAX_*, atómico con la reserva, 409) + espacio real datastore (`datastore_libre_gb`, fail-closed, DATASTORE_RESERVA_GB) | `73caacd` | Tests: 5 escenarios + regresión. Revisar especialmente: carrera del cupo en `editar` (no atómica, documentada), parser de shapes de govc |
+| ✅ 2026-09-28 | **Fix #8 — cupo del host + espacio real del datastore** — APROBADO por Codex (2 rondas): corregido rechazo de downgrades (solo se chequean dimensiones que aumentan); modelo cupo-lógico-atómico validado + condiciones operativas documentadas; carrera editar-crear = pendiente documentado | `73caacd` + correcciones hoy | CERRADO. Pendiente futuro: endurecer editar (releer+validar+registrar bajo lock) |
 | ⏳ | **vps-mantencion.sh** — versión final (ronda 3 de Codex quedó cortada por cuota; rondas 1-2 aplicadas) | `f036907` | Validado funcionalmente contra mock (feliz EXIT=0, error EXIT=1) y corrida real Succeeded. Revisar: la versión final del refactor poll_job/lanzar |
 | ⏳ | **Fix #9** — pinning de host keys (cliente_ssh_pinned/RejectPolicy, mikrotik estricto, known-hosts.sh, TOFU documentado en VPS) | `6afb991` | Revisar especialmente: manejo de rotación de llaves, formato [host]:puerto, y si el TOFU de VPS amerita endurecerse |
 

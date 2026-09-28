@@ -1094,7 +1094,18 @@ def cupo_comprometido(host_id=None):
 def validar_cupo(d_vcpu, d_ram_mb, d_disco_gb, host=None):
     """#8 (per-host desde A2): lanza RuntimeError si (comprometido del host + delta)
     excede sus límites (columnas max_* del host; NULL hereda los HOST_MAX_* globales;
-    0 = sin límite). Deltas negativos (downgrades) siempre pasan."""
+    0 = sin límite). Solo se chequean las dimensiones que aumentan → downgrades pasan.
+
+    MODELO DE CAPACIDAD (validado con Codex): el cupo lógico es la barrera ATÓMICA
+    ENTRE CREACIONES (bajo NOMBRE_LOCK, contando el disco PROVISIONADO de las filas
+    vigentes) — NO pretende impedir toda sobreventa del host. Para que garantice que
+    no se sobre-provisiona el datastore, el operador debe: (a) fijar un límite de
+    disco finito y ≤ capacidad ÚTIL del datastore (descontando la dorada, overhead,
+    snapshots y otros archivos que no cuenta disco_gb); (b) si varios hosts comparten
+    datastore, que la SUMA de sus presupuestos quepa en esa capacidad. El chequeo
+    físico de datastore (paso 3) es salvaguarda fail-closed contra consumo externo.
+    LÍMITE CONOCIDO: la carrera editar-vs-crear no está cubierta (NOMBRE_LOCK solo
+    coordina creaciones; editar es admin, infrecuente) — pendiente de endurecer."""
     hid = (host or {}).get("id")
     lim_v = (host or {}).get("max_vcpu") if (host or {}).get("max_vcpu") is not None else HOST_MAX_VCPU
     lim_m = (host or {}).get("max_ram_mb") if (host or {}).get("max_ram_mb") is not None else HOST_MAX_RAM_MB
@@ -1102,11 +1113,15 @@ def validar_cupo(d_vcpu, d_ram_mb, d_disco_gb, host=None):
     v, m, d = cupo_comprometido(hid)
     etiqueta = ("host %s" % hid) if hid else "host"
     problemas = []
-    if lim_v and v + d_vcpu > lim_v:
+    # SOLO se chequea el límite en las dimensiones que AUMENTAN (delta > 0): un
+    # downgrade (o delta 0) siempre pasa, aunque el host YA esté por encima del límite
+    # —p.ej. tras bajar HOST_MAX_*/max_* con VMs ya creadas— porque libera o no cambia
+    # esa dimensión (hallazgo Codex #8: los downgrades no deben rechazarse).
+    if d_vcpu > 0 and lim_v and v + d_vcpu > lim_v:
         problemas.append("vCPU %d+%d > máx %d" % (v, d_vcpu, lim_v))
-    if lim_m and m + d_ram_mb > lim_m:
+    if d_ram_mb > 0 and lim_m and m + d_ram_mb > lim_m:
         problemas.append("RAM %d+%d MB > máx %d" % (m, d_ram_mb, lim_m))
-    if lim_d and d + d_disco_gb > lim_d:
+    if d_disco_gb > 0 and lim_d and d + d_disco_gb > lim_d:
         problemas.append("disco %d+%d GB > máx %d" % (d, d_disco_gb, lim_d))
     if problemas:
         raise RuntimeError("cupo del %s excedido: " % etiqueta + "; ".join(problemas) +
