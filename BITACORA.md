@@ -31,9 +31,17 @@ acceso de diagnóstico.
   restart (health 200); **host ENROLADO vía POST /hosts** (validación en vivo OK: API+pong+datastore),
   quedó **estado=pausado** (staging, sin doradas aún). El motor ve 2 hosts, esxi-20051 alcanzable=true
   (20c, 127GB, 764GB libres, límites heredados 24vcpu/64GB/600GB).
-- PENDIENTE: copiar **doradas** a datastore1/VPS/_plantillas/ (paso pesado, vCenter/vmkfstools);
-  luego **activar** el host (despausar) + **prueba E2E** (crear/eliminar un VPS de test); Fase C
-  (cupo definitivo + demos → producción cambiando discos).
+- **Doradas — método validado (2026-09-28):** los dos ESXi NO se alcanzan entre sí (245✗→20051),
+  así que la copia va por PUENTE = este VPS de IA (único con shell no confinado en ambos:
+  claude_esxi→245, claude_esxi_20051_rsa→20051; las llaves del motor están confinadas al wrapper).
+  Streaming byte-exacto: `ssh 245 "tar cf - <dorada> | gzip -1" | ssh 20051 "gzip -dc | tar xf -"`.
+  El flat queda thick en destino (tar rellena ceros) → se re-adelgaza con `vmkfstools -K` (punch-zero).
+  - `dorada-almalinux9.7` (2.9G): COPIADA (7m45s) + re-thin OK (10G→2.8G). Descriptor idéntico.
+  - `dorada-almalinux9.7-cpanel` (40G prov/7.1G real): **transfiriendo** (background) al cierre del
+    28-09. Falta: su punch-zero + copiar `ks-oemdrv.iso` (55KB).
+- **CONTINÚA MAÑANA (29-09):** terminar cpanel (verificar + punch-zero), copiar ks-oemdrv.iso,
+  **activar** esxi-20051 (despausar), definir cupo, y **prueba E2E** (crear/eliminar un VPS de test
+  en el host nuevo). Luego demos → producción (cambiando discos).
 
 ## 2026-09-28 (lunes) — ✅ Re-validación Codex: vps-mantencion.sh APROBADO (4 rondas)
 
