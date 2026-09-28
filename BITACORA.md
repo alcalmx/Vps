@@ -5,6 +5,33 @@
 
 ---
 
+## 2026-09-28 (lunes) — ✅ Re-validación Codex: vps-mantencion.sh APROBADO (4 rondas)
+
+6º ítem de deuda saldado. Codex fue implacable: 8 hallazgos ronda 1, 5 bloqueantes ronda 2,
+1 bloqueante ronda 3, aprobado ronda 4. El script (orquestador del timer diario 04:30 que
+lanza purga de papelera + reconciliación) tenía varias rutas de FALSO ÉXITO que anulaban su
+propósito (exit code = alerta de systemd). Correcciones:
+- **Parseo con jq -ers (no sed)**: un `{"estado":"error","detalle":{"estado":"ok"}}` con sed
+  tomaba el 'ok' anidado; ahora jq lee la raíz ('error'). Documento único (length!=1 → error),
+  raíz objeto, valores whitelisted; anclas `\A..\z` (no `^/$`, que en Oniguruma matchean línea
+  → un "ok\n" pasaba y `$()` se comía el \n). Validadores probados contra jq 1.6 real en el host.
+- **Falso-éxito del gate**: /reconciliar con el gate ocupado devuelve el job de OTRA operación
+  (una purga ajena) con su job_id; el script lo tomaba como reconciliación ok. Ahora verifica el
+  TIPO real (GET /job → jq .tipo) y distingue "otro tipo confirmado" (espera+re-POST) de "tipo
+  desconocido por fallo de lectura" (reintenta leer el MISMO job, nunca re-POST → no duplica).
+- **rc de curl**: set -e NO protege dentro de `$(...)` usado como condición; cada curl comprueba
+  su rc explícito; con 'fail', HTTP≥400 → rc 22. Transferencia incompleta ya no cuenta como 'ok'.
+- **Deadlines reales**: reloj monotónico /proc/uptime (inmune a saltos de hora), chequeo antes de
+  cada POST y de cada sleep; orden purga→reconciliar garantizado (purga sin terminal confirmado
+  ABORTA la secuencia, no reconcilia).
+- **Secreto**: token en `--config` de curl (600, mktemp+trap), fuera de argv/entorno; sin log de
+  cuerpos; `-q` + `noproxy '*'`; carga endurecida (exactamente 1 ENGINE_TOKEN=, solo CR final).
+- **systemd**: `TimeoutStartSec=1200` (oneshot desactiva el timeout por defecto); readiness de
+  /health al inicio (cubre Persistent=true tras reboot).
+
+Commit `118ea1e` (código) + doc. **PENDIENTE deploy**: hoy corre la versión vieja sin revisar
+(md5 c969d092 en /usr/local/bin); el timer dispara mañana 04:30. Deploy espera OK del usuario.
+
 ## 2026-09-28 (lunes) — ✅ Codex REACTIVADO (cuenta empresa) + re-validación multi-host A2 APROBADA
 
 Codex volvió: migrada la cuenta de personal (elalcalmx.cl@gmail.com) a la de EMPRESA
