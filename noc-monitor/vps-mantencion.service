@@ -6,4 +6,7 @@ After=network-online.target vps-engine.service
 
 [Service]
 Type=oneshot
+# oneshot deshabilita el timeout de arranque por defecto: respaldo explícito para que
+# una conexión colgada no deje el service en 'activating' para siempre (Codex #4).
+TimeoutStartSec=1200
 ExecStart=/usr/local/bin/vps-mantencion.sh
