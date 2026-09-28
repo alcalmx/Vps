@@ -34,6 +34,24 @@ y encontró **6 hallazgos reales** que se corrigieron:
 - Quedan en la deuda: #8, mantención.sh, #9, #14+#15, medios #16-23, personalizado, multi-host
   A1, y B/C. (Ver docs/pendiente-revision-codex.md.)
 
+## 2026-09-28 (lunes) — ✅ Re-validación Codex: #14+#15 (secretos + inputs) APROBADO
+
+5º ítem saldado (3 rondas). Codex halló varios 500 reales y un tema fino de la clave de root:
+- **500 por .strip() sobre no-str**: actor, marca, sabor, cliente, hostname, modo, vm, accion,
+  pubkey_cliente y root_password ahora validan tipo (via _str_campo / isinstance) → 400 limpio,
+  no AttributeError. limpiar_actor tolera no-str → "api".
+- **IDs con 
+**: match() aceptaba "123
+" → cambiado a **fullmatch()** en los 4 usos.
+- **root_password se modificaba**: el .strip() alteraba la clave que WHMCS pone en la ficha (el
+  cliente no podría entrar) → ELIMINADO; se preserva EXACTA, longitud validada sin recortar.
+- **#14 ventana de exposición**: además de la purga, **redacción EN LECTURA** en /job (admin) —
+  secretos de jobs > TTL se muestran "(expirado)" aunque la purga no haya corrido (sin mutar BD).
+- Tests en test_inputs.py (rondas 1+2+3). Regresión verde.
+- Menor documentado (no migrado): send_expires_at UTC — la expiración se mide desde created_at
+  del job; dif. real de minutos (Send se crea segundos después) y a lo sumo 1h en cambios de
+  horario, sobre TTL de 2 días.
+
 ## 2026-09-28 (lunes) — ✅ Re-validación Codex: #9 (pinning host keys) APROBADO
 
 4º ítem saldado (2 rondas). Codex aprobó el core del pinning; se corrigieron:

@@ -2299,8 +2299,12 @@ ERR_BODY = "body inválido: se espera un objeto JSON"
 
 def limpiar_actor(v):
     """#15: 'actor' es texto informativo (auditoría/jobs del dashboard) que viene del
-    cliente — charset acotado y largo máximo para que no contamine logs/UI."""
-    v = ACTOR_LIMPIO_RE.sub("", (v or "").strip()[:60])
+    cliente — charset acotado y largo máximo para que no contamine logs/UI. Tolera
+    valores NO string (123, true, []): no son actor válido → 'api' (evita el 500 por
+    .strip() sobre no-str, hallazgo Codex ronda1)."""
+    if not isinstance(v, str):
+        return "api"
+    v = ACTOR_LIMPIO_RE.sub("", v.strip()[:60])
     return v or "api"
 
 @app.route("/health")
@@ -2325,12 +2329,15 @@ def crear():
     d = json_body()
     if d is None:
         return jsonify({"error": ERR_BODY}), 400
-    marca = (d.get("marca") or "").strip()
-    sabor = (d.get("sabor") or "").strip()
-    cliente = (d.get("cliente") or "").strip()[:40]
-    hostname = (d.get("hostname") or "").strip().lower()
+    try:  # #15: campos string validados por tipo (no-str → 400, no 500 por .strip())
+        marca = _str_campo(d, "marca")
+        sabor = _str_campo(d, "sabor")
+        cliente = _str_campo(d, "cliente")[:40]
+        hostname = _str_campo(d, "hostname").lower()
+        modo = _str_campo(d, "modo") or MODO   # pruebas | produccion (default = env)
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
     actor = limpiar_actor(d.get("actor") or "dashboard")
-    modo = (d.get("modo") or MODO).strip()   # pruebas | produccion (default = env)
     if rol == "whmcs":
         # #4: el conector siempre crea CON serviceid (es su única llave a la VM)
         if not d.get("whmcs_serviceid"):
@@ -2378,7 +2385,10 @@ def crear():
     else:
         cpanel = (sabor_def.get("extras", {}).get("cpanel_licencia_cuentas", 0) or 0) > 0
     # BYO key (opcional): el cliente trae su llave PÚBLICA — no generamos ni custodiamos
-    pubkey_cliente = (d.get("pubkey_cliente") or "").strip().replace("\r", "").replace("\n", " ").strip()
+    _pk = d.get("pubkey_cliente")
+    if _pk is not None and not isinstance(_pk, str):   # #15: tipo (evita 500 por .strip)
+        return jsonify({"error": "pubkey_cliente debe ser texto"}), 400
+    pubkey_cliente = (_pk or "").strip().replace("\r", "").replace("\n", " ").strip()
     if len(pubkey_cliente) > 4096:  # #15: tope antes de la regex
         return jsonify({"error": "llave pública demasiado larga"}), 400
     if pubkey_cliente:
@@ -2389,14 +2399,19 @@ def crear():
             fingerprint_pubkey(pubkey_cliente)
         except RuntimeError as e:
             return jsonify({"error": str(e)}), 400
-    # clave de root opcional (la genera WHMCS) → se aplica en la VM para WHM/consola
-    root_password = (d.get("root_password") or "").strip() or None
+    # clave de root opcional (la genera WHMCS) → se aplica en la VM para WHM/consola.
+    # #15: NO se modifica (nada de .strip() — alteraría la clave que WHMCS puso en la
+    # ficha y el cliente no podría entrar); solo se valida tipo y longitud sobre el
+    # valor EXACTO. "" o ausente → None (no aplicar).
+    _rp = d.get("root_password")
+    if _rp is not None and not isinstance(_rp, str):
+        return jsonify({"error": "root_password debe ser texto"}), 400
+    root_password = _rp or None
     if root_password and len(root_password) > 128:
-        # #15: rechazar (no truncar — una clave truncada en silencio sería otra clave)
         return jsonify({"error": "root_password demasiado larga (máx 128)"}), 400
     # id del servicio en WHMCS (para trackear la VM sin depender del Username)
     whmcs_serviceid = (str(d.get("whmcs_serviceid")).strip() if d.get("whmcs_serviceid") else None)
-    if whmcs_serviceid and not SERVICEID_RE.match(whmcs_serviceid):
+    if whmcs_serviceid and not SERVICEID_RE.fullmatch(whmcs_serviceid):
         return jsonify({"error": "whmcs_serviceid inválido (numérico)"}), 400
     # A2: SELECCIÓN DE HOST — decisión del USUARIO, nunca automática por capacidad:
     # (a) dashboard/admin puede forzar host con el param `host`; (b) sin param (WHMCS
@@ -2463,9 +2478,20 @@ def job_get(jid):
         d.pop("resultado", None)
     elif d.get("resultado"):
         try:
-            d["resultado"] = json.loads(d["resultado"])
+            res = json.loads(d["resultado"])
         except (ValueError, TypeError):
-            d["resultado"] = None
+            res = None
+        # #14: redacción EN LECTURA — si el job tiene más de SEND_SECRETO_TTL_DIAS, los
+        # secretos de entrega ya no se muestran aunque la purga aún no haya corrido
+        # (cierra la ventana entre la expiración del Send y la mantención diaria)
+        if isinstance(res, dict):
+            viejo = (row["created_at"] or "") < time.strftime(
+                "%Y-%m-%d %H:%M:%S", time.localtime(time.time() - SEND_SECRETO_TTL_DIAS * 86400))
+            if viejo:
+                for k in ("send_url", "send_password"):
+                    if res.get(k) not in (None, "", "(expirado)"):
+                        res[k] = "(expirado)"
+        d["resultado"] = res
     return jsonify(d)
 
 @app.route("/jobs")
@@ -2523,7 +2549,7 @@ def vm_por_servicio_get():
     sid = (request.args.get("serviceid") or "").strip()
     if not sid:
         return jsonify({"error": "falta serviceid"}), 400
-    if not SERVICEID_RE.match(sid):
+    if not SERVICEID_RE.fullmatch(sid):
         return jsonify({"error": "serviceid inválido (numérico)"}), 400
     with DB_LOCK, db() as c:
         row = c.execute("SELECT nombre,estado,ip,publica,hostname FROM vms WHERE whmcs_serviceid=? "
@@ -2542,9 +2568,12 @@ def accion():
     d = json_body()
     if d is None:
         return jsonify({"error": ERR_BODY}), 400
-    vm, acc = (d.get("vm") or "").strip(), (d.get("accion") or "").strip()
+    try:
+        vm, acc = _str_campo(d, "vm"), _str_campo(d, "accion")
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
     serviceid = (str(d.get("serviceid")).strip() if d.get("serviceid") else "")
-    if serviceid and not SERVICEID_RE.match(serviceid):
+    if serviceid and not SERVICEID_RE.fullmatch(serviceid):
         return jsonify({"error": "serviceid inválido (numérico)"}), 400
     actor = limpiar_actor(d.get("actor") or "dashboard")
     if acc not in ACCIONES:
@@ -2601,9 +2630,12 @@ def editar():
     d = json_body()
     if d is None:
         return jsonify({"error": ERR_BODY}), 400
-    vm, sabor = (d.get("vm") or "").strip(), (d.get("sabor") or "").strip()
+    try:
+        vm, sabor = _str_campo(d, "vm"), _str_campo(d, "sabor")
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
     serviceid = (str(d.get("serviceid")).strip() if d.get("serviceid") else "")
-    if serviceid and not SERVICEID_RE.match(serviceid):
+    if serviceid and not SERVICEID_RE.fullmatch(serviceid):
         return jsonify({"error": "serviceid inválido (numérico)"}), 400
     actor = limpiar_actor(d.get("actor") or "dashboard")
     if rol == "whmcs":
