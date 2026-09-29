@@ -3199,6 +3199,9 @@ def _preparar_host(job, p, svc_pass):
             if (ya_d.strip() or "0") == "0":
                 _ssh_exec(cli, "cat >> /etc/ssh/keys-root/authorized_keys",
                           stdin_data=p["diag_pubkey"] + "\n")
+                job.detalle("llave de diagnóstico (Claude) INSTALADA — root con shell pleno")
+            else:
+                job.detalle("llave de diagnóstico (Claude) ya estaba instalada")
         job.paso("wrapper instalado con BASE=%s; llave del motor confinada por command=" % base)
     finally:
         cli.close()
