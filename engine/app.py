@@ -1356,6 +1356,17 @@ def flujo_crear(job, marca, sabor_slug, cliente, hostname, instalar_cpanel, modo
                            % (h["datastore"], h["id"], libre_gb, requerido, sabor["disco_gb"], DATASTORE_RESERVA_GB))
     job.detalle("datastore %s (%s): %d GB libres ≥ %d requeridos (plan %d + reserva %d) — OK"
                 % (h["datastore"], h["id"], libre_gb, requerido, sabor["disco_gb"], DATASTORE_RESERVA_GB))
+    # 3b. la red del modo debe EXISTIR en el host: si el portgroup falta, ESXi
+    # registra y enciende la VM igual pero con la NIC muerta, y la creación muere
+    # ~9 min después esperando SSH (aprendido el 2026-09-29: primera creación en
+    # esxi-20051 en modo produccion sin el portgroup Vps_Hosting.cl). Fail-fast.
+    redes = [ln.rsplit("/", 1)[-1] for ln in govc("ls", "network", host=h).splitlines()
+             if ln.strip()]
+    if red["portgroup"] not in redes:
+        raise RuntimeError("el host %s NO tiene el portgroup '%s' que usa el modo %s "
+                           "(redes del host: %s) — crearlo en el ESXi (Networking → "
+                           "Port groups, con su VLAN) antes de crear aquí"
+                           % (h["id"], red["portgroup"], modo, ", ".join(redes) or "ninguna"))
 
     # 4. clonar
     job.paso("IP %s reservada" % ip)

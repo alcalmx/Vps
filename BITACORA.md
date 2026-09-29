@@ -5,6 +5,23 @@
 
 ---
 
+## 2026-09-29 (martes) — 🧪 1ª creación en esxi-20051: falló por portgroup ausente → pre-chequeo nuevo + VLAN 81 al host
+
+Alcadio lanzó la primera creación en esxi-20051 (`vps-hcl-0018-prueba20`, Cyber Black, **modo
+produccion**). El motor hizo todo bien hasta encender, pero la VM pedía el portgroup
+`Vps_Hosting.cl` (VLAN 81) que NO existía en el host → ESXi la encendió con la NIC muerta y el
+job murió a los 525 s esperando SSH (con reinicio automático y error honesto — los fixes Medios
+en acción). Diagnóstico con la llave diag: el host solo tenía "VM Network"/"Management Network".
+**Acciones:**
+- VM revertida por el flujo estándar (eliminar → papelera 20260929-204428, NAT/IP liberados).
+- Alcadio creó el portgroup `Vps_Hosting.cl` VLAN 81 en **VSwitch1** (uplink vmnic1, link 1G) —
+  la interfaz dedicada al tráfico de clientes, separada de vSwitch0 (administración), igual que
+  producción. Falta confirmar que la boca del switch traiga la VLAN 81 tagged (lo dirá el retry).
+- **Mejora desplegada (fail-fast):** paso 3b en flujo_crear — `govc ls network` en el host
+  destino; si el portgroup del modo no existe, aborta ANTES de clonar con mensaje claro y la
+  lista de redes del host. Suites saga/cupo/wizard/medios verdes; motor redesplegado (health 200).
+  Anotado como deuda menor de Codex (cambio chico, dosificación).
+
 ## 2026-09-29 (martes) — 📊 Tablero de avances y runbook actualizados con el enrolamiento estandarizado
 
 A pedido de Alcadio, el flujo de enrolamiento quedó reflejado en los "Avances del proyecto"
