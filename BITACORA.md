@@ -5,6 +5,16 @@
 
 ---
 
+## 2026-09-29 (martes) — 🏆 PRIMERA CREACIÓN COMPLETA EN esxi-20051 (modo produccion, 15/15 pasos)
+
+Tras crear Alcadio el portgroup `Vps_Hosting.cl` (VLAN 81, VSwitch1/vmnic1) el retry salió
+PERFECTO: `vps-hcl-0019-prueba21` (Cyber Black) — clon -cpanel, disco 153 GB, CBT, IP privada
+10.100.16.239, NAT 1:1 con la pública 38.19.57.102, NetBox ambas IPs, cPanel 138 PREINSTALADO
+con licencia a su IP, WHM 200, llave entregada por Send. Job 122ec7e95012, ~5 min. La VLAN 81
+CONFIRMADA tagged hasta el host nuevo. **esxi-20051 queda validado para producción real** (la
+cadena completa wizard→enrolar→crear funciona en un host levantado de cero). El pre-chequeo de
+portgroup (paso 3b) pasó su primera ejecución real encontrando la red y siguiendo de largo.
+
 ## 2026-09-29 (martes) — 🧪 1ª creación en esxi-20051: falló por portgroup ausente → pre-chequeo nuevo + VLAN 81 al host
 
 Alcadio lanzó la primera creación en esxi-20051 (`vps-hcl-0018-prueba20`, Cyber Black, **modo
