@@ -5,6 +5,19 @@
 
 ---
 
+## 2026-09-29 (martes) — 🚀 DEPLOY de los fixes Medios #18/#19/#22 a noc-monitor (con OK de Alcadio)
+
+Con el "Ok dale" de Alcadio se desplegó el motor con los fixes de Medios aprobados por Codex
+(commits ddde9d9 + 754844e, repo en 357452c):
+- Respaldo del app.py previo en el server: `app.py.bak-medios-20260929`.
+- scp de engine/app.py (md5 verificado igual local/server: 73eaada2…), `podman build -q`,
+  `systemctl restart vps-engine` → activo, `/health` 200 `{"ok":true}`, y el dashboard
+  consultando /hosts y /jobs con 200 en los logs.
+Con esto el motor en producción incluye TODO lo aprobado: wizard Fase D + Medios #16-#23.
+La deuda Codex queda 7/8 (solo falta "VPS personalizado", retenido por dosificación de cuota).
+**Siguiente:** E2E del wizard por Alcadio (re-preparar esxi-20051 desde el dashboard) y su
+primera creación de VPS en el host nuevo — ambas correrán ya con el motor completo.
+
 ## 2026-09-29 (martes) — ✅ Medios #16-#23 APROBADO COMPLETO por Codex (trabajo autónomo)
 
 Mientras Alcadio estaba fuera (loop autónomo), se corrigieron los 3 bloqueantes de Medios
