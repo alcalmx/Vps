@@ -43,7 +43,13 @@ crecimiento de stderr en tempfiles (emisores = nuestros propios hosts).
 Tests: suite test_wizard.py (almacén, inyección, anti-MITM, sin fuga de root en el job,
 re-preparación con 4 trampas, copiar-doradas) + REGRESIÓN COMPLETA verde (12 suites).
 
-**PENDIENTE: DEPLOY con OK del usuario** — motor (app.py+Containerfile+wrapper template),
+**DESPLEGADO 2026-09-29 con OK de Alcadio:** wrappers en AMBOS hosts (respaldos
+.bak-20260929-1117, sintaxis verificada en cada uno), motor rebuild+restart (health 200,
+endpoint /hosts/preparar respondiendo la huella correcta del 20051), dashboard con respaldo
+dashboard.py.bak.20260929-1118-wizard (GET / 200, proxies con 401 sin sesión, tarjeta wizard
+presente). GOVC_PASSWORD_ESXI_20051 RETIRADA de engine.env (respaldo .bak-wizard) para migrar
+esxi-20051 a gestión por wizard — la prueba E2E la hace Alcadio desde el dashboard.
+(era: PENDIENTE DEPLOY) — motor (app.py+Containerfile+wrapper template),
 wrappers actualizados en AMBOS hosts (245 y 20051), dashboard (proxies + tarjeta wizard).
 Tras el deploy: prueba E2E del wizard re-preparando esxi-20051 (está pausado y sin VMs).
 
