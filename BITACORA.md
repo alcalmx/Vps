@@ -5,6 +5,18 @@
 
 ---
 
+## 2026-09-29 (martes) — 📊 Tablero de avances y runbook actualizados con el enrolamiento estandarizado
+
+A pedido de Alcadio, el flujo de enrolamiento quedó reflejado en los "Avances del proyecto"
+(`/vps` → docs/tablero.html, publicado en nginx con respaldo): nota "Ahora mismo" con el hito,
+ítems nuevos en Fase 3 (multi-host ✔ + wizard ✔, 55%→70%, global 78%→83%), "Host de pruebas —
+pedir a Fabián" marcado RESUELTO con esxi-20051, esquema multi-host, y el checklist técnico
+anotado como "lo hace el wizard". RUNBOOK-ENROLAR-HOST.md ahora abre declarando el wizard como
+CAMINO OFICIAL (el script queda de plan B/auditoría). Ajustes del mismo día tras las pruebas de
+Alcadio: error humano cuando el host rechaza la password ("el host RECHAZÓ la password de root…")
+y el mensaje de la llave diag anexado al cierre del paso 3 (detalle() era sobrescrito) — commit
+5d1e130, motor redesplegado.
+
 ## 2026-09-29 (martes) — ✅ E2E del wizard VALIDADO por Alcadio + checkbox de llave de Claude + tarjeta manual retirada
 
 **E2E real del wizard (Alcadio):** se borró esxi-20051 del motor y Alcadio lo re-enroló

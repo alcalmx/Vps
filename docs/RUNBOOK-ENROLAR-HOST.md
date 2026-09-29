@@ -5,13 +5,24 @@
 > [../README.md](../README.md). Todo cambio de código sin Codex queda en
 > [pendiente-revision-codex.md](pendiente-revision-codex.md).
 
+## ✅ CAMINO OFICIAL desde 2026-09-29: el WIZARD del dashboard
+
+Las Fases A y B de este runbook ya **no se ejecutan a mano**: el wizard
+(dashboard → pestaña Motor → "Preparar host nuevo") las hace completas — huella cotejada
+por el humano contra la consola, rol `VpsOperator` + `svc-vps` rotado, wrapper confinado,
+huella pinneada, secreto al almacén del motor, registro pausado y validación en vivo.
+Incluye un checkbox opcional para instalar la **llave de diagnóstico de Claude** (Fase 0).
+Luego: botón "Copiar doradas" (streaming vía el motor) → **Activar**. Validado E2E el
+2026-09-29 sobre esxi-20051. Este runbook queda como **referencia de QUÉ hace el wizard**,
+para auditoría, y como plan B manual (`enrolar-host.sh`) si el dashboard no estuviera.
+
 ## Resumen del flujo
 
 ```
-Fase 0  Conectividad + acceso de diagnóstico (Claude)   [este VPS + host]
-Fase A  Securización del host                            [enrolar-host.sh en noc-monitor]
-Fase B  Registro en el motor                             [engine.env + dashboard]
-Fase C  Cupo + prueba + demos → producción              [dashboard + gerencia]
+Fase 0  Conectividad + acceso de diagnóstico (Claude)   [checkbox del wizard, o a mano]
+Fase A  Securización del host                            [WIZARD (antes: enrolar-host.sh)]
+Fase B  Registro en el motor                             [WIZARD (antes: engine.env + dashboard)]
+Fase C  Cupo + doradas + prueba + demos → producción    [botones del dashboard + gerencia]
 ```
 
 El host **solo** queda operativo para el motor cuando la Fase B valida EN VIVO (API + wrapper
