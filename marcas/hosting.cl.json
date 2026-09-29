@@ -17,12 +17,12 @@
     "nota": "Red de PRODUCCIÓN 'Vps Hosting' (usuario 2026-09-11): portgroup 'Vps_Hosting.cl' en vSwitch4, VLAN 81, uplink vmnic0 por cable directo al switch del rack1. La VM se crea en este portgroup y toma la IP del patrón de búsqueda (ver ip_libre). 'publica_rango_prueba' [100,102] restringe la IP pública a 38.19.57.100-102 SOLO para pruebas (quitar para producción real → toma la más alta libre). Confirmar gateway .1."
   },
   "red_pruebas": {
-    "subred": "192.168.122.0/24",
-    "gateway": "192.168.122.1",
+    "subred": "192.168.200.0/24",
+    "gateway": "192.168.200.1",
     "mascara": "255.255.255.0",
     "dns": ["1.1.1.1", "8.8.8.8"],
-    "portgroup": "Switch Interno 1 Data ethr6",
-    "nota": "Para las pruebas en 10.100.37.245 (usuario 2026-09-10). Portgroup verificado: es el que usan noc-monitor y el VPS de IA (192.168.122.x). Mismo proceso de buscar IP libre. Sin IP pública/NAT en pruebas."
+    "portgroup": "VM Network",
+    "nota": "Desde 2026-09-29: pruebas en el host NUEVO esxi-20051 (192.168.200.51), portgroup 'VM Network' de su vSwitch0 (única red del host; el ESXi es .51 y el gw .1 — el barrido ping los detecta ocupados). noc-monitor alcanza esta red (ruta abierta 28-09). Sin IP pública/NAT en pruebas. ANTERIOR (esxi-245, por si se reactiva para pruebas): subred 192.168.122.0/24 gw .1, portgroup 'Switch Interno 1 Data ethr6'."
   },
   "ip_libre": {
     "metodo": "copiar del dashboard NOC /api/alta/privada (dashboard.py ~9336)",
