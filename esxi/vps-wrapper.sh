@@ -128,44 +128,63 @@ case "$cmd" in
     valid_plantilla "$1" || die "plantilla inválida: $1"
     [ -e "$BASE/_plantillas/$1" ] || die "no existe: $1"
     cd "$BASE/_plantillas" || die "no pude entrar a _plantillas"
-    # rc de AMBOS lados del pipe (sin pipefail en este sh): un tar roto a mitad
-    # del stream debe salir con error, no esconderse tras el rc de gzip
-    rcf="/tmp/.exp.$$.rc"
-    ( tar cf - "$1"; echo $? > "$rcf" ) | gzip -1
+    # rc de AMBOS lados del pipe, con archivo de control en dir EXCLUSIVO (mkdir
+    # sin -p falla si existe → nadie puede pre-plantar un symlink con ese nombre)
+    ctl="/tmp/.exp.$$"
+    mkdir "$ctl" || die "control dir en uso"
+    ( tar cf - "$1"; echo $? > "$ctl/rc" ) | gzip -1
     grc=$?
-    trc=$(cat "$rcf" 2>/dev/null); rm -f "$rcf"
+    trc=$(cat "$ctl/rc" 2>/dev/null); rm -rf "$ctl"
     [ "$grc" = "0" ] && [ "$trc" = "0" ] || die "export de $1 falló (tar=${trc:-?} gzip=$grc)" ;;
 
-  import-plantilla)  # import-plantilla <nombre>  ← tar.gz por stdin (staging + validación + mv)
+  import-plantilla)  # ← tar.gz por stdin. VALIDA TODO y deja ".ok.<n>" SIN publicar:
+    # el motor confirma con publicar-plantilla SOLO si el export también terminó rc=0
+    # (una copia de un export fallido jamás queda como plantilla usable).
     valid_plantilla "$1" || die "plantilla inválida: $1"
     [ -e "$BASE/_plantillas/$1" ] && die "ya existe: $1"
-    # staging huérfano (conexión cortada a mitad de copia): limpiar los >3h
-    find "$BASE/_plantillas" -maxdepth 1 -name '.stage.*' -mmin +180 -exec rm -rf {} + 2>/dev/null
+    find "$BASE/_plantillas" -maxdepth 1 \( -name '.stage.*' -o -name '.ok.*' \) -mmin +180 -exec rm -rf {} + 2>/dev/null
+    rm -rf "$BASE/_plantillas/.ok.$1"     # resto de un intento anterior no confirmado
     st="$BASE/_plantillas/.stage.$$"
-    mkdir -p "$st" || die "no pude crear staging"
-    # rc de ambos lados: un CRC roto de gzip no puede esconderse tras el rc de tar
-    rcf="$st/.gunzip.rc"
-    ( gunzip -c; echo $? > "$rcf" ) | tar xf - -C "$st"
-    trc=$?
-    grc=$(cat "$rcf" 2>/dev/null); rm -f "$rcf"
-    if [ "$trc" != "0" ] || [ "$grc" != "0" ]; then
-      rm -rf "$st"; die "importación de $1 falló (gunzip=${grc:-?} tar=$trc — stream incompleto/corrupto)"
-    fi
-    # el CONTENIDO no se confía (el emisor podría no ser nuestro export): una sola
-    # entrada tope con el nombre esperado, sin symlinks/hardlinks/especiales, y del
-    # tipo correcto (dir para doradas, archivo para .iso)
-    n_top=$(ls -A "$st" | wc -l)
-    if [ "$n_top" != "1" ] || [ ! -e "$st/$1" ]; then
-      rm -rf "$st"; die "el tar debía contener SOLO '$1' (trae $n_top entradas tope)"
-    fi
-    if find "$st" ! -type f ! -type d | grep -q .; then
-      rm -rf "$st"; die "el tar trae tipos no permitidos (symlink/especial) — rechazado"
-    fi
+    mkdir "$st" || die "staging en uso"
+    fail() { rm -rf "$st"; die "$*"; }
+    ctl="$st/ctl"; x="$st/x"
+    mkdir "$ctl" "$x" || fail "no pude crear ctl/x"
+    # 1) SPOOL: el stream completo a disco ANTES de tocar tar (el CRC de gzip se
+    #    verifica sobre el archivo; ningún rc vive donde extrae contenido ajeno)
+    cat > "$ctl/spool.tgz" || fail "no pude recibir el stream"
+    gunzip -t "$ctl/spool.tgz" 2>/dev/null || fail "stream gzip corrupto (CRC)"
+    # 2) PRE-SCAN de los miembros ANTES de extraer NADA: nombres confinados a
+    #    '$1[/...]' sin '..', y tipos SOLO archivo/directorio (ni symlink 'l', ni
+    #    hardlink 'h', ni dispositivos) — cierra el escape DURANTE la extracción
+    gunzip -c "$ctl/spool.tgz" | tar tf - > "$ctl/nombres" || fail "tar ilegible"
+    grep -q . "$ctl/nombres" || fail "tar vacío"
+    while IFS= read -r m; do
+      case "$m" in "$1"|"$1"/*) : ;; *) fail "miembro fuera de '$1': $m" ;; esac
+      case "$m" in *../*|*/..|..*) fail "miembro con '..': $m" ;; esac
+    done < "$ctl/nombres"
+    gunzip -c "$ctl/spool.tgz" | tar tvf - | cut -c1 | grep -vE '^[d-]' | grep -q . \
+      && fail "el tar trae tipos no permitidos (symlink/hardlink/especial)"
+    # 3) extraer en área limpia y re-validar (cinturón y tirantes)
+    gunzip -c "$ctl/spool.tgz" | tar xf - -C "$x" || fail "extracción falló"
+    rm -f "$ctl/spool.tgz"
+    [ "$(ls -A "$x" | wc -l)" = "1" ] && [ -e "$x/$1" ] || fail "contenido inesperado tras extraer"
+    find "$x" ! -type f ! -type d | grep -q . && fail "tipos no permitidos post-extracción"
+    find "$x" -type f ! -links 1 | grep -q . && fail "hardlinks no permitidos"
     case "$1" in
-      dorada-*) [ -d "$st/$1" ] || { rm -rf "$st"; die "$1 debía ser directorio"; } ;;
-      *)        [ -f "$st/$1" ] || { rm -rf "$st"; die "$1 debía ser archivo"; } ;;
+      dorada-*) [ -d "$x/$1" ] || fail "$1 debía ser directorio" ;;
+      *)        [ -f "$x/$1" ] || fail "$1 debía ser archivo" ;;
     esac
-    mv "$st/$1" "$BASE/_plantillas/$1" && rm -rf "$st" && log "IMPORT: $1" && echo OK ;;
+    mv "$x/$1" "$BASE/_plantillas/.ok.$1" && rm -rf "$st" && log "IMPORT(validada): $1" && echo OK ;;
+
+  publicar-plantilla)  # publica la copia VALIDADA .ok.<n> (2ª fase, la confirma el motor)
+    valid_plantilla "$1" || die "plantilla inválida: $1"
+    [ -e "$BASE/_plantillas/.ok.$1" ] || die "no hay copia validada de: $1"
+    [ -e "$BASE/_plantillas/$1" ] && die "ya existe: $1"
+    mv "$BASE/_plantillas/.ok.$1" "$BASE/_plantillas/$1" && log "PUBLISH: $1" && echo OK ;;
+
+  descartar-plantilla)  # descarta una copia recibida NO confirmada (fallo del lado export)
+    valid_plantilla "$1" || die "plantilla inválida: $1"
+    rm -rf "$BASE/_plantillas/.ok.$1" && echo OK ;;
 
   thin-plantilla)    # thin-plantilla <dorada>  → punch-zero post-import (recupera thin)
     valid_dorada "$1" || die "solo doradas: $1"

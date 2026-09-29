@@ -2766,6 +2766,19 @@ PRIVS_VPSOPERATOR = (
     "VirtualMachine.State.CreateSnapshot VirtualMachine.State.RemoveSnapshot "
     "VirtualMachine.State.RevertToSnapshot").split()
 
+def _fsync_dir(ruta):
+    """fsync del DIRECTORIO tras un os.replace (durabilidad del rename ante caída).
+    Best-effort: en plataformas sin O_RDONLY sobre directorios (Windows de los
+    tests) simplemente no aplica."""
+    try:
+        dfd = os.open(ruta, os.O_RDONLY)
+        try:
+            os.fsync(dfd)
+        finally:
+            os.close(dfd)
+    except OSError:
+        pass
+
 def secreto_host(nombre):
     """Password de la API de un host: primero el entorno (engine.env — hosts
     enrolados a mano), luego el almacén del wizard (secretos.env bajo /data, 600).
@@ -2803,6 +2816,7 @@ def secreto_host_guardar(nombre, valor):
                 f.flush()
                 os.fsync(f.fileno())
             os.replace(tmp, SECRETOS_HOSTS_PATH)
+            _fsync_dir(ENROL_DIR)   # durabilidad del rename ante caída
         except BaseException:
             try:
                 os.unlink(tmp)
@@ -2841,8 +2855,14 @@ def pin_host_key(ip, puerto, key):
         try:
             os.close(fd)
             hk.save(tmp)
+            fd2 = os.open(tmp, os.O_RDWR)   # fsync del contenido antes del rename
+            try:
+                os.fsync(fd2)
+            finally:
+                os.close(fd2)
             os.chmod(tmp, 0o644)   # el binario ssh (streaming) también lo lee
             os.replace(tmp, KNOWN_HOSTS_DATA)
+            _fsync_dir(ENROL_DIR)
         except BaseException:
             try:
                 os.unlink(tmp)
@@ -2861,28 +2881,60 @@ def cliente_root_esxi(ip, puerto, password, key_confirmada):
     return cli
 
 def _ssh_exec(cli, comando, stdin_data=None, timeout=60):
-    """exec_command con rc verificado. Drena stdout/stderr ANTES de esperar el
-    exit status (esperarlo primero se bloquea si el remoto llena la ventana SSH —
-    Codex wizard #4) y acota la espera del status con deadline propio. El mensaje
-    de error NUNCA incluye el stdin (por ahí viajan llaves/artefactos)."""
-    stdin, out, err = cli.exec_command(comando, timeout=timeout)   # timeout → reads
+    """exec_command con rc verificado. Drena stdout y stderr CONCURRENTEMENTE
+    (comparten la ventana SSH: leerlos en secuencia permite al remoto bloquear el
+    canal llenando el otro stream — Codex wizard r2 #4), con plazo GLOBAL por reloj
+    monotónico y tope de captura (se sigue drenando, se deja de guardar). El error
+    NUNCA incluye el stdin (por ahí viajan llaves/artefactos)."""
+    stdin, out, err = cli.exec_command(comando, timeout=10)   # timeout POR lectura
+    fin = time.monotonic() + timeout
+    e_parts, e_tot = [], [0]
+    def _drenar_err():
+        try:
+            while True:
+                b = err.read(32768)
+                if not b:
+                    return
+                if e_tot[0] < 65536:
+                    e_parts.append(b)
+                    e_tot[0] += len(b)
+        except Exception:  # noqa: BLE001 — canal cerrado/timeout: decide el principal
+            return
+    th = threading.Thread(target=_drenar_err, daemon=True)
+    th.start()
+    o_parts, o_tot = [], 0
     try:
         if stdin_data is not None:
             stdin.write(stdin_data)
             stdin.flush()
         stdin.channel.shutdown_write()
-        o = out.read().decode(errors="replace")    # hasta EOF (con socket timeout)
-        e = err.read().decode(errors="replace")
-    except socket.timeout:
-        raise RuntimeError("'%s': timeout de %ds leyendo la salida remota"
-                           % (comando.split()[0], timeout)) from None
-    fin = time.time() + 30   # tras EOF de ambos streams el status llega enseguida
+        while True:
+            if time.monotonic() > fin:
+                raise RuntimeError("'%s': plazo total de %ds agotado leyendo la salida"
+                                   % (comando.split()[0], timeout))
+            try:
+                b = out.read(32768)
+            except socket.timeout:
+                continue   # sin datos en esta ventana de 10s; manda el plazo global
+            if not b:
+                break
+            if o_tot < 262144:
+                o_parts.append(b)
+                o_tot += len(b)
+    except BaseException:
+        out.channel.close()   # descuelga también al hilo de stderr
+        raise
+    th.join(timeout=10)
+    fin_rc = time.monotonic() + 30   # tras EOF el status llega enseguida
     while not out.channel.exit_status_ready():
-        if time.time() > fin:
+        if time.monotonic() > fin_rc:
+            out.channel.close()
             raise RuntimeError("'%s': el exit status no llegó (canal colgado)"
                                % comando.split()[0])
         time.sleep(0.2)
     rc = out.channel.recv_exit_status()
+    o = b"".join(o_parts).decode(errors="replace")
+    e = b"".join(e_parts).decode(errors="replace")
     if rc != 0:
         raise RuntimeError("'%s' rc=%d: %s" % (comando.split()[0], rc, (e or o).strip()[:200]))
     return o
@@ -2985,7 +3037,14 @@ def _preparar_host(job, p, svc_pass):
                       ip, p["root_password"])
         govc_root(["permissions.set", "-principal", "svc-vps", "-role", "VpsOperator"],
                   ip, p["root_password"])
-        job.paso("svc-vps con rol VpsOperator (46 privilegios verificados; password generada)")
+        # una cuenta svc-vps PREVIA podría conservar permisos con otros roles en
+        # otras rutas — se verifica que TODOS sus permisos sean VpsOperator
+        permisos = govc_root(["permissions.ls"], ip, p["root_password"], timeout=30)
+        for lnp in permisos.splitlines():
+            if "svc-vps" in lnp and "VpsOperator" not in lnp:
+                raise RuntimeError("svc-vps conserva un permiso con OTRO rol (%s) — "
+                                   "retirarlo a mano antes de enrolar" % lnp.strip()[:100])
+        job.paso("svc-vps con rol VpsOperator (46 privilegios y permisos verificados)")
 
         # llave dedicada del motor (RSA: ESXi 8 RECHAZA ed25519) + wrapper + forced-command
         base = "/vmfs/volumes/%s/VPS" % datastore
@@ -3097,7 +3156,10 @@ def flujo_copiar_doradas(job, origen, destino):
         t0 = time.time()
         exp = imp = None
         # stderr de ambos a TEMPFILES (un PIPE sin drenar se llena y bloquea la
-        # copia — Codex wizard #4); kill garantizado de ambos procesos al salir
+        # copia); kill garantizado e INDEPENDIENTE de cada proceso al salir. El
+        # import deja la copia VALIDADA en .ok.<n> sin publicar: la publicación
+        # es una 2ª fase que exige AMBOS rc=0 (un export fallido con stream
+        # gzip-válido ya no puede quedar como plantilla usable — Codex r2 #5).
         with tempfile.TemporaryFile() as fe_exp, tempfile.TemporaryFile() as fe_imp:
             try:
                 exp = subprocess.Popen(_ssh_wrapper_argv(origen, "export-plantilla %s" % n),
@@ -3110,19 +3172,29 @@ def flujo_copiar_doradas(job, origen, destino):
             except subprocess.TimeoutExpired:
                 raise RuntimeError("copia de %s: timeout — se terminaron ambos procesos" % n) from None
             finally:
-                for pr in (exp, imp):
-                    if pr is not None and pr.poll() is None:
+                for pr in (exp, imp):   # cada proceso con su propio try (r2 'otros')
+                    if pr is None or pr.poll() is not None:
+                        continue
+                    try:
                         pr.kill()
                         pr.wait(timeout=10)
+                    except Exception:  # noqa: BLE001 — seguir con el otro proceso
+                        pass
             if exp.returncode != 0 or imp.returncode != 0:
+                try:   # descartar la copia recibida no confirmada (best-effort)
+                    esxi_ssh("descartar-plantilla %s" % n, host=destino, timeout=60)
+                except Exception:  # noqa: BLE001
+                    pass
                 fe_exp.seek(0)
                 fe_imp.seek(0)
                 raise RuntimeError("copia de %s falló (export rc=%s / import rc=%s): %s | %s"
                                    % (n, exp.returncode, imp.returncode,
-                                      fe_exp.read().decode(errors="replace").strip()[:150],
-                                      fe_imp.read().decode(errors="replace").strip()[:150]))
+                                      fe_exp.read(2048).decode(errors="replace").strip()[:150],
+                                      fe_imp.read(2048).decode(errors="replace").strip()[:150]))
+        # 2ª fase: publicar SOLO con ambos rc=0 confirmados por el motor
+        esxi_ssh("publicar-plantilla %s" % n, host=destino, timeout=120)
         copiadas.append(n)
-        job.detalle("%s copiada en %ds" % (n, int(time.time() - t0)))
+        job.detalle("%s copiada y publicada en %ds" % (n, int(time.time() - t0)))
     job.paso("%d plantillas copiadas" % len(copiadas))
     for n in copiadas:
         if n.startswith("dorada-"):
@@ -3192,10 +3264,17 @@ def hosts_preparar():
             return jsonify({"error": "diag_pubkey inválida — una línea 'ssh-rsa AAAA… comentario' "
                                      "(RSA: ESXi 8 no acepta ed25519)"}), 400
     actor = limpiar_actor(d.get("actor") or "dashboard")
-    job, activo = lanzar_job_exclusivo("preparar-host", hid, actor, PASOS_PREPARAR)
-    if not job:
+    # la RESERVA del gate es por IDENTIDAD FÍSICA ("prep-<ip>"): dos ids distintos
+    # hacia la misma IP no pueden rotar svc-vps a la vez (Codex wizard r2 #3). El
+    # job por id (copiar-doradas, etc.) se chequea aparte.
+    ocupado = job_activo(hid)
+    if ocupado:
         return jsonify({"error": "el host %s tiene un job en curso (%s, id %s)"
-                        % (hid, activo["tipo"], activo["id"])}), 409
+                        % (hid, ocupado["tipo"], ocupado["id"])}), 409
+    job, activo = lanzar_job_exclusivo("preparar-host", "prep-" + ip, actor, PASOS_PREPARAR)
+    if not job:
+        return jsonify({"error": "la IP %s ya tiene una preparación en curso (%s, id %s)"
+                        % (ip, activo["tipo"], activo["id"])}), 409
     params = {"id": hid, "ip": ip, "ssh_port": puerto, "datastore": datastore,
               "huella": huella, "root_password": _rp, "diag_pubkey": diag, "notas": notas}
     err = lanzar_o_fallar(job, lambda j: flujo_preparar_host(j, params))
@@ -3227,6 +3306,13 @@ def hosts_copiar_doradas(hid):
         return jsonify({"error": "host de origen '%s' no existe" % desde}), 400
     if origen["id"] == destino["id"]:
         return jsonify({"error": "origen y destino no pueden ser el mismo host"}), 400
+    # ni el origen ni el destino pueden estar en re-preparación (rotación de
+    # credenciales a mitad de copia = fallo raro y difícil de diagnosticar)
+    for h in (origen, destino):
+        prep = job_activo("prep-" + (h.get("ip") or ""))
+        if prep:
+            return jsonify({"error": "el host %s está en preparación (job %s) — espera a que "
+                                     "termine" % (h["id"], prep["id"])}), 409
     actor = limpiar_actor(d.get("actor") or "dashboard")
     job, activo = lanzar_job_exclusivo("copiar-doradas", hid, actor, PASOS_DORADAS)
     if not job:
@@ -3288,6 +3374,10 @@ def hosts_add():
         return jsonify({"error": "ssh_key es obligatorio"}), 400
     if host_get(hid):
         return jsonify({"error": "el host %s ya existe" % hid}), 409
+    otro_ip = next((h for h in hosts_lista() if h.get("ip") == ip), None)
+    if otro_ip:
+        return jsonify({"error": "la ip %s ya pertenece al host %s (dos identidades sobre el "
+                                 "mismo host físico no se permiten)" % (ip, otro_ip["id"])}), 409
     # #4: la URL de la API se DERIVA de la IP validada (conexión directa a ESXi) — no
     # se acepta api_url libre, para que SSH (ip) y API no puedan apuntar a hosts
     # distintos (clonar en uno y registrar en otro).
@@ -3325,8 +3415,15 @@ def hosts_patch(hid):
         return jsonify({"error": "unauthorized"}), 401
     if rol != "admin":
         return jsonify({"error": ERR_SOLO_ADMIN}), 403
-    if not host_get(hid):
+    h_act = host_get(hid)
+    if not h_act:
         return jsonify({"error": "host desconocido: %s" % hid}), 404
+    # con una preparación (rotación de credenciales) en curso sobre esta IP, ni
+    # activarlo ni tocarlo: el estado debe seguir bajo control del wizard (r2 #3)
+    prep = job_activo("prep-" + (h_act.get("ip") or ""))
+    if prep:
+        return jsonify({"error": "el host %s está en preparación (job %s) — espera a que "
+                                 "termine" % (hid, prep["id"])}), 409
     d = json_body()
     if d is None:
         return jsonify({"error": ERR_BODY}), 400
@@ -3368,8 +3465,13 @@ def hosts_delete(hid):
         return jsonify({"error": "unauthorized"}), 401
     if rol != "admin":
         return jsonify({"error": ERR_SOLO_ADMIN}), 403
-    if not host_get(hid):
+    h_del = host_get(hid)
+    if not h_del:
         return jsonify({"error": "host desconocido: %s" % hid}), 404
+    prep = job_activo("prep-" + (h_del.get("ip") or ""))
+    if prep:
+        return jsonify({"error": "el host %s está en preparación (job %s) — no se puede quitar "
+                                 "ahora" % (hid, prep["id"])}), 409
     with DB_LOCK, db() as c:
         n = c.execute("SELECT COUNT(*) n FROM vms WHERE host=?", (hid,)).fetchone()["n"]
         if n:
@@ -3389,7 +3491,8 @@ def reconciliar():
         return jsonify({"error": "unauthorized"}), 401
     if rol != "admin":
         return jsonify({"error": ERR_SOLO_ADMIN}), 403
-    actor = limpiar_actor((request.get_json(force=True, silent=True) or {}).get("actor") or "dashboard")
+    _dr = request.get_json(force=True, silent=True)   # una LISTA JSON válida daría 500 en .get
+    actor = limpiar_actor((_dr.get("actor") if isinstance(_dr, dict) else None) or "dashboard")
     job, activo = lanzar_job_exclusivo("reconciliar", "-", actor, PASOS_RECONCILIAR)
     if not job:
         return jsonify({"ok": True, "job_id": activo["id"],
