@@ -2993,8 +2993,14 @@ def cliente_root_esxi(ip, puerto, password, key_confirmada):
     cli = paramiko.SSHClient()
     cli.get_host_keys().add(_kh_nombre(ip, puerto), key_confirmada.get_name(), key_confirmada)
     cli.set_missing_host_key_policy(paramiko.RejectPolicy())
-    cli.connect(ip, port=int(puerto), username="root", password=password,
-                timeout=15, allow_agent=False, look_for_keys=False)
+    try:
+        cli.connect(ip, port=int(puerto), username="root", password=password,
+                    timeout=15, allow_agent=False, look_for_keys=False)
+    except (paramiko.AuthenticationException, paramiko.BadAuthenticationType):
+        # el texto crudo de paramiko ("Bad authentication type…") confunde; y ojo:
+        # NO incluir la password en el mensaje (frontera de redacción aparte)
+        raise RuntimeError("el host RECHAZÓ la password de root — verifica la clave "
+                           "(nada se modificó en el host)") from None
     return cli
 
 def _ssh_exec(cli, comando, stdin_data=None, timeout=60):
@@ -3192,6 +3198,7 @@ def _preparar_host(job, p, svc_pass):
                        % b64[:40])
         if (ya.strip() or "0") == "0":
             _ssh_exec(cli, "cat >> /etc/ssh/keys-root/authorized_keys", stdin_data=linea + "\n")
+        diag_msg = ""   # se anexa al CIERRE del paso: job.paso() sobrescribe los detalle()
         if p.get("diag_pubkey"):   # llave de diagnóstico IA/humano: shell pleno, SIN command=
             db64 = p["diag_pubkey"].split()[1][:40]
             ya_d = _ssh_exec(cli, "grep -cF '%s' /etc/ssh/keys-root/authorized_keys 2>/dev/null || true"
@@ -3199,10 +3206,11 @@ def _preparar_host(job, p, svc_pass):
             if (ya_d.strip() or "0") == "0":
                 _ssh_exec(cli, "cat >> /etc/ssh/keys-root/authorized_keys",
                           stdin_data=p["diag_pubkey"] + "\n")
-                job.detalle("llave de diagnóstico (Claude) INSTALADA — root con shell pleno")
+                diag_msg = "; llave de diagnóstico (Claude) INSTALADA (shell pleno)"
             else:
-                job.detalle("llave de diagnóstico (Claude) ya estaba instalada")
-        job.paso("wrapper instalado con BASE=%s; llave del motor confinada por command=" % base)
+                diag_msg = "; llave de diagnóstico (Claude) ya estaba instalada"
+        job.paso("wrapper instalado con BASE=%s; llave del motor confinada por command=%s"
+                 % (base, diag_msg))
     finally:
         cli.close()
 
