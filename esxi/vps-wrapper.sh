@@ -128,18 +128,44 @@ case "$cmd" in
     valid_plantilla "$1" || die "plantilla inválida: $1"
     [ -e "$BASE/_plantillas/$1" ] || die "no existe: $1"
     cd "$BASE/_plantillas" || die "no pude entrar a _plantillas"
-    tar cf - "$1" | gzip -1 ;;
+    # rc de AMBOS lados del pipe (sin pipefail en este sh): un tar roto a mitad
+    # del stream debe salir con error, no esconderse tras el rc de gzip
+    rcf="/tmp/.exp.$$.rc"
+    ( tar cf - "$1"; echo $? > "$rcf" ) | gzip -1
+    grc=$?
+    trc=$(cat "$rcf" 2>/dev/null); rm -f "$rcf"
+    [ "$grc" = "0" ] && [ "$trc" = "0" ] || die "export de $1 falló (tar=${trc:-?} gzip=$grc)" ;;
 
-  import-plantilla)  # import-plantilla <nombre>  ← tar.gz por stdin (staging + mv)
+  import-plantilla)  # import-plantilla <nombre>  ← tar.gz por stdin (staging + validación + mv)
     valid_plantilla "$1" || die "plantilla inválida: $1"
     [ -e "$BASE/_plantillas/$1" ] && die "ya existe: $1"
+    # staging huérfano (conexión cortada a mitad de copia): limpiar los >3h
+    find "$BASE/_plantillas" -maxdepth 1 -name '.stage.*' -mmin +180 -exec rm -rf {} + 2>/dev/null
     st="$BASE/_plantillas/.stage.$$"
     mkdir -p "$st" || die "no pude crear staging"
-    if gunzip -c | tar xf - -C "$st" && [ -e "$st/$1" ]; then
-      mv "$st/$1" "$BASE/_plantillas/$1" && rm -rf "$st" && log "IMPORT: $1" && echo OK
-    else
-      rm -rf "$st"; die "importación de $1 falló (stream incompleto o nombre distinto)"
-    fi ;;
+    # rc de ambos lados: un CRC roto de gzip no puede esconderse tras el rc de tar
+    rcf="$st/.gunzip.rc"
+    ( gunzip -c; echo $? > "$rcf" ) | tar xf - -C "$st"
+    trc=$?
+    grc=$(cat "$rcf" 2>/dev/null); rm -f "$rcf"
+    if [ "$trc" != "0" ] || [ "$grc" != "0" ]; then
+      rm -rf "$st"; die "importación de $1 falló (gunzip=${grc:-?} tar=$trc — stream incompleto/corrupto)"
+    fi
+    # el CONTENIDO no se confía (el emisor podría no ser nuestro export): una sola
+    # entrada tope con el nombre esperado, sin symlinks/hardlinks/especiales, y del
+    # tipo correcto (dir para doradas, archivo para .iso)
+    n_top=$(ls -A "$st" | wc -l)
+    if [ "$n_top" != "1" ] || [ ! -e "$st/$1" ]; then
+      rm -rf "$st"; die "el tar debía contener SOLO '$1' (trae $n_top entradas tope)"
+    fi
+    if find "$st" ! -type f ! -type d | grep -q .; then
+      rm -rf "$st"; die "el tar trae tipos no permitidos (symlink/especial) — rechazado"
+    fi
+    case "$1" in
+      dorada-*) [ -d "$st/$1" ] || { rm -rf "$st"; die "$1 debía ser directorio"; } ;;
+      *)        [ -f "$st/$1" ] || { rm -rf "$st"; die "$1 debía ser archivo"; } ;;
+    esac
+    mv "$st/$1" "$BASE/_plantillas/$1" && rm -rf "$st" && log "IMPORT: $1" && echo OK ;;
 
   thin-plantilla)    # thin-plantilla <dorada>  → punch-zero post-import (recupera thin)
     valid_dorada "$1" || die "solo doradas: $1"

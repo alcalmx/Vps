@@ -27,6 +27,7 @@ import json
 import os
 import re
 import secrets
+import socket
 import sqlite3
 import subprocess
 import tempfile
@@ -2738,6 +2739,14 @@ def _str_campo(d, clave):
 # del host la confirma un humano ANTES de ejecutar (flujo en 2 pasos, sin estado
 # server-side: el paso 2 re-verifica que la huella actual == la confirmada).
 
+# datastore = UN componente de ruta (va interpolado en comandos SSH, en BASE= del
+# wrapper y en command= de authorized_keys → gramática ESTRICTA anti-inyección:
+# sin espacios, comillas, $, ;, /, .. ni controles — hallazgo Codex wizard #1)
+DATASTORE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
+# candados del almacén del wizard (secretos.env / known_hosts): las escrituras son
+# read-modify-write → serializadas (dos preparaciones concurrentes no se pisan)
+ENROL_LOCK = threading.Lock()
+
 # los 46 privilegios EXACTOS del rol VpsOperator (idénticos a enrolar-host.sh / esxi-245)
 PRIVS_VPSOPERATOR = (
     "Datastore.AllocateSpace Datastore.Browse Datastore.DeleteFile Datastore.FileManagement "
@@ -2769,32 +2778,45 @@ def secreto_host(nombre):
             for ln in f:
                 if ln.startswith(nombre + "="):
                     return ln.rstrip("\r\n").split("=", 1)[1]
-    except OSError:
-        pass
-    return None
+    except FileNotFoundError:
+        pass   # almacén aún no existe = sin secreto. Cualquier OTRO error de
+    return None   # lectura SÍ propaga (fail-closed, no fingir almacén vacío)
 
 def secreto_host_guardar(nombre, valor):
-    """Guarda/rota un secreto del almacén del wizard: archivo 600 bajo /data,
-    escrito atómico (tmp+rename). El valor jamás pasa por logs/BD/auditoría."""
+    """Guarda/rota un secreto del almacén del wizard: archivo 600 bajo /data.
+    Read-modify-write BAJO ENROL_LOCK (dos jobs no se pisan), tmp ÚNICO 600 +
+    os.replace atómico + fsync. El valor jamás pasa por logs/BD/auditoría."""
     os.makedirs(ENROL_DIR, exist_ok=True)
-    lineas = []
-    try:
-        with open(SECRETOS_HOSTS_PATH, encoding="utf-8") as f:
-            lineas = [ln.rstrip("\n") for ln in f
-                      if ln.strip() and not ln.startswith(nombre + "=")]
-    except OSError:
-        pass
-    lineas.append("%s=%s" % (nombre, valor))
-    fd = os.open(SECRETOS_HOSTS_PATH + ".tmp", os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(fd, "w", encoding="utf-8") as f:
-        f.write("\n".join(lineas) + "\n")
-    os.replace(SECRETOS_HOSTS_PATH + ".tmp", SECRETOS_HOSTS_PATH)
+    with ENROL_LOCK:
+        lineas = []
+        try:
+            with open(SECRETOS_HOSTS_PATH, encoding="utf-8") as f:
+                lineas = [ln.rstrip("\n") for ln in f
+                          if ln.strip() and not ln.startswith(nombre + "=")]
+        except FileNotFoundError:
+            pass
+        lineas.append("%s=%s" % (nombre, valor))
+        fd, tmp = tempfile.mkstemp(dir=ENROL_DIR, prefix=".sec.")   # nombre único, 600 (mkstemp)
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                f.write("\n".join(lineas) + "\n")
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(tmp, SECRETOS_HOSTS_PATH)
+        except BaseException:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+            raise
 
 def huella_host(ip, puerto=22):
     """Host key SSH del ESXi SIN autenticar (pre-trust) + huella SHA256 (mismo
     formato que ssh-keygen -lf). El humano la coteja contra la consola del host
     (canal autenticado) antes de autorizar el enrolamiento — anti-MITM."""
-    t = paramiko.Transport((ip, int(puerto)))
+    # socket propio con timeout: Transport((ip,puerto)) conecta SIN límite (Codex #9a)
+    sock = socket.create_connection((ip, int(puerto)), timeout=10)
+    t = paramiko.Transport(sock)
     try:
         t.start_client(timeout=10)
         k = t.get_remote_server_key()
@@ -2810,11 +2832,23 @@ def pin_host_key(ip, puerto, key):
     """Pinnea la host key CONFIRMADA en el known_hosts escribible del wizard (los
     hosts del deploy original siguen en /keys/known_hosts, read-only)."""
     os.makedirs(ENROL_DIR, exist_ok=True)
-    hk = paramiko.HostKeys()
-    if os.path.isfile(KNOWN_HOSTS_DATA):
-        hk.load(KNOWN_HOSTS_DATA)
-    hk.add(_kh_nombre(ip, puerto), key.get_name(), key)
-    hk.save(KNOWN_HOSTS_DATA)
+    with ENROL_LOCK:   # read-modify-write serializado + tmp único + replace atómico
+        hk = paramiko.HostKeys()
+        if os.path.isfile(KNOWN_HOSTS_DATA):
+            hk.load(KNOWN_HOSTS_DATA)
+        hk.add(_kh_nombre(ip, puerto), key.get_name(), key)
+        fd, tmp = tempfile.mkstemp(dir=ENROL_DIR, prefix=".kh.")
+        try:
+            os.close(fd)
+            hk.save(tmp)
+            os.chmod(tmp, 0o644)   # el binario ssh (streaming) también lo lee
+            os.replace(tmp, KNOWN_HOSTS_DATA)
+        except BaseException:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+            raise
 
 def cliente_root_esxi(ip, puerto, password, key_confirmada):
     """SSH como root con password, aceptando EXCLUSIVAMENTE la host key que el
@@ -2827,15 +2861,28 @@ def cliente_root_esxi(ip, puerto, password, key_confirmada):
     return cli
 
 def _ssh_exec(cli, comando, stdin_data=None, timeout=60):
-    """exec_command con rc verificado. El mensaje de error NUNCA incluye el
-    stdin (por ahí viajan llaves/artefactos) y trunca stderr remoto."""
-    stdin, out, err = cli.exec_command(comando, timeout=timeout)
-    if stdin_data is not None:
-        stdin.write(stdin_data)
-        stdin.flush()
-    stdin.channel.shutdown_write()
+    """exec_command con rc verificado. Drena stdout/stderr ANTES de esperar el
+    exit status (esperarlo primero se bloquea si el remoto llena la ventana SSH —
+    Codex wizard #4) y acota la espera del status con deadline propio. El mensaje
+    de error NUNCA incluye el stdin (por ahí viajan llaves/artefactos)."""
+    stdin, out, err = cli.exec_command(comando, timeout=timeout)   # timeout → reads
+    try:
+        if stdin_data is not None:
+            stdin.write(stdin_data)
+            stdin.flush()
+        stdin.channel.shutdown_write()
+        o = out.read().decode(errors="replace")    # hasta EOF (con socket timeout)
+        e = err.read().decode(errors="replace")
+    except socket.timeout:
+        raise RuntimeError("'%s': timeout de %ds leyendo la salida remota"
+                           % (comando.split()[0], timeout)) from None
+    fin = time.time() + 30   # tras EOF de ambos streams el status llega enseguida
+    while not out.channel.exit_status_ready():
+        if time.time() > fin:
+            raise RuntimeError("'%s': el exit status no llegó (canal colgado)"
+                               % comando.split()[0])
+        time.sleep(0.2)
     rc = out.channel.recv_exit_status()
-    o, e = out.read().decode(errors="replace"), err.read().decode(errors="replace")
     if rc != 0:
         raise RuntimeError("'%s' rc=%d: %s" % (comando.split()[0], rc, (e or o).strip()[:200]))
     return o
@@ -2850,7 +2897,12 @@ def govc_root(args, ip, password, timeout=60):
     env["GOVC_USERNAME"] = "root"
     env["GOVC_PASSWORD"] = password
     env["GOVC_INSECURE"] = os.environ.get("GOVC_INSECURE", "1")
-    r = subprocess.run([GOVC, *args], capture_output=True, text=True, timeout=timeout, env=env)
+    try:
+        r = subprocess.run([GOVC, *args], capture_output=True, text=True, timeout=timeout, env=env)
+    except subprocess.TimeoutExpired:
+        # OJO: la repr de TimeoutExpired incluye el COMANDO (y host.account lleva
+        # -password) — jamás propagarla cruda (Codex wizard #7)
+        raise RuntimeError("govc %s: timeout tras %ds" % (args[0], timeout)) from None
     if r.returncode:
         msg = (r.stderr or r.stdout).strip().replace(password, "***")
         raise RuntimeError("govc %s: %s" % (args[0], _redact(msg)[:200]))
@@ -2863,10 +2915,40 @@ PASOS_PREPARAR = ["Verificar huella y conectar (root temporal)",
                   "Validar en vivo y registrar"]
 
 def flujo_preparar_host(job, p):
+    """Frontera de REDACCIÓN del wizard: _preparar_host hace el trabajo y aquí se
+    borran ambas credenciales (root y svc-vps) de CUALQUIER excepción antes de que
+    run_job la persista como error visible del job (Codex wizard #7). La svc_pass
+    se genera aquí para que la frontera la conozca."""
+    svc_pass = secrets.token_urlsafe(15) + "Aa1!"
+    try:
+        _preparar_host(job, p, svc_pass)
+    except Exception as e:  # noqa: BLE001 — redacta y re-lanza (run_job hace el fail)
+        msg = str(e).replace(p["root_password"], "***").replace(svc_pass, "***")
+        raise RuntimeError(msg) from None
+
+def _preparar_host(job, p, svc_pass):
     """Fases A+B del runbook ejecutadas por el motor (wizard). p trae la
-    root_password SOLO en memoria; ningún paso/detalle/error la contiene."""
+    root_password SOLO en memoria; ningún paso/detalle la contiene."""
     hid, ip, puerto, datastore = p["id"], p["ip"], p["ssh_port"], p["datastore"]
+    pass_var = "GOVC_PASSWORD_" + re.sub(r"[^A-Z0-9]", "_", hid.upper())
     job.paso()
+    # pre-chequeos para NO romper un host operativo con la rotación (Codex wizard #6):
+    if os.environ.get(pass_var):
+        raise RuntimeError("%s ya existe en engine.env — ese valor tendría PRIORIDAD sobre el "
+                           "almacén: tras rotar, el motor seguiría usando la password vieja. "
+                           "Gestiona este host por engine.env o retira la variable" % pass_var)
+    existente = host_get(hid)
+    if existente and existente.get("estado") != "pausado":
+        raise RuntimeError("el host %s ya existe y está '%s' — PAUSARLO antes de re-prepararlo "
+                           "(la rotación de svc-vps interrumpe operaciones en curso)"
+                           % (hid, existente.get("estado")))
+    if existente and existente.get("ip") != ip:
+        raise RuntimeError("el host %s ya existe con otra ip (%s) — no se re-prepara hacia %s"
+                           % (hid, existente.get("ip"), ip))
+    otro = next((h for h in hosts_lista() if h.get("ip") == ip and h.get("id") != hid), None)
+    if otro:
+        raise RuntimeError("la ip %s ya pertenece al host '%s' — dos ids sobre el mismo host "
+                           "rotarían la misma cuenta svc-vps" % (ip, otro["id"]))
     key_srv, fp = huella_host(ip, puerto)
     if fp != p["huella"]:
         raise RuntimeError("la huella ACTUAL del host (%s) no coincide con la confirmada (%s) — "
@@ -2876,22 +2958,34 @@ def flujo_preparar_host(job, p):
     try:
         job.paso("huella verificada; API y SSH de root responden")
 
-        # rol mínimo + usuario de API con password generada (nadie la ve: va directo al almacén)
-        svc_pass = secrets.token_urlsafe(15) + "Aa1!"
+        # rol mínimo: si existe se VERIFICAN sus privilegios y se RECONCILIAN (un rol
+        # previo demasiado permisivo no se acepta a ciegas — Codex wizard #8). Solo
+        # "not found" cuenta como ausencia; cualquier otro error de API propaga.
         try:
-            govc_root(["role.ls", "VpsOperator"], ip, p["root_password"], timeout=30)
-            job.detalle("rol VpsOperator ya existía")
-        except RuntimeError:
+            out_rol = govc_root(["role.ls", "VpsOperator"], ip, p["root_password"], timeout=30)
+            tiene = set(out_rol.split())
+            if tiene != set(PRIVS_VPSOPERATOR):
+                govc_root(["role.update", "VpsOperator", *PRIVS_VPSOPERATOR],
+                          ip, p["root_password"])
+                job.detalle("rol VpsOperator existía con %d privilegios distintos — "
+                            "RECONCILIADO a los 46 exactos" % len(tiene))
+            else:
+                job.detalle("rol VpsOperator ya existía con los privilegios exactos")
+        except RuntimeError as e:
+            if "not found" not in str(e).lower():
+                raise   # error real de API/permisos ≠ "el rol no existe"
             govc_root(["role.create", "VpsOperator", *PRIVS_VPSOPERATOR], ip, p["root_password"])
         try:
             govc_root(["host.account.create", "-id", "svc-vps", "-password", svc_pass],
                       ip, p["root_password"])
-        except RuntimeError:   # ya existía → se ROTA a la password nueva
+        except RuntimeError as e:
+            if "already exist" not in str(e).lower():
+                raise   # solo "ya existe" habilita la rotación; otro error propaga
             govc_root(["host.account.update", "-id", "svc-vps", "-password", svc_pass],
                       ip, p["root_password"])
         govc_root(["permissions.set", "-principal", "svc-vps", "-role", "VpsOperator"],
                   ip, p["root_password"])
-        job.paso("svc-vps con rol VpsOperator (46 privilegios; password generada)")
+        job.paso("svc-vps con rol VpsOperator (46 privilegios verificados; password generada)")
 
         # llave dedicada del motor (RSA: ESXi 8 RECHAZA ed25519) + wrapper + forced-command
         base = "/vmfs/volumes/%s/VPS" % datastore
@@ -2906,7 +3000,8 @@ def flujo_preparar_host(job, p):
             with os.fdopen(fdk, "w") as fk:
                 rsa.write_private_key(fk)
         with open(WRAPPER_TEMPLATE, encoding="utf-8") as f:
-            wrapper = re.sub(r"(?m)^BASE=.*$", "BASE=%s" % base, f.read(), count=1)
+            # lambda: el string de reemplazo de re.sub interpreta backslashes (Codex #1)
+            wrapper = re.sub(r"(?m)^BASE=.*$", lambda _m: "BASE=" + base, f.read(), count=1)
         _ssh_exec(cli, "mkdir -p %s/_plantillas %s/_papelera %s/_bin" % (base, base, base))
         _ssh_exec(cli, "cat > %s/_bin/vps-wrapper.sh && chmod 755 %s/_bin/vps-wrapper.sh"
                   % (base, base), stdin_data=wrapper)
@@ -2930,7 +3025,6 @@ def flujo_preparar_host(job, p):
         cli.close()
 
     pin_host_key(ip, puerto, key_srv)
-    pass_var = "GOVC_PASSWORD_" + re.sub(r"[^A-Z0-9]", "_", hid.upper())
     secreto_host_guardar(pass_var, svc_pass)
     job.paso("huella pinneada; secreto %s en el almacén (sin reinicio del motor)" % pass_var)
 
@@ -2946,9 +3040,11 @@ def flujo_preparar_host(job, p):
     with DB_LOCK, db() as c:
         # (consulta en ESTA conexión: host_get() toma DB_LOCK y no es reentrante)
         if c.execute("SELECT 1 FROM hosts WHERE id=?", (hid,)).fetchone():
-            # re-preparación (rotación/reparación): actualiza credenciales
+            # re-preparación (rotación/reparación): actualiza credenciales. estado
+            # queda EXPLÍCITO en pausado (el pre-chequeo ya lo exigió) — así el
+            # mensaje final "registrado PAUSADO" es verdad siempre (Codex #6)
             c.execute("UPDATE hosts SET ip=?, api_url=?, govc_user='svc-vps', pass_env=?, "
-                      "datastore=?, ssh_port=?, ssh_key=? WHERE id=?",
+                      "datastore=?, ssh_port=?, ssh_key=?, estado='pausado' WHERE id=?",
                       (ip, candidato["api_url"], pass_var, datastore, puerto, key_path, hid))
         else:
             c.execute("INSERT INTO hosts(id, ip, api_url, govc_user, pass_env, datastore, "
@@ -2990,21 +3086,41 @@ def flujo_copiar_doradas(job, origen, destino):
     job.paso("origen %s: %d plantillas; faltan en %s: %s"
              % (origen["id"], len(en_origen), destino["id"], ", ".join(pend) or "ninguna"))
     copiadas = []
+    # el listado viene del wrapper REMOTO: solo se aceptan nombres con la gramática
+    # de plantilla (defensa en profundidad; el wrapper destino igual re-valida)
+    re_plantilla = re.compile(r"^(dorada-[a-z0-9][a-z0-9.-]{1,30}|[a-z0-9][a-z0-9._-]{0,40}\.iso)$")
     for n in pend:
+        if not re_plantilla.fullmatch(n):
+            job.detalle("se omite entrada no reconocida del listado: %r" % n[:40])
+            continue
         job.detalle("copiando %s…" % n)
         t0 = time.time()
-        exp = subprocess.Popen(_ssh_wrapper_argv(origen, "export-plantilla %s" % n),
-                               stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        imp = subprocess.Popen(_ssh_wrapper_argv(destino, "import-plantilla %s" % n),
-                               stdin=exp.stdout, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        exp.stdout.close()   # el EOF le llega a import cuando export termina
-        _, ie = imp.communicate(timeout=7200)
-        exp.wait(timeout=60)
-        ee = exp.stderr.read().decode(errors="replace")
-        if exp.returncode != 0 or imp.returncode != 0:
-            raise RuntimeError("copia de %s falló (export rc=%s / import rc=%s): %s %s"
-                               % (n, exp.returncode, imp.returncode, ee.strip()[:150],
-                                  ie.decode(errors="replace").strip()[:150]))
+        exp = imp = None
+        # stderr de ambos a TEMPFILES (un PIPE sin drenar se llena y bloquea la
+        # copia — Codex wizard #4); kill garantizado de ambos procesos al salir
+        with tempfile.TemporaryFile() as fe_exp, tempfile.TemporaryFile() as fe_imp:
+            try:
+                exp = subprocess.Popen(_ssh_wrapper_argv(origen, "export-plantilla %s" % n),
+                                       stdout=subprocess.PIPE, stderr=fe_exp)
+                imp = subprocess.Popen(_ssh_wrapper_argv(destino, "import-plantilla %s" % n),
+                                       stdin=exp.stdout, stdout=subprocess.DEVNULL, stderr=fe_imp)
+                exp.stdout.close()   # el EOF le llega a import cuando export termina
+                imp.wait(timeout=7200)   # plazo global de la copia
+                exp.wait(timeout=60)
+            except subprocess.TimeoutExpired:
+                raise RuntimeError("copia de %s: timeout — se terminaron ambos procesos" % n) from None
+            finally:
+                for pr in (exp, imp):
+                    if pr is not None and pr.poll() is None:
+                        pr.kill()
+                        pr.wait(timeout=10)
+            if exp.returncode != 0 or imp.returncode != 0:
+                fe_exp.seek(0)
+                fe_imp.seek(0)
+                raise RuntimeError("copia de %s falló (export rc=%s / import rc=%s): %s | %s"
+                                   % (n, exp.returncode, imp.returncode,
+                                      fe_exp.read().decode(errors="replace").strip()[:150],
+                                      fe_imp.read().decode(errors="replace").strip()[:150]))
         copiadas.append(n)
         job.detalle("%s copiada en %ds" % (n, int(time.time() - t0)))
     job.paso("%d plantillas copiadas" % len(copiadas))
@@ -3056,8 +3172,11 @@ def hosts_preparar():
         return jsonify({"error": str(e)}), 400
     if not HOST_ID_RE.fullmatch(hid or ""):
         return jsonify({"error": "id inválido (minúsculas/dígitos/guiones, 2-31)"}), 400
-    if not datastore:
-        return jsonify({"error": "datastore es obligatorio"}), 400
+    # el datastore se interpola en comandos SSH/BASE=/authorized_keys → gramática
+    # estricta de UN componente (sin espacios/comillas/$/;//..) — Codex wizard #1
+    if not DATASTORE_RE.fullmatch(datastore or ""):
+        return jsonify({"error": "datastore inválido (un nombre simple: letras/dígitos/._- "
+                                 "hasta 64, sin espacios ni separadores)"}), 400
     if not huella.startswith("SHA256:"):
         return jsonify({"error": "huella_confirmada requerida (formato SHA256:…) — "
                                  "obtenerla primero con accion=huella"}), 400
@@ -3163,8 +3282,10 @@ def hosts_add():
         return jsonify({"error": "la variable %s no existe en el entorno del motor ni en su "
                                  "almacén de secretos — agregarla a engine.env (+restart) o "
                                  "enrolar con el wizard (/hosts/preparar)" % pass_env}), 400
-    if not datastore or not ssh_key:
-        return jsonify({"error": "datastore y ssh_key son obligatorios"}), 400
+    if not DATASTORE_RE.fullmatch(datastore or ""):
+        return jsonify({"error": "datastore inválido (un nombre simple, sin espacios/separadores)"}), 400
+    if not ssh_key:
+        return jsonify({"error": "ssh_key es obligatorio"}), 400
     if host_get(hid):
         return jsonify({"error": "el host %s ya existe" % hid}), 409
     # #4: la URL de la API se DERIVA de la IP validada (conexión directa a ESXi) — no
