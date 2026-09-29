@@ -28,7 +28,7 @@ duplicada y 4 casos del tokenizador); regresión verde. Commits ddde9d9 + 754844
 **PENDIENTE: deploy a noc-monitor con OK del usuario.**
 Además: verificado que la mantención de las 04:30 de HOY corrió con el vps-mantencion.sh
 NUEVO y terminó ok (purga + reconciliación) — primera ejecución real validada.
-Nota #20: no existe en el diff bef0f41 (la numeración de la auditoría salta del 19 al 21).
+Nota #20: ya estaba CERRADO por los rediseños #12/#13 (registrado en la bitácora del 18-09).
 
 ## 2026-09-29 (martes) — ✅ WIZARD DE ENROLAMIENTO (Fase D) APROBADO por Codex (5 rondas)
 
