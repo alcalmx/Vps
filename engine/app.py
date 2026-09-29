@@ -20,11 +20,13 @@ SEGURIDAD (ver SEGURIDAD.md del repo — 5 capas):
 """
 import base64
 import gzip
+import hashlib
 import hmac
 import ipaddress
 import json
 import os
 import re
+import secrets
 import sqlite3
 import subprocess
 import tempfile
@@ -61,6 +63,15 @@ CCR_BORDE = os.environ.get("CCR_BORDE_HOST", "172.16.1.69")     # ping de verifi
 # recién creados quedan en TOFU deliberado: su llave nace con la VM (es imposible
 # pre-conocerla) y sus IPs se REUTILIZAN (un known_hosts las haría chocar).
 KNOWN_HOSTS_PATH = os.environ.get("KNOWN_HOSTS_PATH", "/keys/known_hosts")
+# ── Fase D (wizard de enrolamiento): artefactos que el motor ESCRIBE ──────────
+# /keys es un volumen READ-ONLY (llaves fijas del deploy); lo que el wizard genera
+# (llave por host, huellas pinneadas tras confirmación humana, passwords svc-vps)
+# vive bajo /data (rw, mismo volumen 700-root que la BD del registro).
+ENROL_DIR = os.environ.get("ENROL_DIR", "/data/enrolamiento")
+ENROL_KEYS_DIR = os.path.join(ENROL_DIR, "keys")
+KNOWN_HOSTS_DATA = os.path.join(ENROL_DIR, "known_hosts")
+SECRETOS_HOSTS_PATH = os.path.join(ENROL_DIR, "secretos.env")
+WRAPPER_TEMPLATE = os.environ.get("WRAPPER_TEMPLATE", "/app/config/vps-wrapper.sh")
 # address-list de RouterData por red pública (igual que ALTA_PUB_REDES del NOC)
 PUB_REDES = {"Red57-0": "38.19.57", "Red104-0": "201.148.104", "Red105-0": "201.148.105",
              "Red106-0": "201.148.106", "Red107-0": "201.148.107"}
@@ -388,10 +399,10 @@ def govc(*args, timeout=120, host=None):
         if faltan:
             raise RuntimeError("host %s con configuración incompleta (faltan %s) — no se opera"
                                % (host.get("id"), ", ".join(faltan)))
-        secreto = os.environ.get(host["pass_env"])
+        secreto = secreto_host(host["pass_env"])
         if not secreto:
-            raise RuntimeError("host %s: la variable %s no está en el entorno del motor"
-                               % (host["id"], host["pass_env"]))
+            raise RuntimeError("host %s: la variable %s no está en el entorno del motor "
+                               "ni en su almacén de secretos" % (host["id"], host["pass_env"]))
         # entorno por ALLOWLIST (no denylist): SOLO las variables de sistema que el
         # subprocess govc necesita + los GOVC_* de ESTE host. Así ningún secreto del
         # motor ni de otros hosts (incluido un pass_env con nombre arbitrario) llega al
@@ -515,6 +526,10 @@ def cliente_ssh_pinned():
                            "en el deploy (ver noc-monitor/known-hosts.sh)" % KNOWN_HOSTS_PATH)
     cli = paramiko.SSHClient()
     cli.load_host_keys(KNOWN_HOSTS_PATH)
+    # los hosts enrolados por el wizard (Fase D) tienen su huella —confirmada por
+    # un humano— en el known_hosts escribible de /data; ambos archivos pinnean
+    if os.path.isfile(KNOWN_HOSTS_DATA):
+        cli.load_system_host_keys(KNOWN_HOSTS_DATA)
     cli.set_missing_host_key_policy(paramiko.RejectPolicy())
     return cli
 
@@ -2716,6 +2731,393 @@ def _str_campo(d, clave):
         raise ValueError("%s debe ser texto" % clave)
     return v.strip()
 
+# ═══ Fase D: wizard de enrolamiento (preparar un host desde el dashboard) ═════
+# Ejecuta los pasos 3 y 4 del RUNBOOK como job visible. La password de root del
+# ESXi viaja dashboard→motor por loopback, vive SOLO en memoria durante el job y
+# JAMÁS se persiste (ni BD, ni logs, ni auditoría, ni detalles del job). La huella
+# del host la confirma un humano ANTES de ejecutar (flujo en 2 pasos, sin estado
+# server-side: el paso 2 re-verifica que la huella actual == la confirmada).
+
+# los 46 privilegios EXACTOS del rol VpsOperator (idénticos a enrolar-host.sh / esxi-245)
+PRIVS_VPSOPERATOR = (
+    "Datastore.AllocateSpace Datastore.Browse Datastore.DeleteFile Datastore.FileManagement "
+    "Datastore.UpdateVirtualMachineFiles Global.CancelTask Global.LogEvent Network.Assign "
+    "Resource.AssignVMToPool System.Anonymous System.Read System.View Task.Create Task.Update "
+    "VirtualMachine.Config.AddExistingDisk VirtualMachine.Config.AddNewDisk "
+    "VirtualMachine.Config.AddRemoveDevice VirtualMachine.Config.AdvancedConfig "
+    "VirtualMachine.Config.Annotation VirtualMachine.Config.CPUCount VirtualMachine.Config.DiskExtend "
+    "VirtualMachine.Config.EditDevice VirtualMachine.Config.Memory VirtualMachine.Config.ReloadFromPath "
+    "VirtualMachine.Config.RemoveDisk VirtualMachine.Config.Rename VirtualMachine.Config.ResetGuestInfo "
+    "VirtualMachine.Config.Resource VirtualMachine.Config.Settings VirtualMachine.Interact.AnswerQuestion "
+    "VirtualMachine.Interact.ConsoleInteract VirtualMachine.Interact.DeviceConnection "
+    "VirtualMachine.Interact.PowerOff VirtualMachine.Interact.PowerOn VirtualMachine.Interact.Reset "
+    "VirtualMachine.Interact.SetCDMedia VirtualMachine.Interact.Suspend VirtualMachine.Interact.ToolsInstall "
+    "VirtualMachine.Inventory.Create VirtualMachine.Inventory.CreateFromExisting "
+    "VirtualMachine.Inventory.Register VirtualMachine.Inventory.Unregister "
+    "VirtualMachine.State.CreateSnapshot VirtualMachine.State.RemoveSnapshot "
+    "VirtualMachine.State.RevertToSnapshot").split()
+
+def secreto_host(nombre):
+    """Password de la API de un host: primero el entorno (engine.env — hosts
+    enrolados a mano), luego el almacén del wizard (secretos.env bajo /data, 600).
+    Se relee en cada uso → los hosts del wizard NO requieren reiniciar el motor."""
+    v = os.environ.get(nombre)
+    if v:
+        return v
+    try:
+        with open(SECRETOS_HOSTS_PATH, encoding="utf-8") as f:
+            for ln in f:
+                if ln.startswith(nombre + "="):
+                    return ln.rstrip("\r\n").split("=", 1)[1]
+    except OSError:
+        pass
+    return None
+
+def secreto_host_guardar(nombre, valor):
+    """Guarda/rota un secreto del almacén del wizard: archivo 600 bajo /data,
+    escrito atómico (tmp+rename). El valor jamás pasa por logs/BD/auditoría."""
+    os.makedirs(ENROL_DIR, exist_ok=True)
+    lineas = []
+    try:
+        with open(SECRETOS_HOSTS_PATH, encoding="utf-8") as f:
+            lineas = [ln.rstrip("\n") for ln in f
+                      if ln.strip() and not ln.startswith(nombre + "=")]
+    except OSError:
+        pass
+    lineas.append("%s=%s" % (nombre, valor))
+    fd = os.open(SECRETOS_HOSTS_PATH + ".tmp", os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
+        f.write("\n".join(lineas) + "\n")
+    os.replace(SECRETOS_HOSTS_PATH + ".tmp", SECRETOS_HOSTS_PATH)
+
+def huella_host(ip, puerto=22):
+    """Host key SSH del ESXi SIN autenticar (pre-trust) + huella SHA256 (mismo
+    formato que ssh-keygen -lf). El humano la coteja contra la consola del host
+    (canal autenticado) antes de autorizar el enrolamiento — anti-MITM."""
+    t = paramiko.Transport((ip, int(puerto)))
+    try:
+        t.start_client(timeout=10)
+        k = t.get_remote_server_key()
+    finally:
+        t.close()
+    fp = base64.b64encode(hashlib.sha256(k.asbytes()).digest()).decode().rstrip("=")
+    return k, "SHA256:" + fp
+
+def _kh_nombre(ip, puerto):
+    return ip if int(puerto) == 22 else "[%s]:%d" % (ip, int(puerto))
+
+def pin_host_key(ip, puerto, key):
+    """Pinnea la host key CONFIRMADA en el known_hosts escribible del wizard (los
+    hosts del deploy original siguen en /keys/known_hosts, read-only)."""
+    os.makedirs(ENROL_DIR, exist_ok=True)
+    hk = paramiko.HostKeys()
+    if os.path.isfile(KNOWN_HOSTS_DATA):
+        hk.load(KNOWN_HOSTS_DATA)
+    hk.add(_kh_nombre(ip, puerto), key.get_name(), key)
+    hk.save(KNOWN_HOSTS_DATA)
+
+def cliente_root_esxi(ip, puerto, password, key_confirmada):
+    """SSH como root con password, aceptando EXCLUSIVAMENTE la host key que el
+    humano confirmó (RejectPolicy ante cualquier otra). Solo lo usa el wizard."""
+    cli = paramiko.SSHClient()
+    cli.get_host_keys().add(_kh_nombre(ip, puerto), key_confirmada.get_name(), key_confirmada)
+    cli.set_missing_host_key_policy(paramiko.RejectPolicy())
+    cli.connect(ip, port=int(puerto), username="root", password=password,
+                timeout=15, allow_agent=False, look_for_keys=False)
+    return cli
+
+def _ssh_exec(cli, comando, stdin_data=None, timeout=60):
+    """exec_command con rc verificado. El mensaje de error NUNCA incluye el
+    stdin (por ahí viajan llaves/artefactos) y trunca stderr remoto."""
+    stdin, out, err = cli.exec_command(comando, timeout=timeout)
+    if stdin_data is not None:
+        stdin.write(stdin_data)
+        stdin.flush()
+    stdin.channel.shutdown_write()
+    rc = out.channel.recv_exit_status()
+    o, e = out.read().decode(errors="replace"), err.read().decode(errors="replace")
+    if rc != 0:
+        raise RuntimeError("'%s' rc=%d: %s" % (comando.split()[0], rc, (e or o).strip()[:200]))
+    return o
+
+def govc_root(args, ip, password, timeout=60):
+    """govc con credenciales root TEMPORALES (solo durante el wizard, jamás se
+    guardan). Mismo aislamiento de entorno que govc(host=); el password se
+    redacta de cualquier error antes de propagarlo (los detalles del job son
+    visibles en el dashboard)."""
+    env = {k: os.environ[k] for k in GOVC_ENV_SISTEMA if k in os.environ}
+    env["GOVC_URL"] = "https://%s/sdk" % ip
+    env["GOVC_USERNAME"] = "root"
+    env["GOVC_PASSWORD"] = password
+    env["GOVC_INSECURE"] = os.environ.get("GOVC_INSECURE", "1")
+    r = subprocess.run([GOVC, *args], capture_output=True, text=True, timeout=timeout, env=env)
+    if r.returncode:
+        msg = (r.stderr or r.stdout).strip().replace(password, "***")
+        raise RuntimeError("govc %s: %s" % (args[0], _redact(msg)[:200]))
+    return r.stdout
+
+PASOS_PREPARAR = ["Verificar huella y conectar (root temporal)",
+                  "Crear rol VpsOperator y usuario svc-vps",
+                  "Instalar llave del motor y wrapper confinado",
+                  "Pinnear huella y guardar secreto",
+                  "Validar en vivo y registrar"]
+
+def flujo_preparar_host(job, p):
+    """Fases A+B del runbook ejecutadas por el motor (wizard). p trae la
+    root_password SOLO en memoria; ningún paso/detalle/error la contiene."""
+    hid, ip, puerto, datastore = p["id"], p["ip"], p["ssh_port"], p["datastore"]
+    job.paso()
+    key_srv, fp = huella_host(ip, puerto)
+    if fp != p["huella"]:
+        raise RuntimeError("la huella ACTUAL del host (%s) no coincide con la confirmada (%s) — "
+                           "posible host suplantado; enrolamiento abortado" % (fp, p["huella"]))
+    govc_root(["about"], ip, p["root_password"], timeout=30)
+    cli = cliente_root_esxi(ip, puerto, p["root_password"], key_srv)
+    try:
+        job.paso("huella verificada; API y SSH de root responden")
+
+        # rol mínimo + usuario de API con password generada (nadie la ve: va directo al almacén)
+        svc_pass = secrets.token_urlsafe(15) + "Aa1!"
+        try:
+            govc_root(["role.ls", "VpsOperator"], ip, p["root_password"], timeout=30)
+            job.detalle("rol VpsOperator ya existía")
+        except RuntimeError:
+            govc_root(["role.create", "VpsOperator", *PRIVS_VPSOPERATOR], ip, p["root_password"])
+        try:
+            govc_root(["host.account.create", "-id", "svc-vps", "-password", svc_pass],
+                      ip, p["root_password"])
+        except RuntimeError:   # ya existía → se ROTA a la password nueva
+            govc_root(["host.account.update", "-id", "svc-vps", "-password", svc_pass],
+                      ip, p["root_password"])
+        govc_root(["permissions.set", "-principal", "svc-vps", "-role", "VpsOperator"],
+                  ip, p["root_password"])
+        job.paso("svc-vps con rol VpsOperator (46 privilegios; password generada)")
+
+        # llave dedicada del motor (RSA: ESXi 8 RECHAZA ed25519) + wrapper + forced-command
+        base = "/vmfs/volumes/%s/VPS" % datastore
+        os.makedirs(ENROL_KEYS_DIR, exist_ok=True)
+        key_path = os.path.join(ENROL_KEYS_DIR, "vps_engine_esxi_%s" % hid.replace("-", "_"))
+        if os.path.isfile(key_path):
+            rsa = paramiko.RSAKey.from_private_key_file(key_path)
+            job.detalle("llave del motor ya existía — se reutiliza")
+        else:
+            rsa = paramiko.RSAKey.generate(4096)
+            fdk = os.open(key_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+            with os.fdopen(fdk, "w") as fk:
+                rsa.write_private_key(fk)
+        with open(WRAPPER_TEMPLATE, encoding="utf-8") as f:
+            wrapper = re.sub(r"(?m)^BASE=.*$", "BASE=%s" % base, f.read(), count=1)
+        _ssh_exec(cli, "mkdir -p %s/_plantillas %s/_papelera %s/_bin" % (base, base, base))
+        _ssh_exec(cli, "cat > %s/_bin/vps-wrapper.sh && chmod 755 %s/_bin/vps-wrapper.sh"
+                  % (base, base), stdin_data=wrapper)
+        b64 = rsa.get_base64()
+        linea = ('command="%s/_bin/vps-wrapper.sh",no-port-forwarding,no-X11-forwarding,'
+                 'no-agent-forwarding,no-pty ssh-rsa %s vps-engine@noc-monitor (%s)'
+                 % (base, b64, hid))
+        ya = _ssh_exec(cli, "grep -cF '%s' /etc/ssh/keys-root/authorized_keys 2>/dev/null || true"
+                       % b64[:40])
+        if (ya.strip() or "0") == "0":
+            _ssh_exec(cli, "cat >> /etc/ssh/keys-root/authorized_keys", stdin_data=linea + "\n")
+        if p.get("diag_pubkey"):   # llave de diagnóstico IA/humano: shell pleno, SIN command=
+            db64 = p["diag_pubkey"].split()[1][:40]
+            ya_d = _ssh_exec(cli, "grep -cF '%s' /etc/ssh/keys-root/authorized_keys 2>/dev/null || true"
+                             % db64)
+            if (ya_d.strip() or "0") == "0":
+                _ssh_exec(cli, "cat >> /etc/ssh/keys-root/authorized_keys",
+                          stdin_data=p["diag_pubkey"] + "\n")
+        job.paso("wrapper instalado con BASE=%s; llave del motor confinada por command=" % base)
+    finally:
+        cli.close()
+
+    pin_host_key(ip, puerto, key_srv)
+    pass_var = "GOVC_PASSWORD_" + re.sub(r"[^A-Z0-9]", "_", hid.upper())
+    secreto_host_guardar(pass_var, svc_pass)
+    job.paso("huella pinneada; secreto %s en el almacén (sin reinicio del motor)" % pass_var)
+
+    # validación EN VIVO con las credenciales NUEVAS (misma vara que POST /hosts)
+    candidato = {"id": hid, "ip": ip, "api_url": "https://%s/sdk" % ip,
+                 "govc_user": "svc-vps", "pass_env": pass_var,
+                 "datastore": datastore, "ssh_port": puerto, "ssh_key": key_path}
+    govc("about", host=candidato, timeout=30)
+    pong = esxi_ssh("ping", host=candidato, timeout=30)
+    if pong.strip() != "pong":
+        raise RuntimeError("el wrapper no respondió pong: %r" % pong[:40])
+    libre = datastore_libre_gb(candidato)
+    with DB_LOCK, db() as c:
+        # (consulta en ESTA conexión: host_get() toma DB_LOCK y no es reentrante)
+        if c.execute("SELECT 1 FROM hosts WHERE id=?", (hid,)).fetchone():
+            # re-preparación (rotación/reparación): actualiza credenciales
+            c.execute("UPDATE hosts SET ip=?, api_url=?, govc_user='svc-vps', pass_env=?, "
+                      "datastore=?, ssh_port=?, ssh_key=? WHERE id=?",
+                      (ip, candidato["api_url"], pass_var, datastore, puerto, key_path, hid))
+        else:
+            c.execute("INSERT INTO hosts(id, ip, api_url, govc_user, pass_env, datastore, "
+                      "ssh_port, ssh_key, estado, prioridad, notas) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+                      (hid, ip, candidato["api_url"], "svc-vps", pass_var, datastore, puerto,
+                       key_path, "pausado", 100, p.get("notas") or ""))
+    job.set_resultado({"host": hid, "datastore_libre_gb": libre,
+                       "siguiente": "copiar doradas (botón en la pestaña Motor) y luego ACTIVAR"})
+    job.ok("validado en vivo (API + pong + %d GB libres) — registrado PAUSADO" % libre)
+
+PASOS_DORADAS = ["Listar plantillas de origen y destino",
+                 "Copiar plantillas (streaming vía el motor)",
+                 "Re-adelgazar discos (punch-zero)"]
+
+def _ssh_wrapper_argv(h, subcomando):
+    """argv del ssh BINARIO para invocar el wrapper de un host (para pipes de
+    streaming origen→destino). Pinning con confianza exclusiva a los known_hosts
+    del motor (deploy RO + wizard RW), igual que cliente_ssh_pinned."""
+    kh = KNOWN_HOSTS_PATH + (" " + KNOWN_HOSTS_DATA if os.path.isfile(KNOWN_HOSTS_DATA) else "")
+    return ["ssh", "-i", h.get("ssh_key") or ESXI_SSH_KEY, "-p", str(h.get("ssh_port") or 22),
+            "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=yes",
+            "-o", "GlobalKnownHostsFile=/dev/null", "-o", "UserKnownHostsFile=%s" % kh,
+            "root@%s" % h["ip"], subcomando]
+
+def flujo_copiar_doradas(job, origen, destino):
+    """Copia las plantillas (doradas + isos) de un host enrolado a otro, en
+    streaming a través del motor (los ESXi no se ven entre sí). Integridad por
+    el CRC de gzip extremo a extremo; luego punch-zero para recuperar thin."""
+    job.paso()
+    def _lista(h):
+        out = esxi_ssh("list-plantillas", host=h, timeout=60)
+        lineas = [ln.strip() for ln in out.splitlines() if ln.strip()]
+        if not lineas or lineas[-1] != "OK":
+            raise RuntimeError("listado de plantillas sin sentinel OK en %s" % h["id"])
+        return [ln for ln in lineas[:-1] if not ln.startswith(".")]
+    en_origen = _lista(origen)
+    en_destino = set(_lista(destino))
+    pend = [n for n in en_origen if n not in en_destino]
+    job.paso("origen %s: %d plantillas; faltan en %s: %s"
+             % (origen["id"], len(en_origen), destino["id"], ", ".join(pend) or "ninguna"))
+    copiadas = []
+    for n in pend:
+        job.detalle("copiando %s…" % n)
+        t0 = time.time()
+        exp = subprocess.Popen(_ssh_wrapper_argv(origen, "export-plantilla %s" % n),
+                               stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        imp = subprocess.Popen(_ssh_wrapper_argv(destino, "import-plantilla %s" % n),
+                               stdin=exp.stdout, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        exp.stdout.close()   # el EOF le llega a import cuando export termina
+        _, ie = imp.communicate(timeout=7200)
+        exp.wait(timeout=60)
+        ee = exp.stderr.read().decode(errors="replace")
+        if exp.returncode != 0 or imp.returncode != 0:
+            raise RuntimeError("copia de %s falló (export rc=%s / import rc=%s): %s %s"
+                               % (n, exp.returncode, imp.returncode, ee.strip()[:150],
+                                  ie.decode(errors="replace").strip()[:150]))
+        copiadas.append(n)
+        job.detalle("%s copiada en %ds" % (n, int(time.time() - t0)))
+    job.paso("%d plantillas copiadas" % len(copiadas))
+    for n in copiadas:
+        if n.startswith("dorada-"):
+            job.detalle("punch-zero de %s…" % n)
+            esxi_ssh("thin-plantilla %s" % n, host=destino, timeout=3600)
+    job.ok("plantillas al día en %s — ya puedes ACTIVAR el host" % destino["id"])
+
+@app.route("/hosts/preparar", methods=["POST"])
+def hosts_preparar():
+    """Wizard (2 pasos, sin estado server-side): accion=huella devuelve la huella
+    SHA256 para que el humano la coteje; accion=ejecutar (con huella_confirmada +
+    root_password) lanza el job que securiza, valida y registra el host."""
+    rol = auth()
+    if not rol:
+        return jsonify({"error": "unauthorized"}), 401
+    if rol != "admin":
+        return jsonify({"error": ERR_SOLO_ADMIN}), 403
+    d = json_body()
+    if d is None:
+        return jsonify({"error": ERR_BODY}), 400
+    try:
+        accion = _str_campo(d, "accion") or "huella"
+        ip = _str_campo(d, "ip")
+        puerto = _entero_opt(d.get("ssh_port"), "ssh_port", 1, 65535)
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    puerto = 22 if puerto is None else puerto
+    try:
+        ip = str(ipaddress.IPv4Address(ip))
+    except ValueError:
+        return jsonify({"error": "ip inválida"}), 400
+    if accion == "huella":
+        try:
+            _, fp = huella_host(ip, puerto)
+        except Exception as e:  # noqa: BLE001 — host apagado/inalcanzable: error de usuario
+            return jsonify({"error": "no pude obtener la huella de %s: %s" % (ip, str(e)[:120])}), 400
+        return jsonify({"ok": True, "ip": ip, "huella": fp,
+                        "nota": "cotejar contra la consola del ESXi ANTES de ejecutar"})
+    if accion != "ejecutar":
+        return jsonify({"error": "accion inválida (huella | ejecutar)"}), 400
+    try:
+        hid = _str_campo(d, "id")
+        datastore = _str_campo(d, "datastore")
+        huella = _str_campo(d, "huella_confirmada")
+        notas = _str_campo(d, "notas")[:200]
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    if not HOST_ID_RE.fullmatch(hid or ""):
+        return jsonify({"error": "id inválido (minúsculas/dígitos/guiones, 2-31)"}), 400
+    if not datastore:
+        return jsonify({"error": "datastore es obligatorio"}), 400
+    if not huella.startswith("SHA256:"):
+        return jsonify({"error": "huella_confirmada requerida (formato SHA256:…) — "
+                                 "obtenerla primero con accion=huella"}), 400
+    _rp = d.get("root_password")
+    if not isinstance(_rp, str) or not (1 <= len(_rp) <= 128):
+        return jsonify({"error": "root_password requerida (texto, 1-128)"}), 400
+    if any(ord(c) < 32 for c in _rp):
+        return jsonify({"error": "root_password con caracteres de control"}), 400
+    diag = d.get("diag_pubkey")
+    if diag is not None:
+        diag = diag.strip() if isinstance(diag, str) else None
+        if not diag or not re.fullmatch(r"ssh-rsa [A-Za-z0-9+/=]{100,3000}( [^\r\n]{0,100})?", diag):
+            return jsonify({"error": "diag_pubkey inválida — una línea 'ssh-rsa AAAA… comentario' "
+                                     "(RSA: ESXi 8 no acepta ed25519)"}), 400
+    actor = limpiar_actor(d.get("actor") or "dashboard")
+    job, activo = lanzar_job_exclusivo("preparar-host", hid, actor, PASOS_PREPARAR)
+    if not job:
+        return jsonify({"error": "el host %s tiene un job en curso (%s, id %s)"
+                        % (hid, activo["tipo"], activo["id"])}), 409
+    params = {"id": hid, "ip": ip, "ssh_port": puerto, "datastore": datastore,
+              "huella": huella, "root_password": _rp, "diag_pubkey": diag, "notas": notas}
+    err = lanzar_o_fallar(job, lambda j: flujo_preparar_host(j, params))
+    if err:
+        return err
+    return jsonify({"ok": True, "job_id": job.id, "host": hid})
+
+@app.route("/hosts/<hid>/copiar-doradas", methods=["POST"])
+def hosts_copiar_doradas(hid):
+    """Copia las plantillas que le falten a un host desde otro ya enrolado
+    (streaming vía el motor). Job visible; al terminar, activar el host."""
+    rol = auth()
+    if not rol:
+        return jsonify({"error": "unauthorized"}), 401
+    if rol != "admin":
+        return jsonify({"error": ERR_SOLO_ADMIN}), 403
+    d = json_body()
+    if d is None:
+        return jsonify({"error": ERR_BODY}), 400
+    try:
+        desde = _str_campo(d, "desde")
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    destino = host_get(hid)
+    if not destino:
+        return jsonify({"error": "host %s no existe" % hid}), 404
+    origen = host_get(desde)
+    if not origen:
+        return jsonify({"error": "host de origen '%s' no existe" % desde}), 400
+    if origen["id"] == destino["id"]:
+        return jsonify({"error": "origen y destino no pueden ser el mismo host"}), 400
+    actor = limpiar_actor(d.get("actor") or "dashboard")
+    job, activo = lanzar_job_exclusivo("copiar-doradas", hid, actor, PASOS_DORADAS)
+    if not job:
+        return jsonify({"error": "el host %s tiene un job en curso (%s, id %s)"
+                        % (hid, activo["tipo"], activo["id"])}), 409
+    err = lanzar_o_fallar(job, lambda j: flujo_copiar_doradas(j, origen, destino))
+    if err:
+        return err
+    return jsonify({"ok": True, "job_id": job.id, "host": hid, "desde": desde})
+
 @app.route("/hosts", methods=["POST"])
 def hosts_add():
     """A2: enrolar un host al registro. NO se acepta a ciegas: se valida EN VIVO que
@@ -2757,9 +3159,10 @@ def hosts_add():
         return jsonify({"error": "ip inválida"}), 400
     if not ENV_NAME_RE.match(pass_env):
         return jsonify({"error": "pass_env inválido (nombre de variable en engine.env)"}), 400
-    if not os.environ.get(pass_env):
-        return jsonify({"error": "la variable %s no existe en el entorno del motor — "
-                                 "agregarla a engine.env y reiniciar" % pass_env}), 400
+    if not secreto_host(pass_env):
+        return jsonify({"error": "la variable %s no existe en el entorno del motor ni en su "
+                                 "almacén de secretos — agregarla a engine.env (+restart) o "
+                                 "enrolar con el wizard (/hosts/preparar)" % pass_env}), 400
     if not datastore or not ssh_key:
         return jsonify({"error": "datastore y ssh_key son obligatorios"}), 400
     if host_get(hid):

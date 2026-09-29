@@ -24,6 +24,8 @@ cmd=$1
 valid_vps()    { echo "$1" | grep -Eq '^vps-[a-z]{2,5}-[a-z0-9][a-z0-9-]{0,40}$'; }
 valid_dorada() { echo "$1" | grep -Eq '^dorada-[a-z0-9][a-z0-9.-]{1,30}$'; }
 valid_name()   { valid_vps "$1" || valid_dorada "$1"; }
+# plantilla transferible = una dorada o un .iso auxiliar (p.ej. ks-oemdrv.iso)
+valid_plantilla() { valid_dorada "$1" || echo "$1" | grep -Eq '^[a-z0-9][a-z0-9._-]{0,40}\.iso$'; }
 valid_trash()  { echo "$1" | grep -Eq '^[0-9]{8}-[0-9]{6}-vps-[a-z]{2,5}-[a-z0-9][a-z0-9-]{0,40}$'; }
 # las doradas viven en _plantillas/, los vps en la raíz de VPS/
 dir_of()       { if valid_dorada "$1"; then echo "$BASE/_plantillas/$1"; else echo "$BASE/$1"; fi; }
@@ -109,7 +111,40 @@ case "$cmd" in
     out=$(ls -1 "$BASE/_papelera" 2>&1) || die "no pude listar _papelera: $out"
     [ -n "$out" ] && echo "$out"
     echo OK ;;
-  df)          df -h /vmfs/volumes/DiscoA37245 | tail -1 ;;
+  df)          df -h "$BASE" | tail -1 ;;   # (antes hardcodeaba DiscoA37245 — bug multi-host)
+
+  # ── Fase D (wizard): mover plantillas entre hosts SIN shell libre ───────────
+  # El motor (noc-monitor) alcanza a todos los hosts pero ellos no se ven entre
+  # sí → la copia viaja: ssh origen export-plantilla | ssh destino import-plantilla.
+  # Confinado a _plantillas/, comprimido (los thin viajan livianos) y con el CRC
+  # de gzip como verificación de integridad extremo a extremo.
+  list-plantillas)   # listado fail-closed con sentinel (mismo criterio que list-vps)
+    [ -d "$BASE/_plantillas" ] || die "_plantillas inaccesible"
+    out=$(ls -1 "$BASE/_plantillas" 2>&1) || die "no pude listar _plantillas: $out"
+    [ -n "$out" ] && echo "$out"
+    echo OK ;;
+
+  export-plantilla)  # export-plantilla <dorada-*|*.iso>  → tar.gz por stdout
+    valid_plantilla "$1" || die "plantilla inválida: $1"
+    [ -e "$BASE/_plantillas/$1" ] || die "no existe: $1"
+    cd "$BASE/_plantillas" || die "no pude entrar a _plantillas"
+    tar cf - "$1" | gzip -1 ;;
+
+  import-plantilla)  # import-plantilla <nombre>  ← tar.gz por stdin (staging + mv)
+    valid_plantilla "$1" || die "plantilla inválida: $1"
+    [ -e "$BASE/_plantillas/$1" ] && die "ya existe: $1"
+    st="$BASE/_plantillas/.stage.$$"
+    mkdir -p "$st" || die "no pude crear staging"
+    if gunzip -c | tar xf - -C "$st" && [ -e "$st/$1" ]; then
+      mv "$st/$1" "$BASE/_plantillas/$1" && rm -rf "$st" && log "IMPORT: $1" && echo OK
+    else
+      rm -rf "$st"; die "importación de $1 falló (stream incompleto o nombre distinto)"
+    fi ;;
+
+  thin-plantilla)    # thin-plantilla <dorada>  → punch-zero post-import (recupera thin)
+    valid_dorada "$1" || die "solo doradas: $1"
+    [ -f "$BASE/_plantillas/$1/$1.vmdk" ] || die "disco no existe: $1"
+    vmkfstools -K "$BASE/_plantillas/$1/$1.vmdk" >/dev/null && echo OK ;;
 
   *) die "subcomando no permitido: '$cmd'" ;;
 esac

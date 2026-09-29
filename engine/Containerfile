@@ -15,6 +15,9 @@ WORKDIR /app
 COPY engine/app.py /app/app.py
 COPY marcas/  /app/config/marcas/
 COPY sabores/ /app/config/sabores/
+# template del wrapper para el wizard de enrolamiento (Fase D): el motor lo sube
+# al host nuevo reescribiendo su BASE= (mismo archivo que instala enrolar-host.sh)
+COPY vps-wrapper.sh /app/config/vps-wrapper.sh
 
 # Secretos y llaves llegan por env-file y volúmenes (ver vps-engine.container):
 #   /keys/vps_engine_esxi  (llave SSH del wrapper, 600)
