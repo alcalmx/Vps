@@ -5,6 +5,48 @@
 
 ---
 
+## 2026-09-29 (martes) — ✅ WIZARD DE ENROLAMIENTO (Fase D) APROBADO por Codex (5 rondas)
+
+Alcadio priorizó estandarizar el enrolamiento COMPLETO desde el dashboard. Construido y
+revisado ANTES de desplegar (el código más sensible del sistema: maneja la root del ESXi):
+
+**Qué es:** pestaña Motor → "Preparar host nuevo (wizard)": formulario (id/ip/datastore/
+password de root) → obtener huella SSH → humano la confirma contra la consola → job visible
+que hace TODO (rol VpsOperator verificado/reconciliado + svc-vps rotado + llave RSA generada
+por el motor + wrapper confinado + huella pinneada + validación en vivo + registro PAUSADO)
+→ botón "Copiar doradas" (streaming vía el motor con publicación en 2 fases) → activar.
+Cero terminal. La password de root viaja por loopback, vive solo en memoria del job y una
+FRONTERA DE REDACCIÓN garantiza que ninguna excepción persistida la contenga.
+
+**Las 5 rondas de Codex** (hallazgos todos reales, todos corregidos):
+- r1: inyección de shell vía datastore (CRÍTICO) → DATASTORE_RE estricta; import tar sin
+  confinamiento; rc de pipelines; cuelgues SSH; almacén concurrente; re-preparación rompía
+  host operativo; fuga de svc_pass por TimeoutExpired; rol existente sin verificar.
+- r2: rc de control DENTRO del staging escribible por el tar (CRÍTICO: symlink .gunzip.rc)
+  → spool + control fuera del árbol; hardlinks no detectados; reservas parciales; stderr
+  secuencial; plantilla publicada de export fallido.
+- r3: pre-scan fail-open → archivos de control con rc y conteos; carreras entre endpoints →
+  RESERVA ATÓMICA de identidad (OPS_HOSTS_LOCK, claves id:+ip: compartidas por preparar/
+  copiar/PATCH/DELETE/POST); hilo stderr abandonaba en timeout → channel.recv que no abandona.
+- r4: tar-bomb (tar válido muy compresible agota el datastore) → PRESUPUESTO DE EXTRACCIÓN
+  (suma de tamaños del tvf ANTES de extraer, tope 200G + 50G margen), token uuid hex32.
+- r5: APROBADO. Precisiones menores aplicadas (cada $3 numérico en el awk).
+
+**Evidencia empírica en el ESXi real (esxi-20051):** tar adversario (../, absoluto, symlink)
+→ busybox tar confina y el wrapper rechaza; tar-bomb (4MB comprimido/1GB declarado) →
+rechazado por presupuesto ANTES de extraer un byte.
+
+**Límites aceptados documentados:** GOVC_INSECURE (postura TLS actual del sistema), CSRF del
+dashboard (régimen existente), df no reserva espacio ante consumo concurrente (margen 50G),
+crecimiento de stderr en tempfiles (emisores = nuestros propios hosts).
+
+Tests: suite test_wizard.py (almacén, inyección, anti-MITM, sin fuga de root en el job,
+re-preparación con 4 trampas, copiar-doradas) + REGRESIÓN COMPLETA verde (12 suites).
+
+**PENDIENTE: DEPLOY con OK del usuario** — motor (app.py+Containerfile+wrapper template),
+wrappers actualizados en AMBOS hosts (245 y 20051), dashboard (proxies + tarjeta wizard).
+Tras el deploy: prueba E2E del wizard re-preparando esxi-20051 (está pausado y sin VMs).
+
 ## 2026-09-28 (lunes) — 🆕 Host nuevo esxi-20051 + estandarización de enrolamiento
 
 Alcadio levantó un ESXi nuevo (`esxi20051cl.dedicados.cl` = **192.168.200.51**, ESXi 8.0.3,

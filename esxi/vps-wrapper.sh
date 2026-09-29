@@ -178,7 +178,10 @@ case "$cmd" in
     #     plantilla, y el datastore debe tener expandido + 50G de margen para las
     #     VMs (además del spool ya escrito). Un tar-bomb de ceros queda rechazado
     #     aquí, sin escribir ni un byte de su contenido.
-    exp_b=$(awk '{s+=$3} END{printf "%.0f", s}' "$ctl/tipos")
+    # cada $3 debe ser numérico (un cambio de formato de tvf no puede convertirse
+    # en subestimación silenciosa — Codex r5); el total también se re-valida
+    exp_b=$(awk '{ if ($3 !~ /^[0-9]+$/) exit 1; s+=$3 } END{ printf "%.0f", s }' "$ctl/tipos") \
+      || fail "listado tvf con tamaño ilegible"
     echo "$exp_b" | grep -Eq '^[0-9]+$' || fail "no pude calcular el tamaño expandido"
     [ "$exp_b" -le 214748364800 ] || fail "tamaño expandido ($exp_b B) excede el tope de 200G"
     libre_kb=$(df -k "$BASE" | tail -1 | awk '{print $4}')
