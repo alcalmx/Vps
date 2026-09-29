@@ -3197,7 +3197,7 @@ def flujo_copiar_doradas(job, origen, destino):
             continue
         job.detalle("copiando %s…" % n)
         t0 = time.time()
-        token = uuid.uuid4().hex[:8]   # identifica ESTA transferencia (Codex r3 'otros')
+        token = uuid.uuid4().hex        # identifica ESTA transferencia (hex32, único) (Codex r3 'otros')
         exp = imp = None
         # stderr de ambos a TEMPFILES (un PIPE sin drenar se llena y bloquea la
         # copia); kill garantizado e INDEPENDIENTE de cada proceso al salir. El
