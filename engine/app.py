@@ -2746,6 +2746,46 @@ DATASTORE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 # candados del almacén del wizard (secretos.env / known_hosts): las escrituras son
 # read-modify-write → serializadas (dos preparaciones concurrentes no se pisan)
 ENROL_LOCK = threading.Lock()
+# ── Reserva ATÓMICA de identidad de host (Codex wizard r3 #2) ─────────────────
+# Las operaciones sobre hosts (preparar, copiar-doradas, PATCH/DELETE/POST) deben
+# excluirse entre sí por ID *y* por IP a la vez: chequear-y-actuar por separado
+# deja carreras (mismo id/2 ips, copiar-vs-preparar, activar a mitad de rotación).
+# Un solo lock + un mapa de claves reservadas ("id:<hid>" / "ip:<ip>") → job.
+# En memoria = válido con UN proceso (misma restricción documentada del gate de
+# jobs); al reiniciar el motor los jobs corriendo se marcan error y las reservas
+# desaparecen con ellos.
+OPS_HOSTS_LOCK = threading.Lock()
+OPS_HOSTS_RESERVAS = {}   # clave -> job_id
+
+def reservar_op_host(claves, tipo, vm_job, actor, pasos):
+    """Reserva TODAS las claves y crea el job en una sección crítica única.
+    Devuelve (job, None) o (None, mensaje_de_conflicto)."""
+    with OPS_HOSTS_LOCK:
+        for k in claves:
+            if k in OPS_HOSTS_RESERVAS:
+                return None, "la identidad %s está reservada por el job %s" % (k, OPS_HOSTS_RESERVAS[k])
+        job = Job(tipo, vm_job, actor, pasos)
+        for k in claves:
+            OPS_HOSTS_RESERVAS[k] = job.id
+    return job, None
+
+def liberar_op_host(job_id):
+    with OPS_HOSTS_LOCK:
+        for k in [k for k, v in OPS_HOSTS_RESERVAS.items() if v == job_id]:
+            del OPS_HOSTS_RESERVAS[k]
+
+def _lanzar_op_host(job, fn):
+    """run_job que LIBERA la reserva al terminar el flujo (ok o error), incluso
+    si el hilo no llega a arrancar."""
+    def _fn(j):
+        try:
+            fn(j)
+        finally:
+            liberar_op_host(j.id)
+    err = lanzar_o_fallar(job, _fn)
+    if err:
+        liberar_op_host(job.id)   # el hilo no arrancó; liberar aquí (doble-free inofensivo)
+    return err
 
 # los 46 privilegios EXACTOS del rol VpsOperator (idénticos a enrolar-host.sh / esxi-245)
 PRIVS_VPSOPERATOR = (
@@ -2886,20 +2926,25 @@ def _ssh_exec(cli, comando, stdin_data=None, timeout=60):
     canal llenando el otro stream — Codex wizard r2 #4), con plazo GLOBAL por reloj
     monotónico y tope de captura (se sigue drenando, se deja de guardar). El error
     NUNCA incluye el stdin (por ahí viajan llaves/artefactos)."""
-    stdin, out, err = cli.exec_command(comando, timeout=10)   # timeout POR lectura
+    stdin, out, _err = cli.exec_command(comando, timeout=2)   # timeout POR lectura (grano fino)
+    ch = out.channel
     fin = time.monotonic() + timeout
     e_parts, e_tot = [], [0]
     def _drenar_err():
-        try:
-            while True:
-                b = err.read(32768)
-                if not b:
-                    return
-                if e_tot[0] < 65536:
-                    e_parts.append(b)
-                    e_tot[0] += len(b)
-        except Exception:  # noqa: BLE001 — canal cerrado/timeout: decide el principal
-            return
+        # drena stderr hasta EOF o hasta el plazo global (+margen). socket.timeout
+        # NO abandona (Codex r3 #3): solo re-chequea el reloj y sigue drenando.
+        while time.monotonic() <= fin + 35:
+            try:
+                b = ch.recv_stderr(32768)   # devuelve lo DISPONIBLE (no espera llenar)
+            except socket.timeout:
+                continue
+            except Exception:  # noqa: BLE001 — canal cerrado: terminó la sesión
+                return
+            if not b:
+                return   # EOF de stderr
+            if e_tot[0] < 65536:
+                e_parts.append(b)
+                e_tot[0] += len(b)
     th = threading.Thread(target=_drenar_err, daemon=True)
     th.start()
     o_parts, o_tot = [], 0
@@ -2913,26 +2958,24 @@ def _ssh_exec(cli, comando, stdin_data=None, timeout=60):
                 raise RuntimeError("'%s': plazo total de %ds agotado leyendo la salida"
                                    % (comando.split()[0], timeout))
             try:
-                b = out.read(32768)
+                b = ch.recv(32768)   # devuelve lo disponible; el reloj se revisa cada ≤2s
             except socket.timeout:
-                continue   # sin datos en esta ventana de 10s; manda el plazo global
+                continue
             if not b:
-                break
+                break   # EOF de stdout
             if o_tot < 262144:
                 o_parts.append(b)
                 o_tot += len(b)
-    except BaseException:
-        out.channel.close()   # descuelga también al hilo de stderr
-        raise
-    th.join(timeout=10)
-    fin_rc = time.monotonic() + 30   # tras EOF el status llega enseguida
-    while not out.channel.exit_status_ready():
-        if time.monotonic() > fin_rc:
-            out.channel.close()
-            raise RuntimeError("'%s': el exit status no llegó (canal colgado)"
-                               % comando.split()[0])
-        time.sleep(0.2)
-    rc = out.channel.recv_exit_status()
+        fin_rc = time.monotonic() + 30   # tras EOF el status llega enseguida
+        while not ch.exit_status_ready():
+            if time.monotonic() > fin_rc:
+                raise RuntimeError("'%s': el exit status no llegó (canal colgado)"
+                                   % comando.split()[0])
+            time.sleep(0.2)
+        rc = ch.recv_exit_status()
+    finally:
+        ch.close()   # cierre garantizado en TODA salida (y descuelga al hilo de stderr)
+        th.join(timeout=10)
     o = b"".join(o_parts).decode(errors="replace")
     e = b"".join(e_parts).decode(errors="replace")
     if rc != 0:
@@ -3154,6 +3197,7 @@ def flujo_copiar_doradas(job, origen, destino):
             continue
         job.detalle("copiando %s…" % n)
         t0 = time.time()
+        token = uuid.uuid4().hex[:8]   # identifica ESTA transferencia (Codex r3 'otros')
         exp = imp = None
         # stderr de ambos a TEMPFILES (un PIPE sin drenar se llena y bloquea la
         # copia); kill garantizado e INDEPENDIENTE de cada proceso al salir. El
@@ -3164,12 +3208,16 @@ def flujo_copiar_doradas(job, origen, destino):
             try:
                 exp = subprocess.Popen(_ssh_wrapper_argv(origen, "export-plantilla %s" % n),
                                        stdout=subprocess.PIPE, stderr=fe_exp)
-                imp = subprocess.Popen(_ssh_wrapper_argv(destino, "import-plantilla %s" % n),
+                imp = subprocess.Popen(_ssh_wrapper_argv(destino, "import-plantilla %s %s" % (n, token)),
                                        stdin=exp.stdout, stdout=subprocess.DEVNULL, stderr=fe_imp)
                 exp.stdout.close()   # el EOF le llega a import cuando export termina
                 imp.wait(timeout=7200)   # plazo global de la copia
                 exp.wait(timeout=60)
             except subprocess.TimeoutExpired:
+                try:   # descartar la copia de ESTE intento también en el camino del timeout
+                    esxi_ssh("descartar-plantilla %s %s" % (n, token), host=destino, timeout=60)
+                except Exception:  # noqa: BLE001
+                    pass
                 raise RuntimeError("copia de %s: timeout — se terminaron ambos procesos" % n) from None
             finally:
                 for pr in (exp, imp):   # cada proceso con su propio try (r2 'otros')
@@ -3182,7 +3230,7 @@ def flujo_copiar_doradas(job, origen, destino):
                         pass
             if exp.returncode != 0 or imp.returncode != 0:
                 try:   # descartar la copia recibida no confirmada (best-effort)
-                    esxi_ssh("descartar-plantilla %s" % n, host=destino, timeout=60)
+                    esxi_ssh("descartar-plantilla %s %s" % (n, token), host=destino, timeout=60)
                 except Exception:  # noqa: BLE001
                     pass
                 fe_exp.seek(0)
@@ -3191,8 +3239,9 @@ def flujo_copiar_doradas(job, origen, destino):
                                    % (n, exp.returncode, imp.returncode,
                                       fe_exp.read(2048).decode(errors="replace").strip()[:150],
                                       fe_imp.read(2048).decode(errors="replace").strip()[:150]))
-        # 2ª fase: publicar SOLO con ambos rc=0 confirmados por el motor
-        esxi_ssh("publicar-plantilla %s" % n, host=destino, timeout=120)
+        # 2ª fase: publicar SOLO con ambos rc=0 confirmados por el motor, con el
+        # TOKEN de este intento (una copia vieja no puede publicarse por accidente)
+        esxi_ssh("publicar-plantilla %s %s" % (n, token), host=destino, timeout=120)
         copiadas.append(n)
         job.detalle("%s copiada y publicada en %ds" % (n, int(time.time() - t0)))
     job.paso("%d plantillas copiadas" % len(copiadas))
@@ -3264,20 +3313,16 @@ def hosts_preparar():
             return jsonify({"error": "diag_pubkey inválida — una línea 'ssh-rsa AAAA… comentario' "
                                      "(RSA: ESXi 8 no acepta ed25519)"}), 400
     actor = limpiar_actor(d.get("actor") or "dashboard")
-    # la RESERVA del gate es por IDENTIDAD FÍSICA ("prep-<ip>"): dos ids distintos
-    # hacia la misma IP no pueden rotar svc-vps a la vez (Codex wizard r2 #3). El
-    # job por id (copiar-doradas, etc.) se chequea aparte.
-    ocupado = job_activo(hid)
-    if ocupado:
-        return jsonify({"error": "el host %s tiene un job en curso (%s, id %s)"
-                        % (hid, ocupado["tipo"], ocupado["id"])}), 409
-    job, activo = lanzar_job_exclusivo("preparar-host", "prep-" + ip, actor, PASOS_PREPARAR)
+    # reserva ATÓMICA de la identidad completa (id + ip) en una sola sección
+    # crítica: cubre mismo-id/otra-ip, misma-ip/otro-id, y excluye PATCH/DELETE/
+    # POST/copiar mientras dura la rotación (Codex wizard r3 #2)
+    job, conflicto = reservar_op_host(("id:" + hid, "ip:" + ip),
+                                      "preparar-host", hid, actor, PASOS_PREPARAR)
     if not job:
-        return jsonify({"error": "la IP %s ya tiene una preparación en curso (%s, id %s)"
-                        % (ip, activo["tipo"], activo["id"])}), 409
+        return jsonify({"error": "no se puede preparar %s ahora: %s" % (hid, conflicto)}), 409
     params = {"id": hid, "ip": ip, "ssh_port": puerto, "datastore": datastore,
               "huella": huella, "root_password": _rp, "diag_pubkey": diag, "notas": notas}
-    err = lanzar_o_fallar(job, lambda j: flujo_preparar_host(j, params))
+    err = _lanzar_op_host(job, lambda j: flujo_preparar_host(j, params))
     if err:
         return err
     return jsonify({"ok": True, "job_id": job.id, "host": hid})
@@ -3306,19 +3351,15 @@ def hosts_copiar_doradas(hid):
         return jsonify({"error": "host de origen '%s' no existe" % desde}), 400
     if origen["id"] == destino["id"]:
         return jsonify({"error": "origen y destino no pueden ser el mismo host"}), 400
-    # ni el origen ni el destino pueden estar en re-preparación (rotación de
-    # credenciales a mitad de copia = fallo raro y difícil de diagnosticar)
-    for h in (origen, destino):
-        prep = job_activo("prep-" + (h.get("ip") or ""))
-        if prep:
-            return jsonify({"error": "el host %s está en preparación (job %s) — espera a que "
-                                     "termine" % (h["id"], prep["id"])}), 409
     actor = limpiar_actor(d.get("actor") or "dashboard")
-    job, activo = lanzar_job_exclusivo("copiar-doradas", hid, actor, PASOS_DORADAS)
+    # reserva ATÓMICA de AMBAS identidades (destino y ORIGEN, por id e ip): ni una
+    # re-preparación del origen a mitad de export ni viceversa (Codex wizard r3 #2)
+    claves = ("id:" + destino["id"], "ip:" + (destino.get("ip") or ""),
+              "id:" + origen["id"], "ip:" + (origen.get("ip") or ""))
+    job, conflicto = reservar_op_host(claves, "copiar-doradas", hid, actor, PASOS_DORADAS)
     if not job:
-        return jsonify({"error": "el host %s tiene un job en curso (%s, id %s)"
-                        % (hid, activo["tipo"], activo["id"])}), 409
-    err = lanzar_o_fallar(job, lambda j: flujo_copiar_doradas(j, origen, destino))
+        return jsonify({"error": "no se puede copiar ahora: %s" % conflicto}), 409
+    err = _lanzar_op_host(job, lambda j: flujo_copiar_doradas(j, origen, destino))
     if err:
         return err
     return jsonify({"ok": True, "job_id": job.id, "host": hid, "desde": desde})
@@ -3394,14 +3435,25 @@ def hosts_add():
         return jsonify({"error": "host NO enrolable — falló la validación en vivo: %s "
                                  "(¿svc-vps/llave/wrapper/huella instalados? ver enrolar-host)"
                                  % str(e)[:200]}), 400
-    with DB_LOCK, db() as c:
-        c.execute("INSERT INTO hosts(id, ip, api_url, govc_user, pass_env, datastore, ssh_port, "
-                  "ssh_key, estado, prioridad, max_vcpu, max_ram_mb, max_disco_gb, notas) "
-                  "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                  (hid, ip, candidato["api_url"], govc_user, pass_env,
-                   datastore, ssh_port, ssh_key,
-                   "pausado" if d.get("pausado") else "activo",
-                   prioridad, max_vcpu, max_ram_mb, max_disco_gb, notas))
+    # dup-check AUTORITATIVO + INSERT en una sola sección crítica compartida con el
+    # wizard: dos POST concurrentes (o un POST durante una preparación) no pueden
+    # registrar la misma identidad (Codex wizard r3 #2)
+    with OPS_HOSTS_LOCK:
+        jid = OPS_HOSTS_RESERVAS.get("id:" + hid) or OPS_HOSTS_RESERVAS.get("ip:" + ip)
+        if jid:
+            return jsonify({"error": "la identidad de %s/%s está en uso por el job %s"
+                            % (hid, ip, jid)}), 409
+        with DB_LOCK, db() as c:
+            dup = c.execute("SELECT id FROM hosts WHERE id=? OR ip=?", (hid, ip)).fetchone()
+            if dup:
+                return jsonify({"error": "id o ip ya registrados (host %s)" % dup["id"]}), 409
+            c.execute("INSERT INTO hosts(id, ip, api_url, govc_user, pass_env, datastore, ssh_port, "
+                      "ssh_key, estado, prioridad, max_vcpu, max_ram_mb, max_disco_gb, notas) "
+                      "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                      (hid, ip, candidato["api_url"], govc_user, pass_env,
+                       datastore, ssh_port, ssh_key,
+                       "pausado" if d.get("pausado") else "activo",
+                       prioridad, max_vcpu, max_ram_mb, max_disco_gb, notas))
     audit(limpiar_actor(d.get("actor") or "dashboard"), "host-add", hid,
           "host enrolado: %s (%s, ds %s, %d GB libres)" % (hid, ip, candidato["datastore"], libre), "ok")
     return jsonify({"ok": True, "host": hid, "datastore_libre_gb": libre})
@@ -3418,12 +3470,6 @@ def hosts_patch(hid):
     h_act = host_get(hid)
     if not h_act:
         return jsonify({"error": "host desconocido: %s" % hid}), 404
-    # con una preparación (rotación de credenciales) en curso sobre esta IP, ni
-    # activarlo ni tocarlo: el estado debe seguir bajo control del wizard (r2 #3)
-    prep = job_activo("prep-" + (h_act.get("ip") or ""))
-    if prep:
-        return jsonify({"error": "el host %s está en preparación (job %s) — espera a que "
-                                 "termine" % (hid, prep["id"])}), 409
     d = json_body()
     if d is None:
         return jsonify({"error": ERR_BODY}), 400
@@ -3449,9 +3495,17 @@ def hosts_patch(hid):
         return jsonify({"error": str(e)}), 400
     if not sets:
         return jsonify({"error": "nada que cambiar"}), 400
-    with DB_LOCK, db() as c:
-        c.execute("UPDATE hosts SET %s, updated_at=datetime('now','localtime') WHERE id=?"
-                  % ", ".join(sets), (*vals, hid))
+    # chequeo de reserva Y mutación en la MISMA sección crítica: una preparación
+    # no puede empezar entre el chequeo y el UPDATE (Codex wizard r3 #2)
+    with OPS_HOSTS_LOCK:
+        jid = (OPS_HOSTS_RESERVAS.get("id:" + hid)
+               or OPS_HOSTS_RESERVAS.get("ip:" + (h_act.get("ip") or "")))
+        if jid:
+            return jsonify({"error": "el host %s tiene una operación de identidad en curso "
+                                     "(job %s) — reintenta al terminar" % (hid, jid)}), 409
+        with DB_LOCK, db() as c:
+            c.execute("UPDATE hosts SET %s, updated_at=datetime('now','localtime') WHERE id=?"
+                      % ", ".join(sets), (*vals, hid))
     audit(limpiar_actor(d.get("actor") or "dashboard"), "host-edit", hid,
           "cambios: %s" % ", ".join(k for k in d if k != "actor"), "ok")
     return jsonify({"ok": True, "host": host_get(hid)})
@@ -3468,16 +3522,18 @@ def hosts_delete(hid):
     h_del = host_get(hid)
     if not h_del:
         return jsonify({"error": "host desconocido: %s" % hid}), 404
-    prep = job_activo("prep-" + (h_del.get("ip") or ""))
-    if prep:
-        return jsonify({"error": "el host %s está en preparación (job %s) — no se puede quitar "
-                                 "ahora" % (hid, prep["id"])}), 409
-    with DB_LOCK, db() as c:
-        n = c.execute("SELECT COUNT(*) n FROM vms WHERE host=?", (hid,)).fetchone()["n"]
-        if n:
-            return jsonify({"error": "el host %s tiene %d VM(s) en el registro (incl. papelera) — "
-                                     "no se puede quitar" % (hid, n)}), 409
-        c.execute("DELETE FROM hosts WHERE id=?", (hid,))
+    with OPS_HOSTS_LOCK:   # chequeo de reserva + DELETE en la misma sección (r3 #2)
+        jid = (OPS_HOSTS_RESERVAS.get("id:" + hid)
+               or OPS_HOSTS_RESERVAS.get("ip:" + (h_del.get("ip") or "")))
+        if jid:
+            return jsonify({"error": "el host %s tiene una operación de identidad en curso "
+                                     "(job %s) — no se puede quitar ahora" % (hid, jid)}), 409
+        with DB_LOCK, db() as c:
+            n = c.execute("SELECT COUNT(*) n FROM vms WHERE host=?", (hid,)).fetchone()["n"]
+            if n:
+                return jsonify({"error": "el host %s tiene %d VM(s) en el registro (incl. papelera) — "
+                                         "no se puede quitar" % (hid, n)}), 409
+            c.execute("DELETE FROM hosts WHERE id=?", (hid,))
     audit("dashboard", "host-del", hid, "host quitado del registro", "ok")
     return jsonify({"ok": True})
 

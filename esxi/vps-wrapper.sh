@@ -137,54 +137,69 @@ case "$cmd" in
     trc=$(cat "$ctl/rc" 2>/dev/null); rm -rf "$ctl"
     [ "$grc" = "0" ] && [ "$trc" = "0" ] || die "export de $1 falló (tar=${trc:-?} gzip=$grc)" ;;
 
-  import-plantilla)  # ← tar.gz por stdin. VALIDA TODO y deja ".ok.<n>" SIN publicar:
-    # el motor confirma con publicar-plantilla SOLO si el export también terminó rc=0
-    # (una copia de un export fallido jamás queda como plantilla usable).
+  import-plantilla)  # import-plantilla <nombre> <token>  ← tar.gz por stdin.
+    # VALIDA TODO y deja ".ok.<token>.<n>" SIN publicar: el motor confirma con
+    # publicar-plantilla SOLO si el export también terminó rc=0. El TOKEN (hex8,
+    # uno por transferencia) evita que un intento viejo interfiera con el nuevo.
     valid_plantilla "$1" || die "plantilla inválida: $1"
+    echo "$2" | grep -Eq '^[a-f0-9]{8}$' || die "token inválido"
     [ -e "$BASE/_plantillas/$1" ] && die "ya existe: $1"
+    # staging/copias huérfanos (conexión cortada): limpiar los >3h
     find "$BASE/_plantillas" -maxdepth 1 \( -name '.stage.*' -o -name '.ok.*' \) -mmin +180 -exec rm -rf {} + 2>/dev/null
-    rm -rf "$BASE/_plantillas/.ok.$1"     # resto de un intento anterior no confirmado
+    # CUOTA: el spool comparte datastore con las VMs — exigir margen y capar el stream
+    libre_kb=$(df -k "$BASE" | tail -1 | awk '{print $4}')
+    echo "$libre_kb" | grep -Eq '^[0-9]+$' || die "no pude medir el espacio libre"
+    [ "$libre_kb" -ge 104857600 ] || die "espacio insuficiente para importar (se exigen 100G libres)"
     st="$BASE/_plantillas/.stage.$$"
     mkdir "$st" || die "staging en uso"
     fail() { rm -rf "$st"; die "$*"; }
     ctl="$st/ctl"; x="$st/x"
     mkdir "$ctl" "$x" || fail "no pude crear ctl/x"
-    # 1) SPOOL: el stream completo a disco ANTES de tocar tar (el CRC de gzip se
-    #    verifica sobre el archivo; ningún rc vive donde extrae contenido ajeno)
-    cat > "$ctl/spool.tgz" || fail "no pude recibir el stream"
-    gunzip -t "$ctl/spool.tgz" 2>/dev/null || fail "stream gzip corrupto (CRC)"
-    # 2) PRE-SCAN de los miembros ANTES de extraer NADA: nombres confinados a
-    #    '$1[/...]' sin '..', y tipos SOLO archivo/directorio (ni symlink 'l', ni
-    #    hardlink 'h', ni dispositivos) — cierra el escape DURANTE la extracción
-    gunzip -c "$ctl/spool.tgz" | tar tf - > "$ctl/nombres" || fail "tar ilegible"
+    # 1) SPOOL a disco ANTES de tocar tar (capado a 32G: un stream mayor queda
+    #    truncado y el CRC de gzip lo rechaza). Ningún rc vive donde extrae tar.
+    head -c 34359738368 > "$ctl/spool.tgz" || fail "no pude recibir el stream"
+    gunzip -t "$ctl/spool.tgz" 2>/dev/null || fail "stream gzip corrupto (CRC) o truncado"
+    # 2) PRE-SCAN FAIL-CLOSED de los miembros ANTES de extraer NADA: los listados
+    #    van a archivos de control con rc verificado y conteos que deben calzar —
+    #    ninguna validación se aprueba por "ausencia de salida" (Codex r3 #1)
+    gunzip -c "$ctl/spool.tgz" | tar tf - > "$ctl/nombres" || fail "tar ilegible (tf)"
     grep -q . "$ctl/nombres" || fail "tar vacío"
+    ( gunzip -c "$ctl/spool.tgz" | tar tvf - > "$ctl/tipos" ) || fail "tar ilegible (tvf)"
+    n_nom=$(wc -l < "$ctl/nombres"); n_tip=$(wc -l < "$ctl/tipos")
+    [ "$n_nom" = "$n_tip" ] || fail "listados inconsistentes ($n_nom nombres vs $n_tip tipos)"
     while IFS= read -r m; do
       case "$m" in "$1"|"$1"/*) : ;; *) fail "miembro fuera de '$1': $m" ;; esac
       case "$m" in *../*|*/..|..*) fail "miembro con '..': $m" ;; esac
     done < "$ctl/nombres"
-    gunzip -c "$ctl/spool.tgz" | tar tvf - | cut -c1 | grep -vE '^[d-]' | grep -q . \
-      && fail "el tar trae tipos no permitidos (symlink/hardlink/especial)"
-    # 3) extraer en área limpia y re-validar (cinturón y tirantes)
+    while IFS= read -r tl; do
+      case "$tl" in d*|-*) : ;; *) fail "tipo no permitido (symlink/hardlink/especial): ${tl%% *}" ;; esac
+    done < "$ctl/tipos"
+    # 3) extraer en área limpia y re-validar (cinturón), también fail-closed
     gunzip -c "$ctl/spool.tgz" | tar xf - -C "$x" || fail "extracción falló"
     rm -f "$ctl/spool.tgz"
     [ "$(ls -A "$x" | wc -l)" = "1" ] && [ -e "$x/$1" ] || fail "contenido inesperado tras extraer"
-    find "$x" ! -type f ! -type d | grep -q . && fail "tipos no permitidos post-extracción"
-    find "$x" -type f ! -links 1 | grep -q . && fail "hardlinks no permitidos"
+    find "$x" ! -type f ! -type d > "$ctl/malos" || fail "find (tipos) falló"
+    grep -q . "$ctl/malos" && fail "tipos no permitidos post-extracción"
+    find "$x" -type f ! -links 1 > "$ctl/hlinks" || fail "find (hardlinks) falló"
+    grep -q . "$ctl/hlinks" && fail "hardlinks no permitidos"
     case "$1" in
       dorada-*) [ -d "$x/$1" ] || fail "$1 debía ser directorio" ;;
       *)        [ -f "$x/$1" ] || fail "$1 debía ser archivo" ;;
     esac
-    mv "$x/$1" "$BASE/_plantillas/.ok.$1" && rm -rf "$st" && log "IMPORT(validada): $1" && echo OK ;;
+    rm -rf "$BASE/_plantillas/.ok.$2.$1"
+    mv "$x/$1" "$BASE/_plantillas/.ok.$2.$1" && rm -rf "$st" && log "IMPORT(validada): $1 [$2]" && echo OK ;;
 
-  publicar-plantilla)  # publica la copia VALIDADA .ok.<n> (2ª fase, la confirma el motor)
+  publicar-plantilla)  # publicar-plantilla <nombre> <token> — 2ª fase, la confirma el motor
     valid_plantilla "$1" || die "plantilla inválida: $1"
-    [ -e "$BASE/_plantillas/.ok.$1" ] || die "no hay copia validada de: $1"
+    echo "$2" | grep -Eq '^[a-f0-9]{8}$' || die "token inválido"
+    [ -e "$BASE/_plantillas/.ok.$2.$1" ] || die "no hay copia validada de: $1 [$2]"
     [ -e "$BASE/_plantillas/$1" ] && die "ya existe: $1"
-    mv "$BASE/_plantillas/.ok.$1" "$BASE/_plantillas/$1" && log "PUBLISH: $1" && echo OK ;;
+    mv "$BASE/_plantillas/.ok.$2.$1" "$BASE/_plantillas/$1" && log "PUBLISH: $1 [$2]" && echo OK ;;
 
-  descartar-plantilla)  # descarta una copia recibida NO confirmada (fallo del lado export)
+  descartar-plantilla)  # descartar-plantilla <nombre> <token> — descarta una copia NO confirmada
     valid_plantilla "$1" || die "plantilla inválida: $1"
-    rm -rf "$BASE/_plantillas/.ok.$1" && echo OK ;;
+    echo "$2" | grep -Eq '^[a-f0-9]{8}$' || die "token inválido"
+    rm -rf "$BASE/_plantillas/.ok.$2.$1" && echo OK ;;
 
   thin-plantilla)    # thin-plantilla <dorada>  → punch-zero post-import (recupera thin)
     valid_dorada "$1" || die "solo doradas: $1"
