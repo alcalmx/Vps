@@ -14,7 +14,8 @@
 
 | ✅ 2026-09-28 | **Fix #14+#15 — secretos con expiración + límites de input** — APROBADO por Codex (3 rondas): corregidos 500 por .strip() sobre no-str (actor/marca/sabor/hostname/modo/vm/accion/pubkey/root_password), fullmatch en IDs (no match), root_password NO se modifica (se preserva exacta), redacción-en-lectura de secretos vencidos en /job | `1c09236` + correcciones hoy | CERRADO. Menor documentado: send_expires_at UTC (dif. de minutos/1h, no migrado) |
 
-| 🔧 REVISADO 2026-09-28 | **Medios #16-#23** — Codex: ✅ #16/#17/#21/#23 aprobados; ❌ **#18 (chpasswd), #19 (growfs), #22 (address-list) con BLOQUEANTES** | `bef0f41` | Hallazgos detallados en [medios-hallazgos-codex.md](medios-hallazgos-codex.md). Corregir los 3, re-enviar a Codex, deploy, marcar ✅. Falta revisar **#20** (no se incluyó) |
+| ✅ 2026-09-29 | **Medios #16-#23** — APROBADO COMPLETO por Codex (3 rondas): #16/#17/#21/#23 en r1; #18 (chpasswd sin éxito falso, plazo total vía _ssh_exec, sin stderr crudo, rechaza 
+) y #19 (growfs contrato exit-0+estado, fstype antes de tocar, parse estricto, verificación contra el umbral del plan) en r2; #22 (tokenizador _terse_props que respeta comillas/escapes, todas las entradas, comment con valor) en r3 | `bef0f41` + `ddde9d9`+`754844e` | **PENDIENTE DEPLOY con OK del usuario.** Nota: #20 no formaba parte del diff bef0f41 (numeración de la auditoría salta del 19 al 21) |
 
 | ⏳ | **VPS personalizado** — sabor 'personalizado' en /crear (solo admin, specs 1-24/1024-65536/25-600, sabor_def a flujo_crear, cupo #8 aplica) + UI en dashboard | (commits Vps + fastnetmon) | Revisar: rangos, interacción con /editar sobre filas personalizadas, y la UI |
 

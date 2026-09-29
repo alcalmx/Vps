@@ -5,6 +5,31 @@
 
 ---
 
+## 2026-09-29 (martes) — ✅ Medios #16-#23 APROBADO COMPLETO por Codex (trabajo autónomo)
+
+Mientras Alcadio estaba fuera (loop autónomo), se corrigieron los 3 bloqueantes de Medios
+documentados el 28 y Codex los aprobó en 2 rondas más (3 en total):
+- **#18 chpasswd**: ya no hay éxito falso (condición no cumplida = excepción; el caller la
+  convierte en aviso), ejecución con plazo total y streams drenados reutilizando el _ssh_exec
+  endurecido del wizard, el error nunca incluye stderr remoto crudo (podría ecoar root:<clave>),
+  y una clave con 
+ se rechaza (inyectaría otra línea al protocolo). Ante timeout la redacción
+  es honesta: "no se pudo CONFIRMAR" (pudo aplicarse sin alcanzar a confirmar).
+- **#19 growfs**: contrato nuevo — el script del guest SIEMPRE sale 0 y reporta UNA línea
+  (FS_OK a b | FS_SKIP razón | FS_ERR razón); fstype y disco-sin-partición se chequean ANTES
+  de tocar nada; parse ESTRICTO en Python (fullmatch) y "VERIFICADO" ahora compara contra el
+  UMBRAL DEL PLAN (85% del objetivo en GiB) — un growpart NOCHANGE bloqueado por otra partición
+  ya no se anuncia como éxito. Probado contra bash real con binarios fake (5 escenarios).
+- **#22 address-list**: tokenizador _terse_props que parsea la línea terse respetando
+  comillas/escapes (un comment= dentro del valor de OTRA propiedad ya no cuenta), se examinan
+  TODAS las entradas (duplicado habilitado alerta), y el comment debe tener VALOR.
+Tests: test_medios y test_reconciliar actualizados al contrato nuevo (incl. mock de entrada
+duplicada y 4 casos del tokenizador); regresión verde. Commits ddde9d9 + 754844e.
+**PENDIENTE: deploy a noc-monitor con OK del usuario.**
+Además: verificado que la mantención de las 04:30 de HOY corrió con el vps-mantencion.sh
+NUEVO y terminó ok (purga + reconciliación) — primera ejecución real validada.
+Nota #20: no existe en el diff bef0f41 (la numeración de la auditoría salta del 19 al 21).
+
 ## 2026-09-29 (martes) — ✅ WIZARD DE ENROLAMIENTO (Fase D) APROBADO por Codex (5 rondas)
 
 Alcadio priorizó estandarizar el enrolamiento COMPLETO desde el dashboard. Construido y
