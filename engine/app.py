@@ -1243,6 +1243,39 @@ PASOS_CREAR = [
     "Registrar y finalizar",
 ]
 
+def _terse_props(ln):
+    """Parsea UNA línea de 'print terse' de RouterOS en (flags, {propiedad: valor})
+    ESCANEANDO secuencialmente y respetando comillas/escapes: un 'comment=' que viva
+    DENTRO del valor entrecomillado de otra propiedad no cuenta como propiedad
+    (Codex Medios r2 #22 — nada de re.search por substring)."""
+    m = re.match(r"^\s*\d+\s+(?:([A-Z]+)\s+)?(.*)$", ln)
+    flags, resto = (m.group(1) or "", m.group(2)) if m else ("", "")
+    props, i, n = {}, 0, len(resto)
+    while i < n:
+        while i < n and resto[i] == " ":
+            i += 1
+        j = resto.find("=", i)
+        if j < 0:
+            break
+        clave = resto[i:j]
+        i = j + 1
+        if i < n and resto[i] == '"':
+            i += 1
+            val = []
+            while i < n and resto[i] != '"':
+                if resto[i] == "\\" and i + 1 < n:   # escape dentro de comillas
+                    i += 1
+                val.append(resto[i])
+                i += 1
+            i += 1   # cierra la comilla
+            props[clave] = "".join(val)
+        else:
+            k = resto.find(" ", i)
+            k = n if k < 0 else k
+            props[clave] = resto[i:k]
+            i = k
+    return flags, props
+
 def set_root_password(ip, password):
     """Aplica la contraseña de root en la VM por SSH (chpasswd vía stdin — sin problemas
     de escape, y NO queda en el VMX). SSH sigue solo con llave: esta clave sirve para WHM/
@@ -1268,8 +1301,13 @@ def set_root_password(ip, password):
             _ssh_exec(cli, "chpasswd", stdin_data="root:%s\n" % password, timeout=30)
         except RuntimeError as e:
             m = re.search(r"rc=(\d+)", str(e))
-            raise RuntimeError("chpasswd falló (rc=%s) — la clave NO quedó aplicada"
-                               % (m.group(1) if m else "?")) from None
+            # con rc explícito NO se aplicó; ante timeout no es demostrable (pudo
+            # aplicarse sin alcanzar a confirmar) — la redacción lo refleja (Codex)
+            if m:
+                raise RuntimeError("chpasswd falló (rc=%s) — la clave NO quedó aplicada"
+                                   % m.group(1)) from None
+            raise RuntimeError("no se pudo CONFIRMAR la aplicación de la clave "
+                               "(timeout/canal) — verificar en el guest") from None
     finally:
         cli.close()
     return True
@@ -1817,8 +1855,10 @@ def flujo_editar(job, sabor_slug):
                     # #19 (endurecido tras Codex Medios): el script SIEMPRE sale 0 y
                     # reporta UNA línea de estado (FS_OK a b | FS_SKIP razón | FS_ERR
                     # razón) — el rc ya no mezcla "fallo de herramienta" con "caso no
-                    # automatizable". Cada paso guardado explícitamente (sin fallos
-                    # ocultos en pipelines), fstype ANTES de tocar la partición,
+                    # automatizable". Cada RESULTADO se valida no-vacío ([ -n ]): los
+                    # pipes de lsblk/df no reportan rc, pero su fallo deja el valor
+                    # vacío y eso se convierte en FS_ERR/FS_SKIP (no en éxito).
+                    # fstype y disco-sin-partición ANTES de tocar la partición,
                     # disco-sin-partición detectado, y la ejecución va por _ssh_exec
                     # (plazo total + streams drenados, sin recv_exit_status colgante).
                     script = (
@@ -1868,8 +1908,8 @@ def flujo_editar(job, sabor_slug):
                 if m_ok:
                     antes_b, despues_b = int(m_ok.group(1)), int(m_ok.group(2))
                     if despues_b >= objetivo_b and despues_b >= antes_b:
-                        job.detalle("filesystem expandido y VERIFICADO contra el plan: "
-                                    "%.1f → %.1f GB (objetivo %d GB)"
+                        job.detalle("filesystem expandido y VERIFICADO contra el umbral del plan: "
+                                    "%.1f → %.1f GB (objetivo %d GB, umbral 85%%)"
                                     % (antes_b / 1024**3, despues_b / 1024**3, sabor["disco_gb"]))
                     else:
                         job.detalle("⚠ el FS NO alcanzó el tamaño del plan (%.1f de %d GB — "
@@ -2240,11 +2280,8 @@ def flujo_reconciliar(job):
                 alertas.append("la pública %s de %s NO está en la address-list %s — revisar"
                                % (f["publica"], f["nombre"], f["pub_lista"]))
             for ln in entradas:
-                mfl = re.match(r"^\s*\d+\s+(?:([A-Z]+)\s+)?", ln)
-                flags = mfl.group(1) or "" if mfl else ""
-                mc = re.search(r'comment=(?:"([^"]*)"|([^\s]+))', ln)
-                comentario = ((mc.group(1) if mc.group(1) is not None else mc.group(2))
-                              if mc else "")
+                flags, props = _terse_props(ln)
+                comentario = props.get("comment", "")
                 if "X" not in flags or not comentario.strip():
                     alertas.append("address-list: la pública %s de %s tiene una entrada NO "
                                    "tomada (disabled=%s, comment=%s) — ¿liberada o duplicada?"
