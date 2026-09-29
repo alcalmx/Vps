@@ -1246,22 +1246,30 @@ PASOS_CREAR = [
 def set_root_password(ip, password):
     """Aplica la contraseña de root en la VM por SSH (chpasswd vía stdin — sin problemas
     de escape, y NO queda en el VMX). SSH sigue solo con llave: esta clave sirve para WHM/
-    consola, no para SSH (PasswordAuthentication no lo permite). Best-effort."""
-    if not (MGMT_PRIVKEY_PATH and ip and password):
-        return False
+    consola, no para SSH. Best-effort DEL CALLER, pero esta función ya no miente (Codex
+    Medios #18): condición no cumplida = EXCEPCIÓN (nada de False ignorado y "aplicada"),
+    ejecución con plazo total y streams drenados (_ssh_exec), y el error NUNCA incluye el
+    stderr remoto crudo (podría ecoar la línea root:<clave>)."""
+    if not MGMT_PRIVKEY_PATH:
+        raise RuntimeError("sin MGMT_PRIVKEY_PATH configurada")
+    if not ip:
+        raise RuntimeError("la VM no tiene IP registrada")
+    if not password:
+        raise RuntimeError("password vacía")
+    if "\n" in password or "\r" in password:
+        # una clave con salto inyectaría OTRA línea usuario:clave al protocolo de chpasswd
+        raise RuntimeError("password con salto de línea — no se aplica")
     cli = paramiko.SSHClient()
     cli.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-    cli.connect(ip, username="root", key_filename=MGMT_PRIVKEY_PATH, timeout=15,
-                allow_agent=False, look_for_keys=False)
     try:
-        stdin, _out, _err = cli.exec_command("chpasswd")
-        stdin.write("root:%s\n" % password)
-        stdin.flush()
-        stdin.channel.shutdown_write()
-        rc = _out.channel.recv_exit_status()
-        if rc != 0:
-            # #18: señal real — el caller (best-effort) lo convierte en aviso del job
-            raise RuntimeError("chpasswd rc=%d: %s" % (rc, _err.read().decode(errors="replace")[:120]))
+        cli.connect(ip, username="root", key_filename=MGMT_PRIVKEY_PATH, timeout=15,
+                    allow_agent=False, look_for_keys=False)
+        try:
+            _ssh_exec(cli, "chpasswd", stdin_data="root:%s\n" % password, timeout=30)
+        except RuntimeError as e:
+            m = re.search(r"rc=(\d+)", str(e))
+            raise RuntimeError("chpasswd falló (rc=%s) — la clave NO quedó aplicada"
+                               % (m.group(1) if m else "?")) from None
     finally:
         cli.close()
     return True
@@ -1806,31 +1814,40 @@ def flujo_editar(job, sabor_slug):
                     cli.set_missing_host_key_policy(paramiko.AutoAddPolicy())
                     cli.connect(vm["ip"], username="root", key_filename=MGMT_PRIVKEY_PATH,
                                 timeout=10, allow_agent=False, look_for_keys=False)
-                    # #19: script robusto — detecta el DISPOSITIVO REAL de la raíz
-                    # (no asume /dev/sda3), tolera growpart NOCHANGE (rc=1), crece el
-                    # FS según su tipo verificando exit codes, y COMPARA tamaño
-                    # antes/después. rc=3 = caso no automatizable (LVM/fs raro).
+                    # #19 (endurecido tras Codex Medios): el script SIEMPRE sale 0 y
+                    # reporta UNA línea de estado (FS_OK a b | FS_SKIP razón | FS_ERR
+                    # razón) — el rc ya no mezcla "fallo de herramienta" con "caso no
+                    # automatizable". Cada paso guardado explícitamente (sin fallos
+                    # ocultos en pipelines), fstype ANTES de tocar la partición,
+                    # disco-sin-partición detectado, y la ejecución va por _ssh_exec
+                    # (plazo total + streams drenados, sin recv_exit_status colgante).
                     script = (
-                        'set -e; '
-                        'SRC=$(findmnt -no SOURCE /); FST=$(findmnt -no FSTYPE /); '
+                        'command -v findmnt >/dev/null 2>&1 || { echo "FS_SKIP sin findmnt"; exit 0; }; '
+                        'SRC=$(findmnt -no SOURCE /) && [ -n "$SRC" ] || { echo "FS_ERR findmnt"; exit 0; }; '
+                        'FST=$(findmnt -no FSTYPE /) && [ -n "$FST" ] || { echo "FS_ERR fstype"; exit 0; }; '
+                        'case "$FST" in xfs|ext4|ext3) ;; *) echo "FS_SKIP fstype $FST"; exit 0;; esac; '
                         'case "$SRC" in /dev/sd*|/dev/vd*|/dev/nvme*) ;; '
-                        '*) echo "FS_SKIP raiz en $SRC (LVM/otro)"; exit 3;; esac; '
-                        'DISK=$(lsblk -no PKNAME "$SRC" | head -1); '
-                        'PART=$(printf %s "$SRC" | grep -oE "[0-9]+$"); '
+                        '*) echo "FS_SKIP raiz en $SRC (LVM/otro)"; exit 0;; esac; '
+                        'case "$SRC" in *[0-9]) ;; *) echo "FS_SKIP disco sin particion ($SRC)"; exit 0;; esac; '
+                        'DISK=$(lsblk -no PKNAME "$SRC" 2>/dev/null | head -1); '
+                        '[ -n "$DISK" ] || { echo "FS_SKIP sin disco padre ($SRC)"; exit 0; }; '
+                        'PART=$(printf %s "$SRC" | grep -oE "[0-9]+$") || { echo "FS_ERR particion"; exit 0; }; '
+                        'command -v growpart >/dev/null 2>&1 || { echo "FS_ERR sin growpart"; exit 0; }; '
                         'echo 1 > "/sys/class/block/$DISK/device/rescan" 2>/dev/null || true; '
-                        'ANTES=$(df -B1 --output=size / | tail -1 | tr -dc 0-9); '
-                        'set +e; growpart "/dev/$DISK" "$PART"; RC=$?; set -e; '
-                        '[ "$RC" -eq 0 ] || [ "$RC" -eq 1 ] || { echo "FS_ERR growpart rc=$RC"; exit 2; }; '
-                        'case "$FST" in xfs) xfs_growfs / >/dev/null;; '
-                        'ext4|ext3) resize2fs "$SRC" >/dev/null;; '
-                        '*) echo "FS_SKIP fstype $FST"; exit 3;; esac; '
-                        'DESPUES=$(df -B1 --output=size / | tail -1 | tr -dc 0-9); '
+                        'ANTES=$(df -B1 --output=size / 2>/dev/null | tail -1 | tr -dc 0-9); '
+                        '[ -n "$ANTES" ] || { echo "FS_ERR df"; exit 0; }; '
+                        'growpart "/dev/$DISK" "$PART" >/dev/null 2>&1; RC=$?; '
+                        '[ "$RC" -eq 0 ] || [ "$RC" -eq 1 ] || { echo "FS_ERR growpart rc=$RC"; exit 0; }; '
+                        'case "$FST" in '
+                        'xfs) xfs_growfs / >/dev/null 2>&1 || { echo "FS_ERR xfs_growfs"; exit 0; };; '
+                        '*) resize2fs "$SRC" >/dev/null 2>&1 || { echo "FS_ERR resize2fs"; exit 0; };; esac; '
+                        'DESPUES=$(df -B1 --output=size / 2>/dev/null | tail -1 | tr -dc 0-9); '
+                        '[ -n "$DESPUES" ] || { echo "FS_ERR df2"; exit 0; }; '
                         'echo "FS_OK $ANTES $DESPUES"')
-                    _, out, errch = cli.exec_command(script, timeout=90)
-                    rc = out.channel.recv_exit_status()
-                    salida = out.read().decode().strip().splitlines()
-                    err_txt = errch.read().decode(errors="replace").strip()
-                    cli.close()
+                    try:
+                        salida = _ssh_exec(cli, script, timeout=120).strip().splitlines()
+                    finally:
+                        cli.close()
                     err = None
                     break
                 except Exception as e:  # noqa: BLE001 — la VM puede estar arrancando
@@ -1840,19 +1857,29 @@ def flujo_editar(job, sabor_slug):
                 job.detalle("vmdk crecido; no se pudo expandir el FS por SSH (%s) — se expandirá al próximo arranque"
                             % str(err)[:100])
             else:
+                # parse ESTRICTO (Codex Medios #19): etiqueta exacta + 2 enteros; y el
+                # "verificado" compara contra el TAMAÑO OBJETIVO del plan, no solo
+                # antes/después (growpart NOCHANGE + resize sin efecto ya no pasa)
                 ultima = salida[-1] if salida else ""
-                if rc == 0 and ultima.startswith("FS_OK"):
-                    try:
-                        _, antes_b, despues_b = ultima.split()
-                        job.detalle("filesystem expandido y VERIFICADO: %.1f → %.1f GB"
-                                    % (int(antes_b) / 1024**3, int(despues_b) / 1024**3))
-                    except ValueError:
-                        job.detalle("filesystem expandido (FS_OK)")
-                elif rc == 3:
-                    job.detalle("⚠ FS no automatizable (%s) — crecer a MANO en el guest" % (ultima or "?"))
-                else:
-                    job.detalle("⚠ expansión del FS FALLÓ (rc=%d: %s %s) — revisar el guest a mano"
-                                % (rc, ultima[:80], err_txt[:80]))
+                m_ok = re.fullmatch(r"FS_OK (\d+) (\d+)", ultima)
+                # umbral 85% del objetivo en GiB: tolera overhead de ext4/xfs y
+                # redondeos GiB/GB, pero caza un FS que quedó chico de verdad
+                objetivo_b = int(sabor["disco_gb"] * (2 ** 30) * 0.85)
+                if m_ok:
+                    antes_b, despues_b = int(m_ok.group(1)), int(m_ok.group(2))
+                    if despues_b >= objetivo_b and despues_b >= antes_b:
+                        job.detalle("filesystem expandido y VERIFICADO contra el plan: "
+                                    "%.1f → %.1f GB (objetivo %d GB)"
+                                    % (antes_b / 1024**3, despues_b / 1024**3, sabor["disco_gb"]))
+                    else:
+                        job.detalle("⚠ el FS NO alcanzó el tamaño del plan (%.1f de %d GB — "
+                                    "¿partición siguiente bloquea el crecimiento?) — revisar a MANO"
+                                    % (despues_b / 1024**3, sabor["disco_gb"]))
+                elif ultima.startswith("FS_SKIP"):
+                    job.detalle("⚠ FS no automatizable (%s) — crecer a MANO en el guest" % ultima[:100])
+                else:   # FS_ERR o salida inesperada: NUNCA se anuncia éxito
+                    job.detalle("⚠ expansión del FS FALLÓ (%s) — revisar el guest a mano"
+                                % (ultima[:100] or "sin salida"))
         else:
             job.detalle("vmdk crecido; el guest expandirá el FS al próximo arranque")
     else:
@@ -2204,14 +2231,27 @@ def flujo_reconciliar(job):
         if not okl:
             alertas.append("no pude verificar la address-list de %s" % f["nombre"])
         else:
-            linea = next((l for l in rl.splitlines() if l.strip()), "")
-            if not linea:
+            # #22 endurecido (Codex Medios): se examinan TODAS las entradas numeradas
+            # (un duplicado habilitado ya no se esconde tras la primera), el flag X se
+            # lee del campo de flags (no "primer carácter tras el índice") y el
+            # comentario debe tener VALOR (comment="" vacío no cuenta como tomada)
+            entradas = [ln for ln in rl.splitlines() if re.match(r"^\s*\d+\s", ln)]
+            if not entradas:
                 alertas.append("la pública %s de %s NO está en la address-list %s — revisar"
                                % (f["publica"], f["nombre"], f["pub_lista"]))
-            elif not re.match(r"^\s*\d+\s+X", linea) or "comment=" not in linea:
-                alertas.append("address-list: la pública %s de %s no figura TOMADA "
-                               "(deshabilitada+comentada) — ¿liberada por error?"
-                               % (f["publica"], f["nombre"]))
+            for ln in entradas:
+                mfl = re.match(r"^\s*\d+\s+(?:([A-Z]+)\s+)?", ln)
+                flags = mfl.group(1) or "" if mfl else ""
+                mc = re.search(r'comment=(?:"([^"]*)"|([^\s]+))', ln)
+                comentario = ((mc.group(1) if mc.group(1) is not None else mc.group(2))
+                              if mc else "")
+                if "X" not in flags or not comentario.strip():
+                    alertas.append("address-list: la pública %s de %s tiene una entrada NO "
+                                   "tomada (disabled=%s, comment=%s) — ¿liberada o duplicada?"
+                                   % (f["publica"], f["nombre"],
+                                      "sí" if "X" in flags else "NO",
+                                      repr(comentario[:30]) if comentario else "vacío"))
+                    break
     job.detalle("%d VPS con pública verificados: %d NAT completos" % (len(con_publica), nat_ok))
 
     # 3. NetBox vs registro — REPARACIÓN idempotente (netbox_ip_add reutiliza por
