@@ -5,6 +5,29 @@
 
 ---
 
+## 2026-09-29 (martes) — ✅ E2E del wizard VALIDADO por Alcadio + checkbox de llave de Claude + tarjeta manual retirada
+
+**E2E real del wizard (Alcadio):** se borró esxi-20051 del motor y Alcadio lo re-enroló
+COMPLETO desde el dashboard: huella cotejada → "Preparar y enrolar" → job 5b088117c2b9 ok
+en 4 s (rol reconciliado, svc-vps rotado, wrapper, huella pinneada, secreto al almacén,
+749 GB validados) → doradas intactas en datastore1 (verificado) → ACTIVADO. La clave de
+root no aparece en ningún registro. Primera validación de punta a punta por el usuario.
+
+**Checkbox "llave de Claude" (pedido de Alcadio):** el wizard ahora ofrece un tilde para
+instalar la llave pública de diagnóstico del VPS de IA (root, shell pleno) en el host que
+se enrola. El navegador solo manda un booleano `agregar_llave_claude`; la llave la inyecta
+el PROXY del dashboard (constante CLAUDE_DIAG_PUBKEY — el browser nunca elige la llave), y
+el motor ya la validaba (formato ssh-rsa estricto, instalación idempotente). El job ahora
+registra "llave de diagnóstico (Claude) INSTALADA / ya estaba instalada" (commit aee6e7b).
+
+**Tarjeta "Enrolar host ya preparado (manual/avanzado)" RETIRADA del dashboard** (decisión
+de Alcadio: el wizard cubre todo). El endpoint POST /hosts del motor sigue vivo (token +
+permiso) por si algún día hace falta via API; la tarjeta queda en git para restaurarla.
+
+**Deploy (OK de Alcadio):** motor (build+restart, /health 200) y dashboard (respaldo
+dashboard.py.bak-20260929-llavediag, md5 verificado, build v2, restart, 200). Deuda de
+revisión: cambio chico anotado como pendiente menor para Codex (dosificación).
+
 ## 2026-09-29 (martes) — 🚀 DEPLOY de los fixes Medios #18/#19/#22 a noc-monitor (con OK de Alcadio)
 
 Con el "Ok dale" de Alcadio se desplegó el motor con los fixes de Medios aprobados por Codex
