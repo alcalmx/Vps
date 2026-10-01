@@ -27,6 +27,12 @@ APROBADO por Codex en 3 rondas y desplegado.
   REALMENTE se clonará: con cPanel acepta `-cpanel` o la base, por el fallback ya auditado).
 - `vms.so` registra el SO de cada VM; `/health` expone el catálogo y el dashboard tiene **selector
   de SO** que se preselecciona con el del plan y avisa si se combina cPanel con un SO que no lo soporta.
+- **Bug de UI corregido (reportado por Alcadio):** el selector de Host VMware no mostraba los
+  hosts al entrar directo a la sección — `vpsengInit()` poblaba marca y planes pero NO llamaba a
+  `vpsengHostsSelector()`, que solo corría al hacer clic en la pestaña "Crear VPS"; quedaba el
+  `<option>` estático del HTML ("Automático — host activo de mejor prioridad", resto del diseño
+  anterior). Ahora se puebla en el init, el placeholder dice "cargando hosts…" y no se restaura
+  una selección que ya no exista en la lista.
 - **UI afinada con Alcadio:** el selector de SO muestra solo el nombre del sistema; el selector
   de plantilla (cPanel) es **condicional** — con Ubuntu la opción "con cPanel" se deshabilita y se
   fuerza "sin"; y el selector de host ya **no** ofrece "por defecto" (el NOC elige host siempre).
