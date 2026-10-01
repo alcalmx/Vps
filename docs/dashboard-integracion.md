@@ -66,3 +66,20 @@ Esta primera etapa TODO se visualiza en el dashboard para poder ver si el proces
 se queda parado en algún paso. Más adelante, cuando el flujo esté maduro y lo
 dispare WHMCS, la sección seguirá existiendo como monitor/auditoría aunque ya no
 se use para lanzar creaciones a mano.
+
+## ⚠️ Tema oscuro del dashboard: qué clases de color SÍ se pueden usar
+
+El dashboard tiene tema propio con `body.dark-theme` y **solo redefine `.text-muted` y
+`.text-dark`**. Por lo tanto, en elementos nuevos:
+
+- ❌ **NO usar `text-body`** ni confiar en el color heredado por defecto: en modo oscuro quedan
+  con el color del tema claro (texto oscuro sobre fondo oscuro = invisible). Pasó dos veces el
+  2026-10-01 (cabeceras del formulario y la duración del job).
+- ✅ **Cabeceras de tarjeta: usar la clase `card-header`** del propio dashboard (el tema oscuro le
+  da fondo `#1c2233` y texto `#e2e8f0`, y respeta el radio de 12px). Es lo que usa el panel DDoS.
+- ✅ Para destacar un valor: **badges** (`badge bg-secondary`…) o clases de color explícitas
+  (`text-primary`, `text-success`, `text-warning`), que traen su propio color en ambos temas.
+- ✅ `text-muted` es seguro (el tema lo mapea a `#8b9cb5`).
+
+Regla práctica: **si un texto nuevo no se ve en oscuro, el problema es la clase de color**, no el
+fondo. Probar siempre el resultado en el tema que usa Alcadio (oscuro).
