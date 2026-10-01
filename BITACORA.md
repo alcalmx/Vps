@@ -34,6 +34,15 @@ APROBADO por Codex en 3 rondas y desplegado.
   **DÓNDE SE CREA** (host/entorno) — todo **centrado** (máx 1080px), las dos primeras lado a lado,
   controles `-sm` parejos y botones centrados al pie. Los nombres de las secciones los validó
   Alcadio ("está muy bien eso de qué se crea / para quién").
+- **Pestaña Jobs rediseñada (pedido de Alcadio):** el paso a paso ya NO se muestra en un panel al
+  pie (obligaba a bajar) sino en una **ventana flotante** centrada: se abre sola al lanzar una
+  creación (tras cambiar a la pestaña Jobs) y al pulsar "Ver pasos"; se cierra con el botón,
+  Escape o clic fuera, y al cerrarla se detiene el sondeo y se refresca la lista para abrir otro
+  job. NO se auto-abre al detectar un job corriendo (reaparecería cada vez que se cerrara). El
+  wizard (preparar host / copiar doradas) usa la misma ventana. El panel verde de acceso al VPS
+  (comando SSH + `ssh-keygen -R`) ahora aparece dentro de la ventana.
+- **Jobs en DOS columnas** (antes tres): **Mis jobs** absorbe la caja de *Sistema* —reconciliar,
+  purga y enrolamientos también son tareas del NOC— y **Clientes (automático · WHMCS)**.
 - ⚠️ **INCIDENTE y lección (2026-10-01): casi rompo el dashboard por anclar un reemplazo a un
   estilo CSS.** Al sustituir el formulario busqué el bloque por `style="max-width:1000px"`, cadena
   que TAMBIÉN existía en la página *Alta de Servicios*: el reemplazo cayó ahí y borró el final de
