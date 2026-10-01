@@ -32,6 +32,14 @@ fiable de la pública es el botón "Copiar llave del motor" del wizard (la lee d
 Estado de hosts: esxi-245 (pausado, ambos motores), esxi-20051 (pausado, solo admin, datastore1),
 esxi-20039 (pausado, solo admin, 2 datastores).
 
+**MOTOR DE CLIENTES (WHMCS) VALIDADO CON LA SEPARACIÓN NUEVA.** Alcadio lanzó una creación desde
+WHMCS (job bc8cc5f9942d, `vps-hcl-0002-alcadio`, serviceid 36681): quedó etiquetada **motor=clientes**
+(caja "Clientes (automático · WHMCS)" del dashboard, separada de "Mis jobs") y eligió **esxi-20051**
+porque Alcadio le puso **prioridad 99** frente a los 100 de esxi-245 — confirmando la regla
+"menor gana" y, antes de eso, que con empate (100 vs 100) ganaba el más antiguo (esxi-245).
+Completó los 15 pasos: pública 38.19.57.102 ↔ 10.100.16.236, **IP enviada a la ficha de WHMCS: ok**,
+cPanel 138 con WHM 200 y llave entregada por Send. El conector WHMCS quedó intacto tras los cambios.
+
 **REGRESIÓN DEL FLUJO DE CREACIÓN: IMPECABLE.** Alcadio creó `vps-hcl-0001-prueba23` en
 esxi-20051 (job f023390764fc, motor=admin, modo produccion): los **15 pasos en verde** — clon de la
 dorada con cPanel, disco 153 GB, CBT, IP privada 10.100.16.237 ↔ pública 38.19.57.102 (NAT 1:1 +
