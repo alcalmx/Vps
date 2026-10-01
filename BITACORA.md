@@ -5,6 +5,35 @@
 
 ---
 
+## 2026-10-01 (jueves) — 🐧 DORADA UBUNTU 26.04 CONSTRUIDA (VPS sin panel, no depende de cPanel)
+
+Alcadio: "a veces me piden máquinas VPS con Ubuntu 26.04.1" — y es algo que **no depende de la
+licencia de cPanel**. Decisiones suyas: **primero la dorada**, y alcance **"VPS limpio sin panel"**.
+
+**Construida en esxi-20051** (`_plantillas/dorada-ubuntu26.04`, 2,3 GB reales, disco 10 GB thin).
+Camino MUCHO más corto que el de AlmaLinux: Ubuntu publica **OVA cloud oficial** con cloud-init,
+open-vm-tools, growpart y netplan ya dentro → **no se instaló nada y no hizo falta internet**
+(la red 192.168.200.0/24 no tiene salida; se comprobó). Procedimiento completo y reproducible
+documentado en `dorada/README.md`; semilla cloud-init versionada en `dorada/ubuntu-seed.yaml`.
+
+Hallazgos de la construcción:
+- **La API de svc-vps NO puede importar OVAs** ("Permission to perform this operation was denied")
+  — el privilegio mínimo funcionando. Se usó la **llave de bootstrap** (root shell) para subir el
+  disco y convertirlo con `vmkfstools -i -d thin`.
+- La OVA declara **pvscsi + vmxnet3** = el mismo hardware del `VMX_TEMPLATE` del motor → los
+  clones arrancarán sin ajustes de hardware.
+- **El datasource VMware/guestinfo FUNCIONA en Ubuntu**: la VM leyó la semilla por guestinfo,
+  se configuró y **se apagó sola** a los ~2,5 min (señal de sellado correcto). Es el mismo
+  mecanismo que usarán los clones. ✅
+- El wrapper del motor ya la lista: `list-plantillas` → `dorada-ubuntu26.04`. ✅
+
+**⚠️ PENDIENTE para poder crear VPS Ubuntu (paso 2):** el motor usa `DORADA_DEFAULT` fijo e
+inyecta la red con **`nmcli` (NetworkManager)**, que **Ubuntu Server no tiene** (usa netplan /
+systemd-networkd) → un clon Ubuntu nacería sin IP y la creación fallaría esperando SSH. Falta:
+respetar el `so_default` que YA existe en el esquema de sabores, generar el userdata **según el
+SO** (netplan vs nmcli), selector de SO en Crear VPS y opción por producto en WHMCS. Luego:
+copiar la dorada a los demás hosts y probar una creación real.
+
 ## 2026-10-01 (jueves) — 🎯 GATE DE STAGING SUPERADO en ESXi 8 real: modo llave + multi-datastore
 
 **esxi-20039 (192.168.200.39) enrolado por Alcadio desde el dashboard, en MODO LLAVE y con DOS

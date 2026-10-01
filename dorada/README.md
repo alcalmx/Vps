@@ -119,3 +119,65 @@ al final para que growpart crezca el disco de cada clon al tamaño del sabor.
   `dorada-<so><ver>`. El sabor elige con `so_default`.
 - La ISO de instalación vive local en el host (fase 1). Propuesta a futuro:
   biblioteca NFS centralizada de ISOs montada en todos los hosts.
+
+---
+
+# Construcción de la plantilla dorada Ubuntu (dorada-ubuntu26.04)
+
+> **Camino distinto al de AlmaLinux (mucho más corto):** Ubuntu publica **imágenes cloud
+> oficiales en formato OVA** que ya traen cloud-init, open-vm-tools, growpart y netplan.
+> No hace falta kickstart, ni ISO, ni salida a internet en la red de construcción.
+> Construida el 2026-10-01 en esxi-20051 (~25 min, casi todo transferencia de archivos).
+
+## Resultado
+
+`_plantillas/dorada-ubuntu26.04/` — Ubuntu 26.04 LTS (resolute), **2,3 GB reales** (disco de
+10 GB thin), con: llave de gestión en root, sshd endurecido (root solo con llave), datasource
+**VMware/guestinfo** forzado, identidad sellada y open-vm-tools habilitado. Sin panel (cPanel
+no soporta 26.04) — es la dorada para los VPS "limpios".
+
+## Por qué este camino
+
+- La imagen oficial YA trae lo necesario: `cloud-init 26.1`, `open-vm-tools 13`,
+  `cloud-guest-utils` (growpart), `netplan`, `openssh-server` → **no se instala nada**, y por
+  eso no importa que la red de construcción (192.168.200.0/24) no tenga salida a internet.
+- La OVA declara **pvscsi + vmxnet3**, el mismo hardware del `VMX_TEMPLATE` del motor → los
+  clones arrancan sin ajustes.
+
+## Procedimiento (reproducible)
+
+1. **Descargar y verificar** (en noc-monitor, `/opt/doradas-build`):
+   ```sh
+   curl -sL -o SHA256SUMS https://cloud-images.ubuntu.com/releases/resolute/release/SHA256SUMS
+   curl -L -o ubuntu-26.04-server-cloudimg-amd64.ova \
+        https://cloud-images.ubuntu.com/releases/resolute/release/ubuntu-26.04-server-cloudimg-amd64.ova
+   sha256sum -c <(grep 'amd64.ova' SHA256SUMS | tr -d '*')
+   ```
+   (`26.04` redirige al nombre clave **resolute**.)
+2. **Extraer** el OVA (`tar xf`) → `.ovf` + `.vmdk` (streamOptimized, 792 MB).
+3. **Transferir el disco al host** y convertirlo a thin nativo (la API de svc-vps NO puede
+   importar OVAs — privilegio mínimo; se usa la **llave de bootstrap** del motor, root shell):
+   ```sh
+   cat *.vmdk | ssh -i <bootstrap_root> root@<host> "cat > <ds>/build-ubuntu/src.vmdk"
+   ssh ... "cd <ds>/build-ubuntu && vmkfstools -i src.vmdk -d thin dorada-ubuntu26.04.vmdk && rm src.vmdk"
+   ```
+4. **VMX de construcción** = el `VMX_TEMPLATE` del motor con `guestOS = "ubuntu-64"` + la
+   semilla cloud-init en `guestinfo.metadata`/`guestinfo.userdata` (gzip+base64). La semilla
+   versionada: [ubuntu-seed.yaml](ubuntu-seed.yaml).
+5. **Registrar y encender**: `vim-cmd solo/registervm` + `vmsvc/power.on`. La VM se configura
+   y **se apaga sola** (~2,5 min) — ese apagado ES la señal de éxito del sellado.
+6. **Des-registrar**, mover la carpeta a `_plantillas/dorada-ubuntu26.04/` y limpiar las líneas
+   `guestinfo.*` del vmx de la plantilla (higiene: el motor escribe su propio vmx al clonar).
+
+## Verificado en la construcción
+
+- **El datasource VMware funciona en Ubuntu**: cloud-init leyó la semilla por guestinfo y
+  ejecutó todo (es el mismo mecanismo que usarán los clones). ✅
+- El wrapper del motor la lista: `list-plantillas` → `dorada-ubuntu26.04`. ✅
+
+## ⚠️ PENDIENTE antes de poder crear VPS Ubuntu
+
+El motor **todavía no sabe elegir SO**: usa `DORADA_DEFAULT` fijo e inyecta la red con
+**`nmcli` (NetworkManager)**, que **Ubuntu Server no tiene** (usa netplan/systemd-networkd).
+Falta: respetar el `so_default` del sabor, generar el userdata **según el SO** (netplan vs
+nmcli), selector de SO en el dashboard y opción por producto en WHMCS. Ver BITACORA.

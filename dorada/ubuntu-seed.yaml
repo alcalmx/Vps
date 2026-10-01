@@ -1,0 +1,69 @@
+#cloud-config
+# Construcción de la dorada Ubuntu 26.04 (resolute) para el motor VPS — hosting.cl.
+# Se entrega por las propiedades vApp de la OVA (datasource OVF) y corre UNA sola vez,
+# en el boot de construcción: personaliza, sella la identidad y apaga la VM.
+# Si algo falla, la VM queda encendida en 192.168.200.61 para entrar a depurar.
+disable_root: false
+ssh_pwauth: false
+users:
+  - name: root
+    lock_passwd: true
+    ssh_authorized_keys:
+      - __MGMT_PUBKEY__
+
+write_files:
+  # red temporal SOLO para la construcción (el sellado la borra)
+  - path: /etc/netplan/99-build-temp.yaml
+    permissions: '0600'
+    content: |
+      network:
+        version: 2
+        ethernets:
+          build0:
+            match:
+              name: "e*"
+            addresses: [192.168.200.61/24]
+
+  # los CLONES reciben su configuración por guestinfo → datasource VMware
+  - path: /etc/cloud/cloud.cfg.d/99-vps-datasource.cfg
+    permissions: '0644'
+    content: |
+      datasource_list: [ VMware, NoCloud, None ]
+      datasource:
+        VMware:
+          allow_raw_data: true
+
+  # sshd endurecido: root SOLO con llave, sin contraseñas
+  - path: /etc/ssh/sshd_config.d/99-vps.conf
+    permissions: '0644'
+    content: |
+      PermitRootLogin prohibit-password
+      PasswordAuthentication no
+      KbdInteractiveAuthentication no
+
+  - path: /usr/local/sbin/dorada-seal.sh
+    permissions: '0755'
+    content: |
+      #!/bin/bash
+      # Sella la plantilla: borra toda identidad para que cada clon genere la suya.
+      exec > /var/log/dorada-seal.log 2>&1
+      set -x
+      rm -f /etc/netplan/99-build-temp.yaml      # la red temporal no viaja a los clones
+      rm -f /etc/ssh/ssh_host_*                  # cada clon regenera sus host keys
+      : > /etc/machine-id                        # systemd la regenera al arrancar
+      rm -f /var/lib/dbus/machine-id
+      rm -f /etc/netplan/50-cloud-init.yaml      # la red la define el motor por cloud-init
+      rm -f /root/.ssh/known_hosts
+      apt-get clean || true
+      rm -rf /tmp/* /var/tmp/* /var/log/journal/* 2>/dev/null
+      touch /var/lib/dorada-sellada
+      rm -f /usr/local/sbin/dorada-seal.sh       # no dejar el sellador en los clones
+      cloud-init clean --logs --seed
+      rm -rf /var/lib/cloud/instances/* /var/lib/cloud/instance
+      sync
+      /sbin/shutdown -h now
+
+runcmd:
+  - [ netplan, apply ]
+  - [ systemctl, enable, open-vm-tools ]
+  - [ bash, /usr/local/sbin/dorada-seal.sh ]
