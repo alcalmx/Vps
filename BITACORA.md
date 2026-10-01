@@ -5,6 +5,47 @@
 
 ---
 
+## 2026-10-01 (jueves) — 🐧 MOTOR MULTI-SO DESPLEGADO: ya se puede ofrecer Ubuntu
+
+Paso 2 del pedido de Alcadio (tras construir la dorada): el motor ahora **elige sistema operativo**.
+APROBADO por Codex en 3 rondas y desplegado.
+
+**Qué se construyó:**
+- Catálogo `SISTEMAS` (SO → dorada física + **familia** + si admite cPanel), con **guarda de
+  coherencia al arrancar**: si `DORADA` apuntara a una plantilla de otro SO, el motor NO arranca
+  (evita mandarle red de NetworkManager a un Ubuntu y dejarlo sin red).
+- **Red POR FAMILIA** (lo crítico): `rhel` → nmcli (como siempre); `debian` → **netplan**, con
+  `dhcp4/dhcp6: false` explícitos (netplan FUSIONA mapas: un dhcp4 previo sobreviviría),
+  `renderer: networkd`, misma clave de interfaz que el metadata (`nic0`, para que fusione en vez
+  de competir) y la cadena `rm 50-cloud-init.yaml; netplan generate; netplan apply; touch marcador`
+  con `sh -ec` (el marcador solo se escribe si TODO salió bien). El metadata usa `routes:` en
+  debian (`gateway4` está deprecado en netplan moderno).
+- El SO lo define el **plan** (`so_default`, campo que ya existía y se ignoraba); el **NOC** puede
+  forzar otro al crear; **WHMCS no** (vende catálogo) → 403.
+- **cPanel + SO incompatible se rechaza ANTES de crear** (en el endpoint y también en el worker).
+- Pre-chequeo de que la **plantilla exista en ese host** antes de tocar el ESXi (valida la que
+  REALMENTE se clonará: con cPanel acepta `-cpanel` o la base, por el fallback ya auditado).
+- `vms.so` registra el SO de cada VM; `/health` expone el catálogo y el dashboard tiene **selector
+  de SO** que se preselecciona con el del plan y avisa si se combina cPanel con un SO que no lo soporta.
+- **Plan nuevo `vps-estandar-ubuntu`** (so_default ubuntu26.04, sin cPanel): así **WHMCS puede
+  vender Ubuntu sin tocar el módulo PHP** — el producto apunta a ese sabor.
+
+**Hallazgos de Codex corregidos:** KeyError si llegaba un `so` desconocido al worker (→ validador
+único para las dos vías); valores falsy (`False`/`0`/`[]`/`{}`) colándose como "sin parámetro";
+`so_default` con tipos raros usando el global en silencio; la **compensación no cubría** la
+resolución de SO ni la validación de la reserva (→ TODO lo previo al ESXi dentro del try que libera
+la reserva); el pre-chequeo validaba la base cuando se clonaría `-cpanel`; y el **marcador
+`vps-engine.provisioned` se escribía aunque la red fallara** (→ cadena con `sh -ec`).
+
+17 suites verdes (nueva `test_so.py`). Desplegado: motor + dashboard + el sabor Ubuntu (ojo: los
+JSON de sabores viven en el build del servidor, hay que subirlos aparte del app.py). Verificado en
+producción: `/health` lista los 2 sistemas y los 4 planes con su SO.
+
+**PENDIENTE operativo (condición de Codex antes de ofrecerlo a clientes):** crear un VPS Ubuntu
+real en staging y verificar IP/ruta/DNS/SSH **y tras un reinicio** (qué archivos de red reaparecen,
+que no quede DHCP activo), más la regresión AlmaLinux con y sin cPanel. Además, la dorada Ubuntu
+hoy solo está en **esxi-20051**: hay que copiarla a los demás hosts.
+
 ## 2026-10-01 (jueves) — 🐧 DORADA UBUNTU 26.04 CONSTRUIDA (VPS sin panel, no depende de cPanel)
 
 Alcadio: "a veces me piden máquinas VPS con Ubuntu 26.04.1" — y es algo que **no depende de la

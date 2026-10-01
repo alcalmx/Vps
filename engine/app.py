@@ -116,6 +116,48 @@ if WHMCS_MODO not in ("pruebas", "produccion"):
     raise RuntimeError("WHMCS_MODO inválido: %r (pruebas | produccion)" % WHMCS_MODO)
 DORADA_DEFAULT = os.environ.get("DORADA", "dorada-almalinux9.7")
 
+# ── Catálogo de SISTEMAS OPERATIVOS ofrecidos (2026-10-01) ───────────────────
+# Cada SO apunta a su plantilla dorada (debe existir en _plantillas/ del host) y declara su
+# FAMILIA, que decide cómo se configura la red del clon:
+#   rhel   → nmcli (NetworkManager)         · AlmaLinux
+#   debian → netplan (systemd-networkd)     · Ubuntu NO trae NetworkManager
+# `cpanel` indica si existe la variante `<dorada>-cpanel` (cPanel no soporta Ubuntu 26.04).
+# `token` = cadena que DEBE aparecer en el nombre de la dorada: guarda de coherencia contra
+# un DORADA mal apuntado (si la entrada "almalinux9" apuntara a una dorada Ubuntu, el motor
+# le mandaría red de NetworkManager y el VPS nacería sin red) — Codex multiso #f.
+SISTEMAS = {
+    "almalinux9": {"nombre": "AlmaLinux 9", "dorada": DORADA_DEFAULT, "token": "almalinux",
+                   "familia": "rhel", "cpanel": True},
+    "ubuntu26.04": {"nombre": "Ubuntu 26.04 LTS", "dorada": "dorada-ubuntu26.04", "token": "ubuntu",
+                    "familia": "debian", "cpanel": False},
+}
+for _k, _v in SISTEMAS.items():
+    if _v["token"] not in _v["dorada"]:
+        raise RuntimeError("catálogo de sistemas incoherente: %s apunta a la plantilla %r, que no "
+                           "nombra a %r — revisar la variable DORADA" % (_k, _v["dorada"], _v["token"]))
+SO_DEFAULT = os.environ.get("SO_DEFAULT", "almalinux9")
+if SO_DEFAULT not in SISTEMAS:
+    raise RuntimeError("SO_DEFAULT inválido: %r (opciones: %s)" % (SO_DEFAULT, ", ".join(SISTEMAS)))
+
+def validar_so(so, origen):
+    """Valida que `so` sea una clave REAL del catálogo. Único validador para las dos vías de
+    entrada (parámetro del NOC y so_default del plan) — así ningún camino llega a SISTEMAS[so]
+    con una clave inexistente (KeyError) — Codex multiso #e."""
+    if not isinstance(so, str) or so not in SISTEMAS:
+        raise RuntimeError("sistema operativo inválido (%s): %r — opciones: %s"
+                           % (origen, so, ", ".join(SISTEMAS)))
+    return so
+
+def so_de_sabor(sabor_def):
+    """SO efectivo de un plan: su `so_default` si es uno del catálogo, si no el global. Un
+    so_default ausente/vacío hereda el global; cualquier OTRO valor (0, False, lista, nombre
+    desconocido) es un error de configuración y NO se acepta en silencio: el plan apuntaría a
+    una dorada inexistente y la creación moriría al clonar."""
+    so = (sabor_def or {}).get("so_default")
+    if so is None or so == "":
+        so = SO_DEFAULT
+    return validar_so(so, "so_default del plan")
+
 app = Flask(__name__)
 # #15: tope duro del body (nuestros payloads reales son < 8 KB; 64 KB da holgura)
 app.config["MAX_CONTENT_LENGTH"] = 64 * 1024
@@ -185,7 +227,8 @@ def init_db():
                           ("vault_item", "TEXT"), ("send_url", "TEXT"), ("send_id", "TEXT"),
                           ("byo_pubkey_fp", "TEXT"), ("nb_priv_id", "TEXT"), ("nb_pub_id", "TEXT"),
                           ("whmcs_serviceid", "TEXT"), ("host", "TEXT"),
-                          ("datastore", "TEXT")):   # multi-datastore: datastore donde VIVE la VM
+                          ("datastore", "TEXT"),    # multi-datastore: datastore donde VIVE la VM
+                          ("so", "TEXT")):          # sistema operativo con el que se creó
             try:
                 c.execute("ALTER TABLE vms ADD COLUMN %s %s" % (col, decl))
             except sqlite3.OperationalError as e:
@@ -1154,20 +1197,74 @@ powerType.reset = "soft"
 def _gz64(texto):
     return base64.b64encode(gzip.compress(texto.encode())).decode()
 
-def cloudinit_metadata(nombre, hostname, ip, prefijo, gateway, dns):
+def cloudinit_metadata(nombre, hostname, ip, prefijo, gateway, dns, familia="rhel"):
+    nic = {
+        "match": {"name": "e*"},
+        "addresses": ["%s/%d" % (ip, prefijo)],
+        "nameservers": {"addresses": dns},
+    }
+    # `gateway4` está DEPRECADO en netplan moderno (Ubuntu 26.04 lo rechaza con warning y
+    # puede ignorar la ruta): para debian se emite la sintaxis actual `routes:`.
+    if familia == "debian":
+        nic["routes"] = [{"to": "default", "via": gateway}]
+    else:
+        nic["gateway4"] = gateway
     md = {
         "instance-id": nombre,
         "local-hostname": hostname,
-        "network": {"version": 2, "ethernets": {"nic0": {
-            "match": {"name": "e*"},
-            "addresses": ["%s/%d" % (ip, prefijo)],
-            "gateway4": gateway,
-            "nameservers": {"addresses": dns},
-        }}},
+        "network": {"version": 2, "ethernets": {"nic0": nic}},
     }
     return json.dumps(md)
 
-def cloudinit_userdata(hostname, ip, prefijo, gateway, dns):
+def cloudinit_userdata(hostname, ip, prefijo, gateway, dns, familia="rhel"):
+    """userdata POR FAMILIA de SO: la red se fuerza con la herramienta que el SO realmente
+    tiene (el datasource VMware se detecta tarde en ESXi standalone y cloud-init no siempre
+    aplica la red estática del metadata, así que se fuerza en runcmd)."""
+    if familia == "debian":
+        return _userdata_debian(hostname, ip, prefijo, gateway, dns)
+    return _userdata_rhel(hostname, ip, prefijo, gateway, dns)
+
+def _userdata_debian(hostname, ip, prefijo, gateway, dns):
+    """Ubuntu/Debian: netplan + systemd-networkd (NO traen NetworkManager, así que nmcli no
+    existe). Se escribe un netplan propio (0600: netplan avisa si es world-readable), se
+    retira el que cloud-init genere y se aplica."""
+    dns_list = ", ".join(dns)
+    return """#cloud-config
+hostname: %(host)s
+disable_root: false
+ssh_pwauth: false
+users:
+  - name: root
+    ssh_authorized_keys:
+      - %(pub)s
+growpart:
+  mode: auto
+  devices: ['/']
+write_files:
+  - path: /etc/netplan/60-vps.yaml
+    permissions: '0600'
+    content: |
+      network:
+        version: 2
+        renderer: networkd
+        ethernets:
+          nic0:
+            match:
+              name: "e*"
+            dhcp4: false
+            dhcp6: false
+            addresses: [%(ip)s/%(pfx)d]
+            routes:
+              - to: default
+                via: %(gw)s
+            nameservers:
+              addresses: [%(dns)s]
+runcmd:
+  - [sh, -ec, 'rm -f /etc/netplan/50-cloud-init.yaml; netplan generate; netplan apply; touch /var/lib/vps-engine.provisioned']
+""" % {"host": hostname, "pub": MGMT_PUBKEY, "ip": ip, "pfx": prefijo,
+       "gw": gateway, "dns": dns_list}
+
+def _userdata_rhel(hostname, ip, prefijo, gateway, dns):
     # El datasource VMware en ESXi standalone suele detectarse en la etapa
     # "network" (después de que la NIC ya subió por DHCP), así que cloud-init
     # NO aplica la red estática del metadata. La forzamos determinísticamente
@@ -1443,34 +1540,46 @@ def set_root_password(ip, password):
 
 def flujo_crear(job, marca, sabor_slug, cliente, hostname, instalar_cpanel, modo,
                 pubkey_cliente=None, root_password=None, whmcs_serviceid=None,
-                sabor_def=None, host=None):
-    marca_cfg = MARCAS[marca]
-    # sabor_def viene resuelto desde /crear (catálogo o PERSONALIZADO con specs propias)
-    sabor = sabor_def or SABORES[(marca, sabor_slug)]
-    # A2: el host viene ELEGIDO desde /crear (selección del usuario o prioridad);
-    # snapshot del dict — si lo pausan a mitad de creación, este job termina igual
-    h = host or host_de_vm(job.vm)
-    red = red_activa(marca_cfg, modo)
-    prefijo = ipaddress.ip_network(red["subred"]).prefixlen
+                sabor_def=None, host=None, so=None):
     nombre = job.vm
 
-    # 1. validar la reserva del registro (el INSERT atómico ya lo hizo reservar_vm
-    #    en /crear — cierra la carrera de nombre/número entre creaciones paralelas)
-    job.paso()
-    reg = vm_registrada(nombre)
-    if not reg or reg.get("estado") != "creando":
-        raise RuntimeError("reserva de %s no encontrada o en estado inesperado" % nombre)
-    job.detalle("%s · %s (%d vCPU / %d MB / %d GB) · modo %s · host %s"
-                % (nombre, sabor["nombre_web"], sabor["vcpu"], sabor["ram_mb"], sabor["disco_gb"], modo, h["id"]))
-
-    # 2-3b: pre-chequeos ANTES de tocar el ESXi (IP, datastore, portgroup). Si algo
-    # falla aquí la VM todavía NO existe en el host → se COMPENSA borrando la fila
-    # reservada, lo que libera la IP y el cupo (ambos cuentan las filas 'creando').
-    # Sin esto, un aborto temprano dejaba una fila 'creando' huérfana con IP que solo
-    # la reconciliación ALERTABA para limpieza manual (Codex personalizado #3). Desde
-    # el paso 4 (mkdir-vm) el ESXi SÍ se toca: esos fallos los maneja la saga/reconcile
+    # TODO lo previo a tocar el ESXi va dentro del bloque que COMPENSA: si algo falla aquí la
+    # VM todavía NO existe en el host → se borra la fila reservada, liberando IP y cupo (ambos
+    # cuentan las filas 'creando'). Sin esto, un aborto temprano (SO inválido, reserva en mal
+    # estado, sin espacio, sin portgroup, sin plantilla) dejaba una fila huérfana que solo la
+    # reconciliación ALERTABA para limpieza manual (Codex personalizado #3 / multiso #e).
+    # Desde el paso 4 (mkdir-vm) el ESXi SÍ se toca: esos fallos los maneja la saga/reconcile
     # (hay estado real que no se debe borrar a ciegas).
     try:
+        # sabor_def viene resuelto desde /crear (catálogo o PERSONALIZADO con specs propias)
+        marca_cfg = MARCAS[marca]
+        sabor = sabor_def or SABORES[(marca, sabor_slug)]
+        # SO: el que pidió el NOC explícitamente, o el `so_default` del plan. Decide la dorada
+        # a clonar y la FAMILIA (cómo se configura la red del clon: netplan vs nmcli). Se
+        # VALIDA aquí también (no solo en /crear): ningún camino debe llegar a SISTEMAS[so]
+        # con una clave inexistente, ni entregar un SO sin cPanel a un plan que lo promete.
+        so = so_de_sabor(sabor) if so is None else validar_so(so, "parámetro")
+        so_info = SISTEMAS[so]
+        if instalar_cpanel and not so_info.get("cpanel"):
+            raise RuntimeError("el plan incluye cPanel pero %s no lo soporta" % so_info["nombre"])
+        dorada, familia = so_info["dorada"], so_info["familia"]
+        # A2: el host viene ELEGIDO desde /crear (selección del usuario o prioridad);
+        # snapshot del dict — si lo pausan a mitad de creación, este job termina igual
+        h = host or host_de_vm(job.vm)
+        red = red_activa(marca_cfg, modo)
+        prefijo = ipaddress.ip_network(red["subred"]).prefixlen
+
+        # 1. validar la reserva del registro (el INSERT atómico ya lo hizo reservar_vm
+        #    en /crear — cierra la carrera de nombre/número entre creaciones paralelas)
+        job.paso()
+        reg = vm_registrada(nombre)
+        if not reg or reg.get("estado") != "creando":
+            raise RuntimeError("reserva de %s no encontrada o en estado inesperado" % nombre)
+        set_estado(nombre, "creando", so=so)   # deja registrado el SO desde el inicio
+        job.detalle("%s · %s (%d vCPU / %d MB / %d GB) · %s · modo %s · host %s"
+                    % (nombre, sabor["nombre_web"], sabor["vcpu"], sabor["ram_mb"],
+                       sabor["disco_gb"], so_info["nombre"], modo, h["id"]))
+
         # 2. IP privada libre — RouterData en producción, barrido local en pruebas.
         #    Bajo IP_PRIV_LOCK: elegir y GRABAR es atómico entre jobs (ambos flujos
         #    consultan el registro, así el siguiente ya la ve ocupada).
@@ -1504,6 +1613,17 @@ def flujo_crear(job, marca, sabor_slug, cliente, hostname, instalar_cpanel, modo
                                "(redes del host: %s) — crearlo en el ESXi (Networking → "
                                "Port groups, con su VLAN) antes de crear aquí"
                                % (h["id"], red["portgroup"], modo, ", ".join(redes) or "ninguna"))
+        # 3c. la dorada del SO elegido debe existir en ESTE host (si no, el clon moriría a
+        # mitad de camino dejando la carpeta creada). listar_wrapper valida el sentinel OK.
+        plantillas = listar_wrapper("list-plantillas", host=h)
+        # con cPanel sirve la variante -cpanel O la base (el clonado cae a la base si la
+        # variante falta); sin cPanel se exige la base. Se valida lo que SE VA A clonar.
+        aceptables = [dorada + "-cpanel", dorada] if instalar_cpanel else [dorada]
+        if not any(x in plantillas for x in aceptables):
+            raise RuntimeError("el host %s no tiene la plantilla %s (%s) — cópiala con "
+                               "'Copiar plantillas doradas' en la pestaña Motor. Disponibles: %s"
+                               % (h["id"], " ni ".join(aceptables), so_info["nombre"],
+                                  ", ".join(p for p in plantillas if p.startswith("dorada-")) or "ninguna"))
     except Exception:
         # compensación: la reserva se borra SOLO si sigue 'creando' (no pisar una VM
         # que otro flujo ya hubiera hecho avanzar) — libera IP y cupo
@@ -1520,8 +1640,8 @@ def flujo_crear(job, marca, sabor_slug, cliente, hostname, instalar_cpanel, modo
     cpanel_preinstalado = False
     if instalar_cpanel:
         try:
-            job.detalle("clonando %s-cpanel → %s (thin, cPanel preinstalado)…" % (DORADA_DEFAULT, nombre))
-            esxi_ssh("clone-disk %s-cpanel %s" % (DORADA_DEFAULT, nombre), timeout=900, host=h)
+            job.detalle("clonando %s-cpanel → %s (thin, cPanel preinstalado)…" % (dorada, nombre))
+            esxi_ssh("clone-disk %s-cpanel %s" % (dorada, nombre), timeout=900, host=h)
             cpanel_preinstalado = True
         except RuntimeError as e:
             if "plantilla no existe" in str(e):
@@ -1529,8 +1649,8 @@ def flujo_crear(job, marca, sabor_slug, cliente, hostname, instalar_cpanel, modo
             else:
                 raise
     if not cpanel_preinstalado:
-        job.detalle("clonando %s → %s (thin)…" % (DORADA_DEFAULT, nombre))
-        esxi_ssh("clone-disk %s %s" % (DORADA_DEFAULT, nombre), timeout=900, host=h)
+        job.detalle("clonando %s (%s) → %s (thin)…" % (dorada, so_info["nombre"], nombre))
+        esxi_ssh("clone-disk %s %s" % (dorada, nombre), timeout=900, host=h)
 
     # 5. crecer disco
     job.paso()
@@ -1555,8 +1675,8 @@ def flujo_crear(job, marca, sabor_slug, cliente, hostname, instalar_cpanel, modo
     # 8. cloud-init vía guestinfo
     job.paso()
     fqdn = hostname if "." in hostname else "%s.%s" % (hostname, marca_cfg.get("dominio_hostname", marca))
-    md = cloudinit_metadata(nombre, fqdn, ip, prefijo, red["gateway"], red["dns"])
-    ud = cloudinit_userdata(fqdn, ip, prefijo, red["gateway"], red["dns"])
+    md = cloudinit_metadata(nombre, fqdn, ip, prefijo, red["gateway"], red["dns"], familia)
+    ud = cloudinit_userdata(fqdn, ip, prefijo, red["gateway"], red["dns"], familia)
     govc("vm.change", "-vm", nombre,
          "-e", "guestinfo.metadata=%s" % _gz64(md),
          "-e", "guestinfo.metadata.encoding=gzip+base64",
@@ -2562,11 +2682,14 @@ def health():
         return jsonify({"ok": True})
     detalle = [{"marca": s["marca"], "slug": s["slug"], "nombre_web": s["nombre_web"],
                 "vcpu": s["vcpu"], "ram_mb": s["ram_mb"], "disco_gb": s["disco_gb"],
+                "so_default": s.get("so_default") or SO_DEFAULT,
                 "activo": s.get("activo", True)} for s in SABORES.values()]
     detalle.sort(key=lambda s: (s["marca"], s["slug"]))
+    sistemas = [{"so": k, "nombre": v["nombre"], "cpanel": bool(v.get("cpanel"))}
+                for k, v in sorted(SISTEMAS.items())]
     return jsonify({"ok": True, "modo": MODO,
                     "marcas": sorted(MARCAS), "sabores": sorted("%s/%s" % k for k in SABORES),
-                    "sabores_detalle": detalle})
+                    "sabores_detalle": detalle, "sistemas": sistemas, "so_default": SO_DEFAULT})
 
 @app.route("/crear", methods=["POST"])
 def crear():
@@ -2638,6 +2761,28 @@ def crear():
         cpanel = bool(d["instalar_cpanel"])
     else:
         cpanel = (sabor_def.get("extras", {}).get("cpanel_licencia_cuentas", 0) or 0) > 0
+    # SISTEMA OPERATIVO: por defecto el `so_default` del plan; el NOC puede forzar otro
+    # (WHMCS vende el catálogo: su SO lo define el plan, igual que las specs).
+    _so = d.get("so")
+    if _so is not None and not isinstance(_so, str):
+        return jsonify({"error": "so debe ser texto"}), 400
+    so_sel = (_so or "").strip() or None
+    if so_sel:
+        if rol != "admin":
+            return jsonify({"error": "solo el NOC puede elegir el sistema operativo"}), 403
+        if so_sel not in SISTEMAS:
+            return jsonify({"error": "sistema operativo desconocido: %s (opciones: %s)"
+                                     % (so_sel, ", ".join(SISTEMAS))}), 400
+    try:
+        so_efectivo = so_sel or so_de_sabor(sabor_def)
+    except RuntimeError as e:
+        return jsonify({"error": str(e)}), 400
+    # cPanel no existe para todos los SO (p.ej. no soporta Ubuntu 26.04): se avisa ANTES de
+    # crear en vez de entregar un VPS sin el panel que el plan prometía.
+    if cpanel and not SISTEMAS[so_efectivo].get("cpanel"):
+        return jsonify({"error": "el plan incluye cPanel, pero %s no lo soporta — elige otro "
+                                 "sistema operativo o un plan sin cPanel"
+                                 % SISTEMAS[so_efectivo]["nombre"]}), 400
     # BYO key (opcional): el cliente trae su llave PÚBLICA — no generamos ni custodiamos
     _pk = d.get("pubkey_cliente")
     if _pk is not None and not isinstance(_pk, str):   # #15: tipo (evita 500 por .strip)
@@ -2704,7 +2849,7 @@ def crear():
             job = Job("crear", nombre, actor, PASOS_CREAR, motor=motor_job)
         run_job(job, lambda j: flujo_crear(j, marca, sabor, cliente, hostname, cpanel, modo,
                                            pubkey_cliente or None, root_password, whmcs_serviceid,
-                                           sabor_def=sabor_def, host=host_sel))
+                                           sabor_def=sabor_def, host=host_sel, so=so_efectivo))
     except Exception as e:
         # cupo excedido: rechazo LIMPIO con el motivo (no es un error interno)
         if "cupo del" in str(e) and "excedido" in str(e):

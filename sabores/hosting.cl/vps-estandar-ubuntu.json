@@ -1,0 +1,25 @@
+{
+  "slug": "vps-estandar-ubuntu",
+  "marca": "hosting.cl",
+  "nombre_web": "VPS Estándar Ubuntu",
+  "vcpu": 4,
+  "ram_mb": 4096,
+  "disco_gb": 103,
+  "_nota_disco": "Mismas specs que vps-estandar. Se asignan 103 GiB para que el guest muestre 100 GB netos en / (se descuentan /boot y swap). El disco es thin: el extra no ocupa espacio real hasta usarse.",
+  "so_default": "ubuntu26.04",
+  "red": {
+    "portgroup": null,
+    "nota": "null = usar el default de la marca (marcas/hosting.cl.json)"
+  },
+  "extras": {
+    "ips_adicionales": 0,
+    "backup_incluido": true,
+    "backup_frecuencia": "semanal-externo",
+    "cpanel_licencia_cuentas": 0,
+    "ssl_habilitado": true,
+    "cyberboost_activaciones_anio": 0
+  },
+  "precio_ref_clp": 99900,
+  "activo": true,
+  "notas": "Variante Ubuntu 26.04 LTS del VPS Estándar, para clientes que piden Ubuntu. SIN cPanel (cPanel no soporta Ubuntu 26.04) → cpanel_licencia_cuentas = 0, por eso el motor clona la dorada base. El cliente administra por SSH. Creado 2026-10-01 a pedido de Alcadio."
+}

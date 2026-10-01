@@ -175,9 +175,22 @@ no soporta 26.04) — es la dorada para los VPS "limpios".
   ejecutó todo (es el mismo mecanismo que usarán los clones). ✅
 - El wrapper del motor la lista: `list-plantillas` → `dorada-ubuntu26.04`. ✅
 
-## ⚠️ PENDIENTE antes de poder crear VPS Ubuntu
+## CONTRATO de la dorada (lo que el motor asume)
 
-El motor **todavía no sabe elegir SO**: usa `DORADA_DEFAULT` fijo e inyecta la red con
-**`nmcli` (NetworkManager)**, que **Ubuntu Server no tiene** (usa netplan/systemd-networkd).
-Falta: respetar el `so_default` del sabor, generar el userdata **según el SO** (netplan vs
-nmcli), selector de SO en el dashboard y opción por producto en WHMCS. Ver BITACORA.
+- **Sin configuración de red propia**: se sella sin `/etc/netplan/50-cloud-init.yaml` ni otros
+  YAML de red. El ÚNICO origen de la red del clon es el motor (cloud-init por guestinfo).
+- `datasource_list: [ VMware, NoCloud, None ]` → el clon lee su config del guestinfo del VMX.
+- Identidad vacía: sin machine-id, sin host keys, cloud-init limpio (cada clon genera la suya).
+- Root con la **llave de gestión** y sshd endurecido (`PermitRootLogin prohibit-password`,
+  sin contraseñas) — es como entra el motor a verificar y securizar.
+- open-vm-tools habilitado (el motor lee la IP por VMware Tools).
+
+## ✅ Soporte en el motor (desplegado 2026-10-01)
+
+El motor ya elige SO: catálogo `SISTEMAS` (SO → dorada + familia + si admite cPanel), respeta el
+`so_default` del plan, el NOC puede forzar otro SO al crear, y **genera la red según la familia**
+(netplan para Ubuntu, nmcli para AlmaLinux). Plan listo para vender: `vps-estandar-ubuntu`.
+
+**PENDIENTE operativo:** prueba real de creación Ubuntu en staging (IP/ruta/DNS/SSH + reinicio,
+verificando qué archivos de red reaparecen) antes de ofrecerlo a clientes, y copiar la dorada a
+los demás hosts (hoy solo está en esxi-20051).
