@@ -5,6 +5,61 @@
 
 ---
 
+## 2026-10-01 (jueves) — 🔑 CLAVE DE ROOT PARA WHM + VPS gestionados en dos columnas
+
+Pregunta de Alcadio: *"cuando yo creo el vps desde el dashboard un vps con cPanel, ¿qué contraseña
+root utiliza para el acceso al cPanel? En WHMCS usamos la clave de la ficha, pero aquí no"*.
+
+**El hueco:** un VPS creado desde WHMCS recibe la clave de root de la ficha del cliente (el módulo
+la manda y el motor la aplica con `chpasswd` por SSH). Creado desde el **dashboard** no se mandaba
+ninguna → el VPS quedaba **sin forma de entrar a WHM**. Recordatorio de Alcadio: *"la clave root es
+solo para el acceso al cPanel"* — y así es: **el SSH sigue siendo solo con llave**; esa clave sirve
+para WHM/cPanel por navegador y para la consola de VMware, nunca para login SSH.
+
+**Qué se construyó:**
+- `password_root_auto()`: 20 caracteres de un alfabeto de 66 símbolos (~121 bits) **sin `:`** (es el
+  delimitador de `chpasswd`), sin saltos de línea y **sin caracteres ambiguos** (l, I, O, 0, 1) —
+  la clave se lee y se dicta por teléfono. Viaja solo por **stdin**, nunca interpolada en un comando.
+- Se genera **solo si se pidió cPanel y no vino clave**; una clave suministrada (WHMCS) se conserva
+  **exacta** y nunca se devuelve en el resultado (el cliente ya la tiene en su ficha).
+- **Solo se entrega si se CONFIRMÓ su aplicación** (bloqueante que levantó Codex): si `chpasswd`
+  devuelve error o se agota el plazo, el job NO muestra clave sino el aviso *"no se pudo confirmar
+  la aplicación — define una a mano"*. Mostrar una clave que quizá no quedó puesta es peor que no
+  mostrar ninguna.
+- La clave viaja en `jobs.resultado`, visible **solo al NOC** (`/job` ya borra `resultado` entero
+  para los demás roles) y **se redacta al vencer el TTL** por las dos rutas (lectura y barrido de
+  mantención), igual que `send_url`/`send_password`.
+- El panel verde de acceso la muestra con botón de copiar y la etiqueta de que es **solo para WHM**.
+- Para poder probar el camino de fallo sin SSH real, la lógica quedó en dos funciones:
+  `aplicar_root_password` (aplica y dice si se confirmó) y `entregar_root_password` (decide qué va
+  al resultado).
+
+**Codex:** aprobó en 2 rondas. R1 favorable con un bloqueante — *"distinguir «generada» de
+«aplicada»: hoy puedes entregar una clave que no funciona"* → corregido. R2 **APROBADO**, con dos
+notas: generar para cualquier rol (no acotar a admin, es condición del servicio y no del rol —
+aceptado) y que el camino de fallo **sí** era testeable sin SSH → por eso la extracción de helpers.
+Tests nuevos en `test_rootpw.py` (11 asserts): generador, generación/no-generación por combinación
+de rol y cPanel, conservación exacta de la clave ajena, rechazo explícito y timeout, ocultamiento a
+WHMCS y expiración por ambas rutas. **18 suites verdes.**
+
+**PENDIENTE operativo:** crear un VPS con cPanel en staging y comprobar que **WHM acepta** la clave
+generada (política de contraseñas de cPanel) — es lo único que Codex dejó fuera de su aprobación.
+
+**UI (pedidos de Alcadio en la misma sesión):**
+- **VPS gestionados en DOS columnas**, igual que Jobs: *Mis VPS* (creados a mano desde el dashboard)
+  y *Clientes (automático · WHMCS)*. El criterio es `whmcs_serviceid`: lo trae siempre la creación
+  por WHMCS (es obligatorio para ese token) y nunca la manual. Cada caja tiene su scroll propio; la
+  tabla se compactó (cliente y fecha bajo el nombre, acciones como íconos con tooltip) para caber en
+  media pantalla. No hizo falta tocar el motor: `/vms` ya devolvía la columna.
+- Las cajas de Jobs y de VPS se **extendieron hacia abajo** (`calc(100vh - 290px)` en vez de 380px).
+
+**Desplegado:** motor (`app.py.bak-rootpw-20261001`, build + restart, health 200) y dashboard
+(`dashboard.py.bak-vmscols-20261001`, md5 verificado, servicio `dashboard` activo, 200). Antes de
+subir se hizo **diff contra el archivo del servidor**: 5 hunks, todos míos — la regla que quedó del
+incidente de ayer.
+
+---
+
 ## 2026-10-01 (jueves) — 🐧 MOTOR MULTI-SO DESPLEGADO: ya se puede ofrecer Ubuntu
 
 Paso 2 del pedido de Alcadio (tras construir la dorada): el motor ahora **elige sistema operativo**.

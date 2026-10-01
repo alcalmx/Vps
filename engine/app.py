@@ -1502,6 +1502,15 @@ def _terse_props(ln):
             i = k
     return flags, props
 
+ALFABETO_ROOT = ("abcdefghijkmnopqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+                 "!@#%*_-+=")   # sin ':' (delimitador de chpasswd) ni caracteres ambiguos
+
+def password_root_auto():
+    """Clave de root generada por el MOTOR para los VPS con cPanel creados desde el NOC.
+    WHMCS manda la suya (la de la ficha); el dashboard no tenía ninguna, así que el VPS
+    quedaba sin acceso a WHM. Sirve para WHM/consola: el SSH sigue siendo solo con llave."""
+    return "".join(secrets.choice(ALFABETO_ROOT) for _ in range(20))
+
 def set_root_password(ip, password):
     """Aplica la contraseña de root en la VM por SSH (chpasswd vía stdin — sin problemas
     de escape, y NO queda en el VMX). SSH sigue solo con llave: esta clave sirve para WHM/
@@ -1538,9 +1547,38 @@ def set_root_password(ip, password):
         cli.close()
     return True
 
+def aplicar_root_password(job, ip, root_password, auto):
+    """Pone la clave de root en la VM y devuelve si se CONFIRMÓ. No bloquea la creación:
+    un VPS sin clave de WHM sigue siendo un VPS entregable por SSH. Separada de flujo_crear
+    para poder probar el camino de fallo sin SSH real (Codex rootpw r2)."""
+    if not root_password:
+        return False
+    try:
+        set_root_password(ip, root_password)
+        job.detalle("contraseña de root %s (para WHM/consola; SSH sigue solo con llave)"
+                    % ("GENERADA por el motor y aplicada" if auto else "aplicada"))
+        return True
+    except Exception as e:  # noqa: BLE001 — rc explícito y timeout llegan igual: sin confirmar
+        job.detalle("aviso: no se pudo aplicar la contraseña de root (%s)" % e)
+        return False
+
+def entregar_root_password(res, root_password, auto, aplicada):
+    """Añade al resultado del job la clave de root AUTOGENERADA. El NOC necesita verla para
+    entrar a WHM (se redacta al vencer el TTL, igual que los secretos de entrega), pero SOLO
+    si se confirmó su aplicación: mostrar una clave que quizá no quedó puesta es peor que no
+    mostrar ninguna. Una clave que vino de fuera (WHMCS) nunca se devuelve: ya la tiene."""
+    if not (auto and root_password):
+        return res
+    if aplicada:
+        res["root_password"] = root_password
+    else:
+        res["root_password_error"] = ("no se pudo confirmar la aplicación de la clave de "
+                                      "root — define una a mano: ssh root@IP y 'passwd root'")
+    return res
+
 def flujo_crear(job, marca, sabor_slug, cliente, hostname, instalar_cpanel, modo,
                 pubkey_cliente=None, root_password=None, whmcs_serviceid=None,
-                sabor_def=None, host=None, so=None):
+                sabor_def=None, host=None, so=None, root_password_auto=False):
     nombre = job.vm
 
     # TODO lo previo a tocar el ESXi va dentro del bloque que COMPENSA: si algo falla aquí la
@@ -1706,6 +1744,7 @@ def flujo_crear(job, marca, sabor_slug, cliente, hostname, instalar_cpanel, modo
         job.detalle("VM arriba (IP DHCP transitoria %s); la estática %s se fija al "
                     "arranque y se confirma en el paso siguiente" % (ip_real, ip))
 
+    root_pw_ok = False   # ¿se CONFIRMÓ la aplicación de la clave de root? (Codex rootpw)
     # 11. verificar ssh (hasta ~4 min: el primer boot con cPanel preinstalado es
     #     pesado — la IP estática y sshd pueden tardar 2-3 min en quedar arriba).
     #     AUTO-REINICIO (visto 2026-09-15, vps-hcl-0013): a veces el primer boot NO
@@ -1759,12 +1798,7 @@ def flujo_crear(job, marca, sabor_slug, cliente, hostname, instalar_cpanel, modo
         job.detalle("SSH root@%s con llave de gestión: OK" % ip)
         # clave de root (opcional, viene de WHMCS): se aplica por SSH; SSH sigue key-only,
         # esta clave sirve para WHM/consola, no para login SSH.
-        if root_password:
-            try:
-                set_root_password(ip, root_password)
-                job.detalle("contraseña de root aplicada (para WHM/consola; SSH sigue solo con llave)")
-            except Exception as e:  # noqa: BLE001 — no bloquear la creación por esto
-                job.detalle("aviso: no se pudo aplicar la contraseña de root (%s)" % e)
+        root_pw_ok = aplicar_root_password(job, ip, root_password, root_password_auto)
     else:
         job.detalle("sin MGMT_PRIVKEY_PATH configurada — verificación omitida")
 
@@ -1896,6 +1930,7 @@ def flujo_crear(job, marca, sabor_slug, cliente, hostname, instalar_cpanel, modo
            "publica": publica, "cpanel": bool(instalar_cpanel),
            "byo": bool(byo_fp), "byo_fp": byo_fp,
            "whm": ("https://%s:2087" % acceso_ip) if instalar_cpanel else None}
+    entregar_root_password(res, root_password, root_password_auto, root_pw_ok)
     if entrega and entrega.get("url"):
         res["send_url"] = entrega["url"]
         res["send_password"] = entrega.get("password")
@@ -2226,7 +2261,7 @@ def expirar_secretos_jobs():
                 continue
             if not isinstance(d, dict):
                 continue
-            sensibles = [k for k in ("send_url", "send_password")
+            sensibles = [k for k in ("send_url", "send_password", "root_password")
                          if d.get(k) not in (None, "", "(expirado)")]
             if not sensibles:
                 continue
@@ -2808,6 +2843,14 @@ def crear():
     root_password = _rp or None
     if root_password and len(root_password) > 128:
         return jsonify({"error": "root_password demasiado larga (máx 128)"}), 400
+    # VPS con cPanel creado desde el NOC: WHMCS manda la clave de la ficha, pero el dashboard
+    # no manda ninguna y el VPS quedaba SIN forma de entrar a WHM. El motor genera una clave
+    # fuerte y la devuelve en el resultado del job (visible solo para admin, y redactada al
+    # vencer el TTL como los demás secretos de entrega).
+    root_password_auto = False
+    if cpanel and not root_password:
+        root_password = password_root_auto()
+        root_password_auto = True
     # id del servicio en WHMCS (para trackear la VM sin depender del Username)
     whmcs_serviceid = (str(d.get("whmcs_serviceid")).strip() if d.get("whmcs_serviceid") else None)
     if whmcs_serviceid and not SERVICEID_RE.fullmatch(whmcs_serviceid):
@@ -2849,7 +2892,8 @@ def crear():
             job = Job("crear", nombre, actor, PASOS_CREAR, motor=motor_job)
         run_job(job, lambda j: flujo_crear(j, marca, sabor, cliente, hostname, cpanel, modo,
                                            pubkey_cliente or None, root_password, whmcs_serviceid,
-                                           sabor_def=sabor_def, host=host_sel, so=so_efectivo))
+                                           sabor_def=sabor_def, host=host_sel, so=so_efectivo,
+                                           root_password_auto=root_password_auto))
     except Exception as e:
         # cupo excedido: rechazo LIMPIO con el motivo (no es un error interno)
         if "cupo del" in str(e) and "excedido" in str(e):
@@ -2894,7 +2938,7 @@ def job_get(jid):
             viejo = (row["created_at"] or "") < time.strftime(
                 "%Y-%m-%d %H:%M:%S", time.localtime(time.time() - SEND_SECRETO_TTL_DIAS * 86400))
             if viejo:
-                for k in ("send_url", "send_password"):
+                for k in ("send_url", "send_password", "root_password"):
                     if res.get(k) not in (None, "", "(expirado)"):
                         res[k] = "(expirado)"
         d["resultado"] = res
