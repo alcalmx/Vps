@@ -1,10 +1,13 @@
 # Pendientes de validación con Codex
 
-> Codex agotó su cuota el 2026-09-17 (se renueva ~2026-10-15). Por regla de Alcadio,
-> el trabajo continúa sin él, PERO todo lo hecho en este período debe **re-validarse
-> con Codex cuando vuelva la cuota**. Este archivo es la lista de esa deuda.
-> Al retomar: pasarle a Codex cada ítem (diff + contexto + tests) como se hizo con
-> los fixes #1-#7 y #10-#13, aplicar sus hallazgos razonables y marcar aquí.
+> ✅ **DEUDA SALDADA 8/8 el 2026-10-01** — todos los ítems construidos sin Codex en el
+> período 09-17/10-01 quedaron re-validados y APROBADOS por Codex. No hay deuda abierta.
+> La REGLA permanente sigue vigente: todo código nuevo que se haga sin Codex vuelve a
+> entrar aquí como deuda hasta pasar su revisión (dosificando cuota: lotes, 1-2 rondas).
+>
+> Histórico: Codex agotó su cuota el 2026-09-17; el trabajo continuó sin él y se
+> re-validó por lotes a medida que volvía la cuota (fixes #1-#7, #10-#13, A1/A2, Medios,
+> wizard Fase D, y el lote final personalizado + 2 menores).
 
 | Estado | Ítem | Commits | Notas |
 |---|---|---|---|
@@ -17,11 +20,7 @@
 | ✅ 2026-09-29 | **Medios #16-#23** — APROBADO COMPLETO por Codex (3 rondas): #16/#17/#21/#23 en r1; #18 (chpasswd sin éxito falso, plazo total vía _ssh_exec, sin stderr crudo, rechaza 
 ) y #19 (growfs contrato exit-0+estado, fstype antes de tocar, parse estricto, verificación contra el umbral del plan) en r2; #22 (tokenizador _terse_props que respeta comillas/escapes, todas las entradas, comment con valor) en r3 | `bef0f41` + `ddde9d9`+`754844e` | CERRADO. **DESPLEGADO 2026-09-29** con OK de Alcadio (respaldo app.py.bak-medios-20260929, md5 verificado, health 200). Nota: #20 ya estaba CERRADO antes (por los rediseños #12/#13 — las llamadas de red de la purga corren fuera; ver bitácora) |
 
-| ⏳ | **VPS personalizado** — sabor 'personalizado' en /crear (solo admin, specs 1-24/1024-65536/25-600, sabor_def a flujo_crear, cupo #8 aplica) + UI en dashboard | (commits Vps + fastnetmon) | Revisar: rangos, interacción con /editar sobre filas personalizadas, y la UI |
-
-| ⏳ menor | **Checkbox llave de Claude en el wizard (2026-09-29)** — proxy del dashboard inyecta CLAUDE_DIAG_PUBKEY si `agregar_llave_claude=true` (booleano desde el browser, llave del lado servidor); detalle en el job del motor; tarjeta manual retirada | `aee6e7b` + dashboard | Cambio chico (validación de diag_pubkey ya estaba aprobada en la r. del wizard); pasarlo junto con el próximo ítem grande |
-
-| ⏳ menor | **Pre-chequeo de portgroup en flujo_crear (2026-09-29)** — paso 3b: `govc ls network` en el host destino; si `red["portgroup"]` no existe se aborta con mensaje claro (antes: VM encendida con NIC muerta y timeout de 9 min esperando SSH). También: error humano en cliente_root_esxi cuando el host rechaza la password del wizard | (commits de hoy) | Cambio chico; pasarlo junto con el próximo ítem grande |
+| ✅ 2026-10-01 | **VPS personalizado + 2 menores** — APROBADO COMPLETO por Codex (2 rondas, lote único por dosificación). **#1 personalizado**: r1 RECHAZADO (int() permisivo: True→1, 24.9→24, 1e400→500) → validador de entero JSON estricto (rechaza bool/float/string antes del rango) → r2 APROBADO. **#2 checkbox llave Claude**: r1 RECHAZADO (grep del prefijo base64 en cualquier parte no prueba llave efectiva — línea comentada/command= daba falso "ya instalada") → awk que exige entrada de shell pleno con la llave completa → r2 APROBADO. **#3 pre-chequeo portgroup + error de clave**: r1 APROBADO; aplicada además su NOTA (fuga de reserva real: aborto en pre-chequeo dejaba fila 'creando' con IP+cupo; la reconciliación solo alertaba) → compensación try/except en pasos 2-3b que borra la fila → r2 APROBADO | commits de hoy | **DEUDA CODEX SALDADA 8/8.** Tests: test_custom ampliado (bool/float/string/overflow + compensación); 15/15 suites verdes. DESPLEGADO (motor build+restart health 200; dashboard del checkbox ya iba desde 29-09) |
 
 | ✅ 2026-09-29 | **Wizard de enrolamiento (Fase D)** — APROBADO por Codex tras **5 rondas** de revisión de seguridad (código NUEVO revisado ANTES de desplegar): /hosts/preparar (huella 2 pasos + job con root temporal solo-en-memoria y frontera de redacción), almacén de secretos en /data (sin restart), copiar-doradas streaming con import spool+pre-scan fail-closed+presupuesto de extracción+publicación 2 fases con token, reserva atómica de identidad id+ip entre TODOS los endpoints de hosts, _ssh_exec con drenaje concurrente. Incluye y reemplaza la revisión pendiente de enrolar-host.sh #DIAG. Evidencia empírica en ESXi real (tar adversario + tar-bomb) | commits 0be7b4f..a35deea + hoy | APROBADO y DESPLEGADO 2026-09-29 (wrappers ambos hosts + motor + dashboard, con respaldos); E2E del wizard a cargo de Alcadio |
 

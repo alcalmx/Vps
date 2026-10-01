@@ -1334,41 +1334,55 @@ def flujo_crear(job, marca, sabor_slug, cliente, hostname, instalar_cpanel, modo
     job.detalle("%s · %s (%d vCPU / %d MB / %d GB) · modo %s · host %s"
                 % (nombre, sabor["nombre_web"], sabor["vcpu"], sabor["ram_mb"], sabor["disco_gb"], modo, h["id"]))
 
-    # 2. IP privada libre — RouterData en producción, barrido local en pruebas.
-    #    Bajo IP_PRIV_LOCK: elegir y GRABAR es atómico entre jobs (ambos flujos
-    #    consultan el registro, así el siguiente ya la ve ocupada).
-    job.paso()
-    with IP_PRIV_LOCK:
-        if modo == "produccion":
-            ip = ip_libre_produccion(red["subred"], red["gateway"], job)
-        else:
-            ip = ip_libre_pruebas(red["subred"], red["gateway"], job)
-        set_estado(nombre, "creando", ip=ip)
-    job.detalle("IP privada asignada: %s (gw %s)" % (ip, red["gateway"]))
+    # 2-3b: pre-chequeos ANTES de tocar el ESXi (IP, datastore, portgroup). Si algo
+    # falla aquí la VM todavía NO existe en el host → se COMPENSA borrando la fila
+    # reservada, lo que libera la IP y el cupo (ambos cuentan las filas 'creando').
+    # Sin esto, un aborto temprano dejaba una fila 'creando' huérfana con IP que solo
+    # la reconciliación ALERTABA para limpieza manual (Codex personalizado #3). Desde
+    # el paso 4 (mkdir-vm) el ESXi SÍ se toca: esos fallos los maneja la saga/reconcile
+    # (hay estado real que no se debe borrar a ciegas).
+    try:
+        # 2. IP privada libre — RouterData en producción, barrido local en pruebas.
+        #    Bajo IP_PRIV_LOCK: elegir y GRABAR es atómico entre jobs (ambos flujos
+        #    consultan el registro, así el siguiente ya la ve ocupada).
+        job.paso()
+        with IP_PRIV_LOCK:
+            if modo == "produccion":
+                ip = ip_libre_produccion(red["subred"], red["gateway"], job)
+            else:
+                ip = ip_libre_pruebas(red["subred"], red["gateway"], job)
+            set_estado(nombre, "creando", ip=ip)
+        job.detalle("IP privada asignada: %s (gw %s)" % (ip, red["gateway"]))
 
-    # 3. espacio REAL del datastore (#8, fail-closed): antes solo se mostraba el df
-    job.paso()
-    libre_gb = datastore_libre_gb(h)
-    requerido = sabor["disco_gb"] + DATASTORE_RESERVA_GB
-    if libre_gb < requerido:
-        raise RuntimeError("espacio insuficiente en %s (%s): %d GB libres < %d requeridos "
-                           "(plan %d GB + reserva de seguridad %d GB)"
-                           % (h["datastore"], h["id"], libre_gb, requerido, sabor["disco_gb"], DATASTORE_RESERVA_GB))
-    job.detalle("datastore %s (%s): %d GB libres ≥ %d requeridos (plan %d + reserva %d) — OK"
-                % (h["datastore"], h["id"], libre_gb, requerido, sabor["disco_gb"], DATASTORE_RESERVA_GB))
-    # 3b. la red del modo debe EXISTIR en el host: si el portgroup falta, ESXi
-    # registra y enciende la VM igual pero con la NIC muerta, y la creación muere
-    # ~9 min después esperando SSH (aprendido el 2026-09-29: primera creación en
-    # esxi-20051 en modo produccion sin el portgroup Vps_Hosting.cl). Fail-fast.
-    redes = [ln.rsplit("/", 1)[-1] for ln in govc("ls", "network", host=h).splitlines()
-             if ln.strip()]
-    if red["portgroup"] not in redes:
-        raise RuntimeError("el host %s NO tiene el portgroup '%s' que usa el modo %s "
-                           "(redes del host: %s) — crearlo en el ESXi (Networking → "
-                           "Port groups, con su VLAN) antes de crear aquí"
-                           % (h["id"], red["portgroup"], modo, ", ".join(redes) or "ninguna"))
+        # 3. espacio REAL del datastore (#8, fail-closed): antes solo se mostraba el df
+        job.paso()
+        libre_gb = datastore_libre_gb(h)
+        requerido = sabor["disco_gb"] + DATASTORE_RESERVA_GB
+        if libre_gb < requerido:
+            raise RuntimeError("espacio insuficiente en %s (%s): %d GB libres < %d requeridos "
+                               "(plan %d GB + reserva de seguridad %d GB)"
+                               % (h["datastore"], h["id"], libre_gb, requerido, sabor["disco_gb"], DATASTORE_RESERVA_GB))
+        job.detalle("datastore %s (%s): %d GB libres ≥ %d requeridos (plan %d + reserva %d) — OK"
+                    % (h["datastore"], h["id"], libre_gb, requerido, sabor["disco_gb"], DATASTORE_RESERVA_GB))
+        # 3b. la red del modo debe EXISTIR en el host: si el portgroup falta, ESXi
+        # registra y enciende la VM igual pero con la NIC muerta, y la creación muere
+        # ~9 min después esperando SSH (aprendido el 2026-09-29: primera creación en
+        # esxi-20051 en modo produccion sin el portgroup Vps_Hosting.cl). Fail-fast.
+        redes = [ln.rsplit("/", 1)[-1] for ln in govc("ls", "network", host=h).splitlines()
+                 if ln.strip()]
+        if red["portgroup"] not in redes:
+            raise RuntimeError("el host %s NO tiene el portgroup '%s' que usa el modo %s "
+                               "(redes del host: %s) — crearlo en el ESXi (Networking → "
+                               "Port groups, con su VLAN) antes de crear aquí"
+                               % (h["id"], red["portgroup"], modo, ", ".join(redes) or "ninguna"))
+    except Exception:
+        # compensación: la reserva se borra SOLO si sigue 'creando' (no pisar una VM
+        # que otro flujo ya hubiera hecho avanzar) — libera IP y cupo
+        with DB_LOCK, db() as c:
+            c.execute("DELETE FROM vms WHERE nombre=? AND estado='creando'", (nombre,))
+        raise
 
-    # 4. clonar
+    # 4. clonar (desde aquí el ESXi SÍ se toca)
     job.paso("IP %s reservada" % ip)
     esxi_ssh("mkdir-vm %s" % nombre, host=h)
     # catálogo de doradas: 2 por SO — base y '-cpanel' (preinstalado). Si el plan
@@ -2461,15 +2475,22 @@ def crear():
     if sabor == "personalizado":
         if rol != "admin":
             return jsonify({"error": "el sabor personalizado es solo para el NOC (rol admin)"}), 403
+        # entero JSON ESTRICTO (Codex personalizado #1): bool es subclase de int
+        # (True→1), float trunca (24.9→24) y 1e400 daría OverflowError/500 — se exige
+        # un entero real dentro de rango, nada de coerción.
+        def _spec(v, nombre, lo, hi):
+            if isinstance(v, bool) or not isinstance(v, int):
+                raise ValueError("%s debe ser un entero (sin comillas ni decimales)" % nombre)
+            if not (lo <= v <= hi):
+                raise ValueError("%s fuera de rango (%d-%d)" % (nombre, lo, hi))
+            return v
         try:
-            vcpu_p = int(d.get("vcpu"))
-            ram_p = int(d.get("ram_mb"))
-            disco_p = int(d.get("disco_gb"))
-        except (TypeError, ValueError):
-            return jsonify({"error": "personalizado requiere vcpu, ram_mb y disco_gb numéricos"}), 400
-        if not (1 <= vcpu_p <= 24 and 1024 <= ram_p <= 65536 and 25 <= disco_p <= 600):
-            return jsonify({"error": "personalizado fuera de rango: vCPU 1-24, RAM 1024-65536 MB, "
-                                     "disco 25-600 GB (además aplica el cupo del host)"}), 400
+            vcpu_p = _spec(d.get("vcpu"), "vcpu", 1, 24)
+            ram_p = _spec(d.get("ram_mb"), "ram_mb", 1024, 65536)
+            disco_p = _spec(d.get("disco_gb"), "disco_gb", 25, 600)
+        except ValueError as e:
+            return jsonify({"error": "personalizado: %s (vCPU 1-24, RAM 1024-65536 MB, "
+                                     "disco 25-600 GB; además aplica el cupo del host)" % e}), 400
         sabor_def = {"marca": marca, "slug": "personalizado",
                      "nombre_web": "Personalizado %d vCPU / %d GB RAM / %d GB" % (vcpu_p, ram_p // 1024, disco_p),
                      "vcpu": vcpu_p, "ram_mb": ram_p, "disco_gb": disco_p, "activo": True, "extras": {}}
@@ -3211,10 +3232,15 @@ def _preparar_host(job, p, svc_pass):
             _ssh_exec(cli, "cat >> /etc/ssh/keys-root/authorized_keys", stdin_data=linea + "\n")
         diag_msg = ""   # se anexa al CIERRE del paso: job.paso() sobrescribe los detalle()
         if p.get("diag_pubkey"):   # llave de diagnóstico IA/humano: shell pleno, SIN command=
-            db64 = p["diag_pubkey"].split()[1][:40]
-            ya_d = _ssh_exec(cli, "grep -cF '%s' /etc/ssh/keys-root/authorized_keys 2>/dev/null || true"
-                             % db64)
-            if (ya_d.strip() or "0") == "0":
+            # idempotencia RIGUROSA (Codex personalizado #2): no basta con que el
+            # base64 aparezca en el archivo — una línea comentada (#…) o una con
+            # command=/restrict daría falso "ya instalada" sin shell pleno. Se exige
+            # una entrada EFECTIVA de shell pleno: primer campo exactamente "ssh-rsa"
+            # (sin opciones delante) y segundo campo = la llave COMPLETA.
+            b64_full = p["diag_pubkey"].split()[1]
+            ya_d = _ssh_exec(cli, "awk '$1==\"ssh-rsa\" && $2==\"%s\"{f=1} END{print f+0}' "
+                             "/etc/ssh/keys-root/authorized_keys 2>/dev/null || echo 0" % b64_full)
+            if ya_d.strip() != "1":
                 _ssh_exec(cli, "cat >> /etc/ssh/keys-root/authorized_keys",
                           stdin_data=p["diag_pubkey"] + "\n")
                 diag_msg = "; llave de diagnóstico (Claude) INSTALADA (shell pleno)"

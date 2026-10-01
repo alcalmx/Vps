@@ -5,6 +5,30 @@
 
 ---
 
+## 2026-10-01 (jueves) — ✅ DEUDA CODEX SALDADA 8/8: "VPS personalizado" + 2 menores APROBADOS
+
+Último lote de la deuda, revisado por Codex en 2 rondas (lote único por dosificación de cuota):
+- **#1 VPS personalizado** (sabor con specs explícitas, solo admin, cupo #8 aplica): Codex r1
+  RECHAZÓ la validación — `int()` coercía `True`→1, `24.9`→24 y un `1e400` daba OverflowError/500.
+  Reemplazado por `_spec()` que exige entero JSON real (rechaza bool/float/string antes del rango).
+  r2 APROBADO. Confirmado que `/editar` sobre filas personalizado funciona (lee specs de la fila,
+  destino del catálogo) y que no hay `SABORES[...]` que reviente con esas filas. "Editar hacia
+  personalizado" bloqueado = límite de diseño aceptable.
+- **#2 Checkbox llave de Claude**: Codex r1 RECHAZÓ la idempotencia — `grep` del prefijo base64 en
+  cualquier parte del archivo daba falso "ya instalada" (línea comentada o con command=).
+  Cambiado a `awk '$1=="ssh-rsa" && $2==<llave completa>'` (exige entrada de shell pleno efectiva).
+  r2 APROBADO. El proxy del dashboard ya cerraba el vector de "llave arbitraria" (browser manda
+  booleano, servidor pone la llave).
+- **#3 Pre-chequeo de portgroup + error de clave legible**: r1 APROBADO. Codex dejó una NOTA que
+  resultó un bug real: un aborto en los pre-chequeos (datastore o el nuevo portgroup) dejaba la
+  fila 'creando' con IP y cupo colgados — run_job solo marca el job error y la reconciliación solo
+  ALERTA. Agregada COMPENSACIÓN: try/except en los pasos 2-3b (todo lo previo a tocar el ESXi) que
+  borra la fila reservada (libera IP y cupo) y re-lanza. Verificado que las funciones de IP solo
+  leen (no reservan estado externo). r2 APROBADO.
+Tests: test_custom ampliado (bool/float/string/overflow + compensación con aborto forzado);
+regresión completa 15/15 verde. Motor desplegado (health 200); el dashboard del checkbox ya iba
+desde el 29-09. **Con esto la deuda de revisión Codex queda 8/8 — sin pendientes abiertos.**
+
 ## 2026-09-29 (martes) — 🏆 PRIMERA CREACIÓN COMPLETA EN esxi-20051 (modo produccion, 15/15 pasos)
 
 Tras crear Alcadio el portgroup `Vps_Hosting.cl` (VLAN 81, VSwitch1/vmnic1) el retry salió
