@@ -184,7 +184,8 @@ def init_db():
         for col, decl in (("publica", "TEXT"), ("pub_lista", "TEXT"),
                           ("vault_item", "TEXT"), ("send_url", "TEXT"), ("send_id", "TEXT"),
                           ("byo_pubkey_fp", "TEXT"), ("nb_priv_id", "TEXT"), ("nb_pub_id", "TEXT"),
-                          ("whmcs_serviceid", "TEXT"), ("host", "TEXT")):
+                          ("whmcs_serviceid", "TEXT"), ("host", "TEXT"),
+                          ("datastore", "TEXT")):   # multi-datastore: datastore donde VIVE la VM
             try:
                 c.execute("ALTER TABLE vms ADD COLUMN %s %s" % (col, decl))
             except sqlite3.OperationalError as e:
@@ -244,6 +245,16 @@ def init_db():
             except sqlite3.OperationalError as e:
                 if "duplicate column name" not in str(e).lower():
                     raise
+        # MULTI-DATASTORE (2026-10-01): lista JSON de datastores USABLES del host, cada uno
+        # con su propia llave confinada [{"ds": nombre, "ssh_key": ruta}, ...]. El primero es
+        # el PRIMARIO (= hosts.datastore/ssh_key, compat). Un host puede crear VPS en
+        # cualquiera de su lista; cada VM registra en cuál vive (vms.datastore). NULL en
+        # hosts viejos → se interpreta como [{ds: hosts.datastore, ssh_key: hosts.ssh_key}].
+        try:
+            c.execute("ALTER TABLE hosts ADD COLUMN datastores TEXT")
+        except sqlite3.OperationalError as e:
+            if "duplicate column name" not in str(e).lower():
+                raise
         # bootstrap: el host actual de las env se auto-registra como principal y ADOPTA
         # las VMs previas — SOLO en la migración inicial (tabla hosts vacía). La
         # adopción se hace UNA vez, al host legacy IDENTIFICADO por ESXI_HOST, dentro
@@ -502,6 +513,30 @@ def host_de_vm(nombre):
 def hosts_lista():
     with DB_LOCK, db() as c:
         return [dict(r) for r in c.execute("SELECT * FROM hosts ORDER BY prioridad, created_at")]
+
+def host_datastores(h):
+    """Datastores USABLES del host: [{"ds": nombre, "ssh_key": ruta}, ...]. El primero es
+    el PRIMARIO. Si la columna `datastores` es NULL/ inválida (hosts previos al
+    multi-datastore), se deriva del primario (hosts.datastore/ssh_key) — compat total."""
+    raw = h.get("datastores")
+    if raw:
+        try:
+            lst = json.loads(raw)
+            buena = [{"ds": d["ds"], "ssh_key": d.get("ssh_key")} for d in lst
+                     if isinstance(d, dict) and d.get("ds")]
+            if buena:
+                return buena
+        except (ValueError, TypeError, KeyError):
+            pass
+    return [{"ds": h.get("datastore"), "ssh_key": h.get("ssh_key")}]
+
+def host_ds_key(h, datastore):
+    """ssh_key del wrapper confinado a `datastore` en el host; None si ese datastore NO
+    pertenece al host (jamás se opera un datastore no registrado — confinamiento)."""
+    for d in host_datastores(h):
+        if d.get("ds") == datastore:
+            return d.get("ssh_key")
+    return None
 
 SCAN_TIMEOUT = int(os.environ.get("HOST_SCAN_TIMEOUT", "15"))   # #4: presupuesto corto por consulta
 
