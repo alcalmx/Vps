@@ -34,6 +34,18 @@ APROBADO por Codex en 3 rondas y desplegado.
   **DÓNDE SE CREA** (host/entorno) — todo **centrado** (máx 1080px), las dos primeras lado a lado,
   controles `-sm` parejos y botones centrados al pie. Los nombres de las secciones los validó
   Alcadio ("está muy bien eso de qué se crea / para quién").
+- ⚠️ **INCIDENTE y lección (2026-10-01): casi rompo el dashboard por anclar un reemplazo a un
+  estilo CSS.** Al sustituir el formulario busqué el bloque por `style="max-width:1000px"`, cadena
+  que TAMBIÉN existía en la página *Alta de Servicios*: el reemplazo cayó ahí y borró el final de
+  esa página y el inicio de la de VPS (incluido `vpsengPane-crear`), dejando la sección en blanco
+  (el JS de pestañas moría con null). **Recuperado** desde `dashboard.py.bak-20261001-form` y
+  rehecho anclando por el **id único de la sección** y verificando que el bloque a reemplazar
+  contuviera el formulario y NADA de otras páginas antes de escribir. **REGLA: en un archivo de
+  ~15k líneas, anclar SIEMPRE por id único, nunca por clases/estilos compartidos; y comprobar la
+  integridad de las demás páginas tras cada reemplazo.** (El respaldo previo al deploy salvó el día.)
+- **Cabeceras ilegibles, corregido:** las armé con estilos en línea y el texto quedó con el color
+  del tema claro sobre fondo oscuro. Ahora usan la clase **`card-header`** propia del dashboard
+  (la misma del panel DDoS), que el tema oscuro ya colorea — y de paso respeta su radio de 12px.
 - **Comando de limpieza de huella SSH en el dashboard:** el panel verde de acceso ahora incluye
   `ssh-keygen -R <ip>` con botón de copiar, explicando que el aviso de "huella cambiada" ocurre
   porque la IP pública de PRUEBAS se recicla entre VPS (a los clientes reales no les pasa).
