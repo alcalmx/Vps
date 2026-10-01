@@ -52,10 +52,21 @@ la reserva); el pre-chequeo validaba la base cuando se clonaría `-cpanel`; y el
 JSON de sabores viven en el build del servidor, hay que subirlos aparte del app.py). Verificado en
 producción: `/health` lista los 2 sistemas y los 4 planes con su SO.
 
-**PENDIENTE operativo (condición de Codex antes de ofrecerlo a clientes):** crear un VPS Ubuntu
-real en staging y verificar IP/ruta/DNS/SSH **y tras un reinicio** (qué archivos de red reaparecen,
-que no quede DHCP activo), más la regresión AlmaLinux con y sin cPanel. Además, la dorada Ubuntu
-hoy solo está en **esxi-20051**: hay que copiarla a los demás hosts.
+**✅ VALIDADO EN VIVO (2026-10-01, la condición de Codex CUMPLIDA):** Alcadio creó
+`vps-hcl-0003-prueba26` (Cyber Black, **Ubuntu 26.04**, modo produccion, esxi-20051) — job
+06311c82e7e0, **15/15 pasos ok**. Evidencia:
+- Clonó `dorada-ubuntu26.04` y **tomó la IP ESTÁTICA en el PRIMER arranque** ("VM arriba con su IP
+  estática 10.100.16.235") — con AlmaLinux siempre reporta una DHCP transitoria primero, así que
+  el netplan quedó mejor que el camino nmcli.
+- SSH con la llave de gestión OK · NAT 1:1 a 38.19.57.102 + NetBox · cPanel correctamente
+  **omitido** (`instalar_cpanel=False`) · llave entregada por Send.
+- Estado de red verificado por SSH: `ens192` con 10.100.16.235/24, default `proto static`, DNS
+  1.1.1.1/8.8.8.8, **solo `60-vps.yaml` en /etc/netplan** (el 50-cloud-init.yaml NO reaparece) y
+  el marcador `vps-engine.provisioned` presente (la cadena `sh -ec` completa salió bien).
+- **TRAS UN REINICIO**: vuelve con la MISMA IP, ruta, DNS y un único netplan. Sin DHCP residual.
+
+**Ubuntu queda listo para ofrecer a clientes.** Pendiente menor: la dorada Ubuntu hoy solo está en
+**esxi-20051** — copiarla a esxi-245 y esxi-20039 para poder crear Ubuntu también ahí.
 
 ## 2026-10-01 (jueves) — 🐧 DORADA UBUNTU 26.04 CONSTRUIDA (VPS sin panel, no depende de cPanel)
 
