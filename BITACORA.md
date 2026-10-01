@@ -5,6 +5,45 @@
 
 ---
 
+## ⏯️ PARA RETOMAR (2026-10-01) — MULTI-DATASTORE en construcción (Incremento 1)
+
+**Estado:** fundación commiteada en `b199127` (NO desplegada; el motor en prod sigue 1-datastore,
+intacto). Alcadio pidió construirlo YA. Se continúa posiblemente con otro modelo (Opus).
+
+**Diseño cerrado — "una llave confinada por datastore":** cada datastore usable del host tiene su
+propio árbol `VPS/` + wrapper (BASE=ese ds) + llave RSA con `command=` a ese wrapper. El wrapper
+auditado NO se toca (se instancia por datastore). svc-vps es UNO por host (API, rol VpsOperator
+cubre todos los datastores); SOLO las llaves SSH del wrapper son por-datastore. Las doradas van en
+cada datastore (clon lee/escribe dentro del mismo ds → invariante del wrapper intacta).
+
+**Ya hecho (en `b199127`, seguro/aditivo/tolerante a NULL):**
+- Esquema: `vms.datastore` (dónde vive cada VM) + `hosts.datastores` (JSON [{"ds","ssh_key"},…],
+  1º = primario = hosts.datastore/ssh_key; NULL → deriva del primario).
+- Helpers `host_datastores(h)` y `host_ds_key(h, ds)` (engine/app.py ~línea 517).
+
+**Incremento 1 (enrolar con N datastores) — FALTA:**
+- `_preparar_host` (~línea 3468): convertir el bloque de instalación wrapper+llave en un BUCLE por
+  datastore (sufijo de key `_<ds>` para los no-primarios), construir `ds_meta=[{ds,ssh_key}]`,
+  instalar diag key UNA vez. Guardar `datastores`=json en el INSERT y UPDATE de hosts (~3534/3541).
+- Endpoint `hosts_preparar` (~línea 3559): aceptar `datastores` (lista de nombres, validar c/u con
+  DATASTORE_RE, dedup, tope ~8); `p["datastore"]`=1º, `p["datastores"]`=lista. Mantener compat con
+  `datastore` single.
+- `host_recursos` (~línea 525): espacio libre POR datastore (hoy solo el primario).
+- Dashboard: wizard con "+ agregar datastore" (1 o 2); lista de hosts mostrando sus datastores.
+- Tests (test_wizard) + Codex (dosificar) + deploy. El camino de creación SIGUE en el primario
+  (sin cambios) → Incremento 1 es seguro de desplegar.
+
+**Incremento 2 (elegir datastore al crear):** selector de datastore en Crear VPS; `flujo_crear`
+usa esxi_ssh con la llave del ds elegido (host_ds_key) y clona de ese `_plantillas`; `vms.datastore`
+se graba; eliminar/editar/suspender resuelven la llave por `vms.datastore`; copiar-doradas por ds;
+UI. **Después:** auto-selección por espacio.
+
+**OJO:** probar en ESXi real (esxi-20051 staging), NUNCA en .39 (producción). Regla de deuda Codex
+vigente. Mini-tabla "Copiar doradas" ya está separada en su tarjeta. Modo llave ya desplegado y
+corregido (esxcli rotula custom="Custom"); falta que Alcadio lance el E2E de esxi-20051 en modo llave.
+
+---
+
 ## 2026-10-01 (jueves) — 💬 DISEÑO CONVERSADO (sin código): placement automático + Jev asesor
 
 Sesión solo de conversación con Alcadio sobre el futuro "que el motor decida solo dónde
