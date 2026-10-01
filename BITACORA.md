@@ -41,6 +41,11 @@ APROBADO por Codex en 3 rondas y desplegado.
   job. NO se auto-abre al detectar un job corriendo (reaparecería cada vez que se cerrara). El
   wizard (preparar host / copiar doradas) usa la misma ventana. El panel verde de acceso al VPS
   (comando SSH + `ssh-keygen -R`) ahora aparece dentro de la ventana.
+- **Ventana de pasos afinada:** se quitó el scroll horizontal (la tarjeta interna tenía
+  `max-width:860px`, más ancha que el modal, y el nombre del paso iba con `nowrap`); se retiró esa
+  tarjeta (redundante dentro de la ventana), el modal pasó a `modal-xl`, la tabla ganó **cabecera
+  PASO · DETALLE · HORA**, y al terminar el job se muestra un **resumen**: cuánto **demoró**,
+  inicio, fin y número de pasos (helper `vpsengDur`).
 - **Jobs en DOS columnas** (antes tres): **Mis jobs** absorbe la caja de *Sistema* —reconciliar,
   purga y enrolamientos también son tareas del NOC— y **Clientes (automático · WHMCS)**.
 - ⚠️ **INCIDENTE y lección (2026-10-01): casi rompo el dashboard por anclar un reemplazo a un
