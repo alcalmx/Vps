@@ -27,6 +27,14 @@ APROBADO por Codex en 3 rondas y desplegado.
   REALMENTE se clonará: con cPanel acepta `-cpanel` o la base, por el fallback ya auditado).
 - `vms.so` registra el SO de cada VM; `/health` expone el catálogo y el dashboard tiene **selector
   de SO** que se preselecciona con el del plan y avisa si se combina cPanel con un SO que no lo soporta.
+- **Formulario de Crear VPS REDISEÑADO** (pedido de Alcadio: "que se vea más profesional",
+  manteniendo las mismas opciones): cuatro bloques con título y separadores — *Qué se crea*
+  (marca/plan/SO/plantilla en una fila), *Para quién*, *Dónde se crea*, *Acceso del cliente* —
+  tarjeta más ancha (1000px, antes 680 y el espacio derecho quedaba vacío), controles `-sm`
+  parejos, las specs del plan Personalizado en un recuadro propio y barra de acciones al pie.
+- **Comando de limpieza de huella SSH en el dashboard:** el panel verde de acceso ahora incluye
+  `ssh-keygen -R <ip>` con botón de copiar, explicando que el aviso de "huella cambiada" ocurre
+  porque la IP pública de PRUEBAS se recicla entre VPS (a los clientes reales no les pasa).
 - **Bug de UI corregido (reportado por Alcadio):** el selector de Host VMware no mostraba los
   hosts al entrar directo a la sección — `vpsengInit()` poblaba marca y planes pero NO llamaba a
   `vpsengHostsSelector()`, que solo corría al hacer clic en la pestaña "Crear VPS"; quedaba el
