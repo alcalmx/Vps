@@ -30,8 +30,16 @@ reemplazando SOLO esa línea y verificando el conteo antes de publicar. **Lecci�
 fiable de la pública es el botón "Copiar llave del motor" del wizard (la lee del motor).**
 
 Estado de hosts: esxi-245 (pausado, ambos motores), esxi-20051 (pausado, solo admin, datastore1),
-esxi-20039 (pausado, solo admin, 2 datastores). Siguiente de Alcadio: creación de prueba en
-esxi-20051 para validar que el flujo de creación sigue impecable tras los cambios.
+esxi-20039 (pausado, solo admin, 2 datastores).
+
+**REGRESIÓN DEL FLUJO DE CREACIÓN: IMPECABLE.** Alcadio creó `vps-hcl-0001-prueba23` en
+esxi-20051 (job f023390764fc, motor=admin, modo produccion): los **15 pasos en verde** — clon de la
+dorada con cPanel, disco 153 GB, CBT, IP privada 10.100.16.237 ↔ pública 38.19.57.102 (NAT 1:1 +
+NetBox), SSH con llave de gestión, cPanel 138.0 con WHM 200, llave entregada por Send. Confirma que
+los cambios de hoy (dos motores + modo llave + multi-datastore Inc.1) NO alteraron el camino de
+creación. Nota esperada: `vms.datastore` queda NULL — poblarlo es parte del Incremento 2; hoy la
+creación usa siempre el datastore primario del host. Además, la creación en un host **pausado**
+funcionó como estaba diseñado (pausado = solo frena al motor de clientes, no al admin).
 
 ## ⏯️ PARA RETOMAR (2026-10-01) — MULTI-DATASTORE: Incremento 1 DESPLEGADO + falta Incremento 2
 
