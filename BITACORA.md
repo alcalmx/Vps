@@ -5,6 +5,35 @@
 
 ---
 
+## 2026-10-01 (jueves) — 🧩 DOS MOTORES: creación de clientes (autónoma) vs admin (manual), separadas
+
+Pedido de Alcadio: reestructurar el dashboard para tener DOS motores independientes sobre un
+mismo registro de hosts — **clientes** (100% autónomo, WHMCS al pagar) y **admin** (creación
+manual de VPS personalizados desde el dashboard, sin entrar a VMware). Adoptar un host para un
+motor NO lo mete en el otro; un host puede estar en ambos (decisiones del usuario vía AskUserQuestion).
+
+**Backend (engine/app.py):**
+- `hosts` gana `uso_clientes`/`uso_admin` (ADD COLUMN DEFAULT 1 → los 2 hosts ya enrolados quedan
+  en AMBOS motores, sin romper comportamiento). `jobs` gana `motor` (clientes|admin|sistema).
+- `host_principal(motor)`: clientes = activo + uso_clientes + prioridad; admin = uso_admin (el
+  'pausado' ya NO frena al admin, es concepto del pool de clientes). `/crear` elige pool por rol
+  (whmcs→clientes, admin→admin) y valida uso_admin en host explícito. Jobs etiquetados por origen;
+  mantención (reconciliar/purga/enrolar/doradas) → sistema (clasificador por tipo).
+- Wizard pide el/los motor(es) al enrolar (≥1); re-preparar NO toca los usos. POST/PATCH aceptan
+  los flags; guard "al menos un motor" con re-validación ATÓMICA bajo DB_LOCK (cierra una carrera
+  de dos PATCH concurrentes que podían dejar (0,0) — hallazgo de Codex).
+
+**Frontend (dashboard):** pestaña Motor con la lista dividida en 2 secciones (clientes/admin) y
+chips para mover un host entre motores; pestaña Jobs en 3 grupos (Clientes/Mis jobs/Sistema);
+selector de Crear muestra solo hosts del motor admin; wizard con checkboxes de motor.
+
+**Codex:** revisó backend + lógica, 2 rondas → GLOBAL APROBADO (único bloqueante: la carrera del
+PATCH, corregida y probada con un test de hilos+barrera). **Deuda: ya revisado, no suma.**
+Tests: nueva suite test_motores (migración, filtrado por uso, etiqueta de job, guard atómico,
+carrera real con hilos); test_multihost_a2 y test_wizard actualizados al contrato nuevo; 16/16 verde.
+DESPLEGADO (motor + dashboard, respaldos, md5 verificado, health 200); migración confirmada en
+prod (esxi-245 y esxi-20051 en ambos motores; jobs viejos → sistema).
+
 ## 2026-10-01 (jueves) — ✅ DEUDA CODEX SALDADA 8/8: "VPS personalizado" + 2 menores APROBADOS
 
 Último lote de la deuda, revisado por Codex en 2 rondas (lote único por dosificación de cuota):

@@ -195,6 +195,15 @@ def init_db():
         except sqlite3.OperationalError as e:
             if "duplicate column name" not in str(e).lower():
                 raise
+        # motor que ORIGINÓ el job (2026-10-01): clientes (autónomo/WHMCS) | admin
+        # (creación manual del NOC) | sistema (mantención: reconciliar/purga/enrolar).
+        # El dashboard separa la pestaña Jobs en esos tres grupos. Jobs viejos → NULL
+        # (el front los agrupa por tipo como respaldo).
+        try:
+            c.execute("ALTER TABLE jobs ADD COLUMN motor TEXT")
+        except sqlite3.OperationalError as e:
+            if "duplicate column name" not in str(e).lower():
+                raise
         # jobs 'corriendo' huérfanos de un proceso anterior (reinicio del motor): sus
         # threads ya no existen → error, para que no bloqueen el gate de 1-job-por-VM
         # ni queden girando eternamente en el dashboard
@@ -221,6 +230,18 @@ def init_db():
           created_at TEXT DEFAULT (datetime('now','localtime')),
           updated_at TEXT DEFAULT (datetime('now','localtime')));
         """)
+        # USOS del host (2026-10-01): dos motores INDEPENDIENTES sobre un mismo registro.
+        #  - uso_clientes: participa del motor AUTOMÁTICO (WHMCS). Respeta estado/prioridad.
+        #  - uso_admin: aparece en la creación MANUAL del NOC (VPS personalizados).
+        # Un host puede tener uno, el otro o ambos. ADD COLUMN DEFAULT 1 → los hosts
+        # YA enrolados quedan en ambos motores (preserva el comportamiento previo, en que
+        # cualquier host servía a los dos). Los hosts nuevos del wizard fijan sus usos.
+        for col, decl in (("uso_clientes", "INTEGER DEFAULT 1"), ("uso_admin", "INTEGER DEFAULT 1")):
+            try:
+                c.execute("ALTER TABLE hosts ADD COLUMN %s %s" % (col, decl))
+            except sqlite3.OperationalError as e:
+                if "duplicate column name" not in str(e).lower():
+                    raise
         # bootstrap: el host actual de las env se auto-registra como principal y ADOPTA
         # las VMs previas — SOLO en la migración inicial (tabla hosts vacía). La
         # adopción se hace UNA vez, al host legacy IDENTIFICADO por ESXI_HOST, dentro
@@ -269,19 +290,30 @@ def audit(actor, accion, vm, detalle, resultado):
         c.execute("INSERT INTO operaciones(actor,accion,vm,detalle,resultado) VALUES(?,?,?,?,?)",
                   (actor, accion, vm, detalle[:500], resultado[:200]))
 
+# tipos de job que son MANTENIMIENTO del sistema (ni clientes ni admin) — el
+# dashboard los agrupa aparte y el motor por defecto los etiqueta 'sistema'
+TIPOS_SISTEMA = {"reconciliar", "purgar-papelera", "preparar-host", "copiar-doradas"}
+
+def _motor_por_defecto(tipo):
+    """Motor por defecto de un job según su tipo cuando el caller no lo especifica:
+    los de mantención → 'sistema'; el resto (crear/editar/accion) → 'admin' (el caller
+    que sabe el origen pasa 'clientes' explícitamente para los de WHMCS)."""
+    return "sistema" if tipo in TIPOS_SISTEMA else "admin"
+
 # ── Jobs con pasos visibles ──────────────────────────────────────────────────
 class Job:
     """Job asíncrono cuyo avance (pasos) se persiste en SQLite y el dashboard
     lo va leyendo por GET /job/<id>. Cada paso: pendiente → corriendo → ok/error."""
 
-    def __init__(self, tipo, vm, actor, nombres_pasos):
+    def __init__(self, tipo, vm, actor, nombres_pasos, motor=None):
         self.id = uuid.uuid4().hex[:12]
         self.tipo, self.vm, self.actor = tipo, vm, actor
+        self.motor = motor or _motor_por_defecto(tipo)
         self.pasos = [{"nombre": n, "estado": "pendiente", "detalle": "", "ts": ""} for n in nombres_pasos]
         self._i = -1
         with DB_LOCK, db() as c:
-            c.execute("INSERT INTO jobs(id,tipo,vm,estado,pasos,actor) VALUES(?,?,?,?,?,?)",
-                      (self.id, tipo, vm, "corriendo", json.dumps(self.pasos), actor))
+            c.execute("INSERT INTO jobs(id,tipo,vm,estado,pasos,actor,motor) VALUES(?,?,?,?,?,?,?)",
+                      (self.id, tipo, vm, "corriendo", json.dumps(self.pasos), actor, self.motor))
 
     def _save(self, estado=None, error=None):
         with DB_LOCK, db() as c:
@@ -344,7 +376,7 @@ def job_activo(vm):
                         (vm,)).fetchone()
     return dict(row) if row else None
 
-def lanzar_job_exclusivo(tipo, vm, actor, pasos):
+def lanzar_job_exclusivo(tipo, vm, actor, pasos, motor=None):
     """Gate de EXCLUSIÓN MUTUA por VM: un solo job activo a la vez. Chequeo +
     creación del job en una sección crítica (JOB_GATE_LOCK por fuera, DB_LOCK por
     dentro) para que dos requests simultáneas no pasen ambas el chequeo. Evita
@@ -358,7 +390,7 @@ def lanzar_job_exclusivo(tipo, vm, actor, pasos):
         act = job_activo(vm)
         if act:
             return None, act
-        job = Job(tipo, vm, actor, pasos)
+        job = Job(tipo, vm, actor, pasos, motor=motor)
     return job, None
 
 def lanzar_o_fallar(job, fn):
@@ -430,15 +462,22 @@ def host_get(hid):
         r = c.execute("SELECT * FROM hosts WHERE id=?", (hid,)).fetchone()
     return dict(r) if r else None
 
-def host_principal():
-    """El host ACTIVO de mejor prioridad (menor número) — lo administra el usuario
-    desde la gestión (A2: la selección NO es automática por capacidad; si el
-    preferido no da, la creación falla con mensaje claro y el humano decide)."""
+def host_principal(motor="clientes"):
+    """Host por DEFECTO de cada motor (A2: la selección no es automática por capacidad;
+    si el preferido no da, la creación falla con mensaje claro y el humano decide):
+      - clientes (automático/WHMCS): host con uso_clientes, estado='activo', mejor prioridad.
+      - admin (creación manual): host con uso_admin, mejor prioridad (el 'pausado' es un
+        concepto del pool de clientes, no frena la creación manual del NOC)."""
     with DB_LOCK, db() as c:
-        r = c.execute("SELECT * FROM hosts WHERE estado='activo' "
-                      "ORDER BY prioridad, created_at LIMIT 1").fetchone()
+        if motor == "clientes":
+            r = c.execute("SELECT * FROM hosts WHERE estado='activo' AND uso_clientes=1 "
+                          "ORDER BY prioridad, created_at LIMIT 1").fetchone()
+        else:
+            r = c.execute("SELECT * FROM hosts WHERE uso_admin=1 "
+                          "ORDER BY prioridad, created_at LIMIT 1").fetchone()
     if not r:
-        raise RuntimeError("no hay hosts ACTIVOS en el registro — revisar GET /hosts")
+        falta = "ACTIVOS en el motor de clientes" if motor == "clientes" else "en el motor admin"
+        raise RuntimeError("no hay hosts %s — revisar la pestaña Motor del dashboard" % falta)
     return dict(r)
 
 def host_de_vm(nombre):
@@ -2538,10 +2577,14 @@ def crear():
     whmcs_serviceid = (str(d.get("whmcs_serviceid")).strip() if d.get("whmcs_serviceid") else None)
     if whmcs_serviceid and not SERVICEID_RE.fullmatch(whmcs_serviceid):
         return jsonify({"error": "whmcs_serviceid inválido (numérico)"}), 400
-    # A2: SELECCIÓN DE HOST — decisión del USUARIO, nunca automática por capacidad:
-    # (a) dashboard/admin puede forzar host con el param `host`; (b) sin param (WHMCS
-    # o dashboard por defecto) → el host activo de MEJOR PRIORIDAD (la administra el
-    # usuario). Si el elegido no tiene cupo/espacio, la creación FALLA con motivo.
+    # DOS MOTORES (2026-10-01): el origen decide el pool de hosts y la etiqueta del job.
+    #  - rol whmcs  → motor CLIENTES (automático): host por uso_clientes/estado/prioridad.
+    #  - rol admin  → motor ADMIN (manual): host por uso_admin. Puede forzar `host`
+    #    explícito (debe tener uso_admin); el 'pausado' NO frena al admin (es del pool
+    #    de clientes). Sin `host` → el host admin por defecto.
+    # A2: la selección nunca es automática por capacidad; si el elegido no da, FALLA con motivo.
+    es_cliente = (rol == "whmcs")
+    motor_job = "clientes" if es_cliente else "admin"
     host_req = (d.get("host") or "").strip()
     try:
         if host_req:
@@ -2550,10 +2593,13 @@ def crear():
             host_sel = host_get(host_req)
             if not host_sel:
                 return jsonify({"error": "host desconocido: %s (ver GET /hosts)" % host_req}), 400
-            if host_sel["estado"] != "activo":
-                return jsonify({"error": "el host %s está PAUSADO — reactívalo o elige otro" % host_req}), 409
+            if not host_sel.get("uso_admin"):
+                return jsonify({"error": "el host %s NO está habilitado para creación manual "
+                                         "(motor admin) — habilítalo en la pestaña Motor" % host_req}), 409
+        elif es_cliente:
+            host_sel = host_principal("clientes")
         else:
-            host_sel = host_principal()
+            host_sel = host_principal("admin")
     except RuntimeError as e:
         return jsonify({"error": str(e)}), 409
     nombre, job = None, None
@@ -2565,7 +2611,7 @@ def crear():
         with JOB_GATE_LOCK:
             nombre = reservar_vm(marca, MARCAS[marca], sabor, sabor_def,
                                  cliente, hostname, whmcs_serviceid, host=host_sel)
-            job = Job("crear", nombre, actor, PASOS_CREAR)
+            job = Job("crear", nombre, actor, PASOS_CREAR, motor=motor_job)
         run_job(job, lambda j: flujo_crear(j, marca, sabor, cliente, hostname, cpanel, modo,
                                            pubkey_cliente or None, root_password, whmcs_serviceid,
                                            sabor_def=sabor_def, host=host_sel))
@@ -2627,9 +2673,15 @@ def jobs_list():
     if rol != "admin":
         return jsonify({"error": ERR_SOLO_ADMIN}), 403
     with DB_LOCK, db() as c:
-        rows = c.execute("SELECT id,tipo,vm,estado,error,created_at,updated_at "
-                         "FROM jobs ORDER BY created_at DESC LIMIT 30").fetchall()
-    return jsonify({"jobs": [dict(r) for r in rows]})
+        rows = c.execute("SELECT id,tipo,vm,estado,error,motor,created_at,updated_at "
+                         "FROM jobs ORDER BY created_at DESC LIMIT 60").fetchall()
+    # motor NULL (jobs previos a la separación) → se infiere por tipo para el agrupado
+    out = []
+    for r in rows:
+        d = dict(r)
+        d["motor"] = d.get("motor") or _motor_por_defecto(d["tipo"])
+        out.append(d)
+    return jsonify({"jobs": out})
 
 @app.route("/vms")
 def vms_list():
@@ -2738,7 +2790,9 @@ def accion():
         if not (conf == vm or (por_sid and conf == serviceid)):
             return jsonify({"error": "confirmación requerida: reescribe el nombre exacto de la VM"}), 400
     fn, pasos = ACCIONES[acc]
-    job, activo = lanzar_job_exclusivo(acc, vm, actor, pasos)
+    # motor del job según el origen (clientes = WHMCS, admin = NOC)
+    job, activo = lanzar_job_exclusivo(acc, vm, actor, pasos,
+                                       motor="clientes" if rol == "whmcs" else "admin")
     if not job:
         return jsonify({"error": "la VM %s tiene un job en curso (%s, id %s) — reintenta cuando termine"
                         % (vm, activo["tipo"], activo["id"])}), 409
@@ -2785,7 +2839,8 @@ def editar():
         return jsonify({"error": "el sabor %s no está activo" % sabor}), 400
     job, activo = lanzar_job_exclusivo("editar", vm, actor,
               ["Calcular cambio de plan (upgrade/downgrade)", "Aplicar CPU/RAM",
-               "Ajustar disco (solo crece, nunca se achica)", "Actualizar registro"])
+               "Ajustar disco (solo crece, nunca se achica)", "Actualizar registro"],
+              motor="clientes" if rol == "whmcs" else "admin")
     if not job:
         return jsonify({"error": "la VM %s tiene un job en curso (%s, id %s) — reintenta cuando termine"
                         % (vm, activo["tipo"], activo["id"])}), 409
@@ -2806,6 +2861,8 @@ def hosts_get():
     salida = []
     for h in hosts_lista():
         d = {k: h[k] for k in ("id", "ip", "datastore", "estado", "prioridad", "notas", "created_at")}
+        d["uso_clientes"] = bool(h.get("uso_clientes"))
+        d["uso_admin"] = bool(h.get("uso_admin"))
         d["recursos"] = host_recursos(h)
         salida.append(d)
     return jsonify({"hosts": salida})
@@ -3274,10 +3331,15 @@ def _preparar_host(job, p, svc_pass):
                       "datastore=?, ssh_port=?, ssh_key=?, estado='pausado' WHERE id=?",
                       (ip, candidato["api_url"], pass_var, datastore, puerto, key_path, hid))
         else:
+            # host nuevo: fija los USOS elegidos en el wizard (motor clientes/admin).
+            # En re-preparación (UPDATE arriba) los usos NO se tocan: se gestionan desde
+            # los toggles de la pestaña Motor, la re-preparación es solo de credenciales.
             c.execute("INSERT INTO hosts(id, ip, api_url, govc_user, pass_env, datastore, "
-                      "ssh_port, ssh_key, estado, prioridad, notas) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+                      "ssh_port, ssh_key, estado, prioridad, notas, uso_clientes, uso_admin) "
+                      "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
                       (hid, ip, candidato["api_url"], "svc-vps", pass_var, datastore, puerto,
-                       key_path, "pausado", 100, p.get("notas") or ""))
+                       key_path, "pausado", 100, p.get("notas") or "",
+                       1 if p.get("uso_clientes") else 0, 1 if p.get("uso_admin") else 0))
     job.set_resultado({"host": hid, "datastore_libre_gb": libre,
                        "siguiente": "copiar doradas (botón en la pestaña Motor) y luego ACTIVAR"})
     job.ok("validado en vivo (API + pong + %d GB libres) — registrado PAUSADO" % libre)
@@ -3437,6 +3499,13 @@ def hosts_preparar():
         if not diag or not re.fullmatch(r"ssh-rsa [A-Za-z0-9+/=]{100,3000}( [^\r\n]{0,100})?", diag):
             return jsonify({"error": "diag_pubkey inválida — una línea 'ssh-rsa AAAA… comentario' "
                                      "(RSA: ESXi 8 no acepta ed25519)"}), 400
+    # USOS del host (motores que habilita): booleanos estrictos; al menos uno. Solo
+    # aplican a un host NUEVO (en re-preparación los usos se gestionan por los toggles).
+    uso_clientes = d.get("uso_clientes") is True
+    uso_admin = d.get("uso_admin") is True
+    if not (uso_clientes or uso_admin):
+        return jsonify({"error": "elige al menos un uso para el host: motor de clientes "
+                                 "(automático) y/o motor admin (creación manual)"}), 400
     actor = limpiar_actor(d.get("actor") or "dashboard")
     # reserva ATÓMICA de la identidad completa (id + ip) en una sola sección
     # crítica: cubre mismo-id/otra-ip, misma-ip/otro-id, y excluye PATCH/DELETE/
@@ -3446,7 +3515,8 @@ def hosts_preparar():
     if not job:
         return jsonify({"error": "no se puede preparar %s ahora: %s" % (hid, conflicto)}), 409
     params = {"id": hid, "ip": ip, "ssh_port": puerto, "datastore": datastore,
-              "huella": huella, "root_password": _rp, "diag_pubkey": diag, "notas": notas}
+              "huella": huella, "root_password": _rp, "diag_pubkey": diag, "notas": notas,
+              "uso_clientes": uso_clientes, "uso_admin": uso_admin}
     err = _lanzar_op_host(job, lambda j: flujo_preparar_host(j, params))
     if err:
         return err
@@ -3560,6 +3630,15 @@ def hosts_add():
         return jsonify({"error": "host NO enrolable — falló la validación en vivo: %s "
                                  "(¿svc-vps/llave/wrapper/huella instalados? ver enrolar-host)"
                                  % str(e)[:200]}), 400
+    # usos (motores): por defecto AMBOS si no se especifican (compat con el comportamiento
+    # previo en que todo host servía a los dos); si se dan, al menos uno
+    for campo in ("uso_clientes", "uso_admin"):
+        if campo in d and not isinstance(d[campo], bool):
+            return jsonify({"error": "%s debe ser booleano" % campo}), 400
+    uso_clientes = d.get("uso_clientes", True) is not False
+    uso_admin = d.get("uso_admin", True) is not False
+    if not (uso_clientes or uso_admin):
+        return jsonify({"error": "el host debe servir al menos a un motor (clientes y/o admin)"}), 400
     # dup-check AUTORITATIVO + INSERT en una sola sección crítica compartida con el
     # wizard: dos POST concurrentes (o un POST durante una preparación) no pueden
     # registrar la misma identidad (Codex wizard r3 #2)
@@ -3573,12 +3652,14 @@ def hosts_add():
             if dup:
                 return jsonify({"error": "id o ip ya registrados (host %s)" % dup["id"]}), 409
             c.execute("INSERT INTO hosts(id, ip, api_url, govc_user, pass_env, datastore, ssh_port, "
-                      "ssh_key, estado, prioridad, max_vcpu, max_ram_mb, max_disco_gb, notas) "
-                      "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                      "ssh_key, estado, prioridad, max_vcpu, max_ram_mb, max_disco_gb, notas, "
+                      "uso_clientes, uso_admin) "
+                      "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                       (hid, ip, candidato["api_url"], govc_user, pass_env,
                        datastore, ssh_port, ssh_key,
                        "pausado" if d.get("pausado") else "activo",
-                       prioridad, max_vcpu, max_ram_mb, max_disco_gb, notas))
+                       prioridad, max_vcpu, max_ram_mb, max_disco_gb, notas,
+                       1 if uso_clientes else 0, 1 if uso_admin else 0))
     audit(limpiar_actor(d.get("actor") or "dashboard"), "host-add", hid,
           "host enrolado: %s (%s, ds %s, %d GB libres)" % (hid, ip, candidato["datastore"], libre), "ok")
     return jsonify({"ok": True, "host": hid, "datastore_libre_gb": libre})
@@ -3618,6 +3699,22 @@ def hosts_patch(hid):
             sets.append("notas=?"); vals.append(_str_campo(d, "notas")[:200])
     except ValueError as e:
         return jsonify({"error": str(e)}), 400
+    # usos del host (motores): toggles independientes (booleanos estrictos)
+    for campo in ("uso_clientes", "uso_admin"):
+        if campo in d:
+            if not isinstance(d[campo], bool):
+                return jsonify({"error": "%s debe ser booleano" % campo}), 400
+            sets.append("%s=?" % campo); vals.append(1 if d[campo] else 0)
+    # no dejar un host sin ningún uso (quedaría invisible para ambos motores)
+    # guard "al menos un motor": chequeo PRELIMINAR con la lectura de arriba (da un
+    # mensaje temprano); la verificación AUTORITATIVA se repite dentro del DB_LOCK con
+    # lectura FRESCA, porque dos PATCH concurrentes que quiten usos distintos (uno
+    # uso_clientes=false, otro uso_admin=false) leerían ambos el estado viejo y dejarían
+    # el host en (0,0) — invisible a los dos motores (Codex motores #4).
+    fin_cli = d["uso_clientes"] if isinstance(d.get("uso_clientes"), bool) else bool(h_act.get("uso_clientes"))
+    fin_adm = d["uso_admin"] if isinstance(d.get("uso_admin"), bool) else bool(h_act.get("uso_admin"))
+    if not (fin_cli or fin_adm):
+        return jsonify({"error": "el host debe servir al menos a un motor (clientes y/o admin)"}), 400
     if not sets:
         return jsonify({"error": "nada que cambiar"}), 400
     # chequeo de reserva Y mutación en la MISMA sección crítica: una preparación
@@ -3629,6 +3726,16 @@ def hosts_patch(hid):
             return jsonify({"error": "el host %s tiene una operación de identidad en curso "
                                      "(job %s) — reintenta al terminar" % (hid, jid)}), 409
         with DB_LOCK, db() as c:
+            # re-validación ATÓMICA del guard con lectura fresca en ESTA conexión
+            # (dos PATCH se serializan en DB_LOCK: el 2º ve el uso ya apagado por el 1º).
+            # Consulta directa: host_get toma DB_LOCK y no es reentrante.
+            cur = c.execute("SELECT uso_clientes, uso_admin FROM hosts WHERE id=?", (hid,)).fetchone()
+            if not cur:
+                return jsonify({"error": "host desconocido: %s" % hid}), 404
+            nuevo_cli = d["uso_clientes"] if isinstance(d.get("uso_clientes"), bool) else bool(cur["uso_clientes"])
+            nuevo_adm = d["uso_admin"] if isinstance(d.get("uso_admin"), bool) else bool(cur["uso_admin"])
+            if not (nuevo_cli or nuevo_adm):
+                return jsonify({"error": "el host debe servir al menos a un motor (clientes y/o admin)"}), 409
             c.execute("UPDATE hosts SET %s, updated_at=datetime('now','localtime') WHERE id=?"
                       % ", ".join(sets), (*vals, hid))
     audit(limpiar_actor(d.get("actor") or "dashboard"), "host-edit", hid,
