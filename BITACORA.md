@@ -32,6 +32,17 @@ fiable de la pública es el botón "Copiar llave del motor" del wizard (la lee d
 Estado de hosts: esxi-245 (pausado, ambos motores), esxi-20051 (pausado, solo admin, datastore1),
 esxi-20039 (pausado, solo admin, 2 datastores).
 
+**Módulo WHMCS desactualizado 17 días — detectado y corregido.** Tras la creación, la ficha mostró
+`Module Command Error — No se pudo leer el motor (HTTP 403)`. Diagnóstico por los logs del motor:
+`GET /vms 403`. Causa: la copia del módulo INSTALADA en el WHMCS era la del 14-09 por la mañana
+(llamaba a `/vms`, endpoint solo-admin); ese mismo día lo optimizamos a `/vm-por-servicio`
+(commit 5a35c52) y **se publicó en noc-monitor pero nunca se bajó en el WHMCS**. El 403 era
+CORRECTO (el token de WHMCS no debe listar los VPS de todos los clientes). La IP sí había llegado
+a la ficha porque la escribe el MOTOR, no la lee WHMCS. Alcadio actualizó el módulo con el `curl`
+documentado (md5 4d3ce022… verificado) y se confirmó en los logs:
+`GET /vm-por-servicio?serviceid=36681 200`. **Lección anotada en docs/whmcs-intervenciones.md:
+publicar en noc-monitor NO es instalar en WHMCS — hay que bajarlo allá y verificar md5.**
+
 **MOTOR DE CLIENTES (WHMCS) VALIDADO CON LA SEPARACIÓN NUEVA.** Alcadio lanzó una creación desde
 WHMCS (job bc8cc5f9942d, `vps-hcl-0002-alcadio`, serviceid 36681): quedó etiquetada **motor=clientes**
 (caja "Clientes (automático · WHMCS)" del dashboard, separada de "Mis jobs") y eligió **esxi-20051**

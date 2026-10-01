@@ -33,7 +33,24 @@
   - `clientarea.tpl` — panel de estado del área de cliente
 - **Versionado (copia maestra):** repo `Vps/whmcs-modulo/hostingcl_vps/`
 - **Cómo se actualiza:** se sirve por `https://noc.hosting.cl/vps-modulo` (y `/vps-modulo-tpl`) y
-  se baja con `curl -o` (el pegado en PuTTY corrompe archivos grandes).
+  se baja con `curl -o` (el pegado en PuTTY corrompe archivos grandes). Receta completa:
+  ```sh
+  cd /home/panelhosting/public_html/modules/servers/hostingcl_vps
+  cp hostingcl_vps.php hostingcl_vps.php.bak-$(date +%Y%m%d)
+  curl -fsS -o hostingcl_vps.php https://noc.hosting.cl/vps-modulo
+  curl -fsS -o clientarea.tpl   https://noc.hosting.cl/vps-modulo-tpl
+  md5sum hostingcl_vps.php        # debe coincidir con el del repo
+  ```
+- ⚠️ **LECCIÓN (2026-10-01): publicar NO es instalar.** Cambiar el módulo en el repo y publicarlo
+  en noc-monitor (`/usr/share/nginx/html/vps-modulo.txt`) **no** lo actualiza en el WHMCS: hay que
+  bajarlo allá con el `curl`. El 14-09 se subió el módulo, se optimizó *después* ese mismo día
+  (`/vms` → `/vm-por-servicio`, commit 5a35c52) y la copia del WHMCS quedó en la versión vieja
+  **17 días**, hasta que el 01-10 un "Sincronizar datos" falló con `Module Command Error — No se
+  pudo leer el motor (HTTP 403)`: la versión vieja llamaba a `GET /vms`, que es solo-admin, y el
+  token de WHMCS no puede listar los VPS de todos los clientes (403 correcto, no un bug).
+  **Al tocar el módulo: publicar EN noc-monitor y bajarlo EN el WHMCS, y verificar con md5sum.**
+  Resuelto el 01-10 por Alcadio; verificado en los logs del motor:
+  `GET /vm-por-servicio?serviceid=… 200`.
 - **Qué hace:** traduce eventos de WHMCS → llamadas a la API del motor
   (crear/suspender/reanudar/eliminar/editar), botón admin "Sincronizar datos", panel de cliente.
 
