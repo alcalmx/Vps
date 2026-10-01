@@ -24,6 +24,43 @@ crear" (multi-host y multi-datastore con balanceo). Acordado y documentado en
 - Prerrequisito nuevo detectado: **persistir histórico de host_recursos** (hoy el scan
   es en vivo) para que el informe de Jev tenga serie temporal.
 
+## 2026-10-01 (jueves) — 🔑 WIZARD "root por llave": enrolar sin clave root + id auto-derivado
+
+Pedido de Alcadio: enrolar desde el wizard SIN teclear la clave root, usando una llave pre-instalada
+(sus hosts nuevos "no tienen clave root" fija). Punto técnico clave: la API de vSphere NO acepta
+llaves SSH (solo usuario+password), así que una llave sola no basta para crear el rol mínimo.
+
+**Solución (aprobada por Alcadio vía AskUserQuestion — auto-rebaje + dejar la llave):**
+- **Llave de bootstrap del motor**: pareja RSA generada en noc-monitor (`/data/enrolamiento/keys/
+  bootstrap_root`, 600, PEM). La PÚBLICA se instala en `/etc/ssh/keys-root/authorized_keys` de cada
+  host nuevo (endpoint GET /hosts/bootstrap-pubkey + botón "Copiar llave del motor" en el wizard).
+  Generación atómica a prueba de multi-proceso (tmp+fsync+os.link, no sobrescribe).
+- **Modo `auth_modo=llave`** en /hosts/preparar: el motor entra como root por la llave de bootstrap;
+  svc-vps se crea por **esxcli** (SIN shell, -s false), se le da **Admin TEMPORAL**, y con su propia
+  sesión de API crea el rol mínimo y se **AUTO-REBAJA** a VpsOperator. Verificación POSITIVA por CSV
+  (svc-vps presente, no-grupo, Role==VpsOperator exacto; vacío/ambiguo/múltiple→aborta). Ante
+  cualquier fallo tras conceder Admin, **recuperación a NoAccess verificada**; si falla, ALERTA de
+  "posible Admin residual" (no se oculta). admin_concedido se marca ANTES del comando (cubre
+  "aplicado pero respuesta perdida").
+- Modo password sigue igual. El checkbox de mi llave de diagnóstico sigue opcional.
+- **Dashboard**: toggle "clave root / llave del motor" en el wizard (oculta el campo de clave en
+  modo llave y muestra la pública a copiar); **id del host AUTO-DERIVADO de la IP** (readonly:
+  192.168.200.39 → esxi-20039) para estandarizar y que el admin no invente nombres.
+
+**Codex**: 4 rondas (código sensible). Hallazgos corregidos: validación de entero del personalizado
+(ya venía), idempotencia de llave por awk→CSV, recuperación de Admin, redacción-antes-de-truncar,
+not-found acotado a role.ls (ambas ramas), account add/set determinista (listar primero), carrera
+de la llave entre procesos (os.link), admin_concedido antes del comando. **GLOBAL APROBADO** en
+revisión estática. Tests: test_wizard amplía modo llave (sin root_password; API como svc-vps;
+esxcli; CSV; auth_modo inválido→400); 16/16 verde. DESPLEGADO (motor+dashboard, health 200;
+bootstrap-pubkey verificado).
+
+**GATE PENDIENTE antes de usar en producción (lo exige Codex, es operativo no de código):** E2E en
+un ESXi 8 de staging (esxi-20051) que demuestre auto-rebaje, alcance del permiso de svc-vps y
+comportamiento de sesiones. Mocks/--help no lo acreditan. NO se tocó el host .39 de producción.
+Nota: en .39 verifiqué solo-lectura (datastores: datastore1 95GB + Raid10-20039 3.5TB + Raid10-20039A
+3.6TB; ESXi 8.0.3) — mi llave personal ya está en su root.
+
 ## 2026-10-01 (jueves) — 🧩 DOS MOTORES: creación de clientes (autónoma) vs admin (manual), separadas
 
 Pedido de Alcadio: reestructurar el dashboard para tener DOS motores independientes sobre un

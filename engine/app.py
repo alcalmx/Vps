@@ -19,9 +19,11 @@ SEGURIDAD (ver SEGURIDAD.md del repo — 5 capas):
   - eliminar = papelera (mover), nunca destrucción directa.
 """
 import base64
+import csv
 import gzip
 import hashlib
 import hmac
+import io
 import ipaddress
 import json
 import os
@@ -3076,18 +3078,73 @@ def pin_host_key(ip, puerto, key):
                 pass
             raise
 
-def cliente_root_esxi(ip, puerto, password, key_confirmada):
-    """SSH como root con password, aceptando EXCLUSIVAMENTE la host key que el
-    humano confirmó (RejectPolicy ante cualquier otra). Solo lo usa el wizard."""
+BOOTSTRAP_KEY_PATH = os.path.join(ENROL_KEYS_DIR, "bootstrap_root")
+
+def bootstrap_pubkey_openssh():
+    """Devuelve la PÚBLICA de la llave de bootstrap del motor en formato authorized_keys
+    ('ssh-rsa AAAA… vps-engine-bootstrap'). Genera la pareja si falta (idempotente) —
+    así el dashboard siempre puede mostrarla para instalarla en los hosts nuevos."""
+    k = _bootstrap_key()
+    return "ssh-rsa %s vps-engine-bootstrap@noc-monitor" % k.get_base64()
+
+BOOTSTRAP_LOCK = threading.Lock()
+
+def _bootstrap_key():
+    """Carga (o genera y persiste UNA sola vez) la llave PRIVADA de bootstrap del motor.
+    Con ella el wizard entra como root por SSH SIN clave root (modo 'llave'): el admin
+    instala la pública en /etc/ssh/keys-root/authorized_keys de cada host nuevo. RSA 4096
+    (ESXi 8 rechaza ed25519). Es una credencial potente (root por llave en cada host que
+    la tenga) — vive solo en el almacén del motor (600). La generación es ATÓMICA y bajo
+    lock: la pública que el admin copia NUNCA puede cambiar por una carrera (Codex llave #1)."""
+    if os.path.isfile(BOOTSTRAP_KEY_PATH):
+        return paramiko.RSAKey.from_private_key_file(BOOTSTRAP_KEY_PATH)
+    with BOOTSTRAP_LOCK:                          # exclusión entre HILOS
+        if os.path.isfile(BOOTSTRAP_KEY_PATH):   # doble chequeo: otro hilo la creó
+            return paramiko.RSAKey.from_private_key_file(BOOTSTRAP_KEY_PATH)
+        os.makedirs(ENROL_KEYS_DIR, exist_ok=True)
+        k = paramiko.RSAKey.generate(4096)
+        fd, tmp = tempfile.mkstemp(dir=ENROL_KEYS_DIR)   # mismo FS → hardlink posible
+        try:
+            with os.fdopen(fd, "w") as f:
+                k.write_private_key(f)
+                f.flush()
+                os.fsync(f.fileno())
+            os.chmod(tmp, 0o600)
+            # os.link: publicación ATÓMICA que NO sobrescribe y falla si el destino ya
+            # existe — exclusión entre PROCESOS además de hilos (Codex llave r3). El tmp
+            # va completo+fsync antes del link, así nunca se publica una llave a medias.
+            try:
+                os.link(tmp, BOOTSTRAP_KEY_PATH)
+            except FileExistsError:
+                return paramiko.RSAKey.from_private_key_file(BOOTSTRAP_KEY_PATH)  # otro proceso ganó
+        finally:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+        return k
+
+def cliente_root_esxi(ip, puerto, key_confirmada, password=None, root_key=None):
+    """SSH como root aceptando EXCLUSIVAMENTE la host key confirmada (RejectPolicy ante
+    cualquier otra). Dos modos de auth del wizard: por `password` (clave root, de un
+    solo uso) o por `root_key` (llave de bootstrap del motor — sin clave root). Solo
+    uno de los dos."""
     cli = paramiko.SSHClient()
     cli.get_host_keys().add(_kh_nombre(ip, puerto), key_confirmada.get_name(), key_confirmada)
     cli.set_missing_host_key_policy(paramiko.RejectPolicy())
     try:
-        cli.connect(ip, port=int(puerto), username="root", password=password,
-                    timeout=15, allow_agent=False, look_for_keys=False)
+        if root_key is not None:
+            cli.connect(ip, port=int(puerto), username="root", pkey=root_key,
+                        timeout=15, allow_agent=False, look_for_keys=False)
+        else:
+            cli.connect(ip, port=int(puerto), username="root", password=password,
+                        timeout=15, allow_agent=False, look_for_keys=False)
     except (paramiko.AuthenticationException, paramiko.BadAuthenticationType):
-        # el texto crudo de paramiko ("Bad authentication type…") confunde; y ojo:
-        # NO incluir la password en el mensaje (frontera de redacción aparte)
+        # el texto crudo de paramiko confunde; y NO incluir la credencial en el mensaje
+        if root_key is not None:
+            raise RuntimeError("el host RECHAZÓ la llave de bootstrap del motor — ¿está su "
+                               "pública en /etc/ssh/keys-root/authorized_keys? (nada se "
+                               "modificó en el host)") from None
         raise RuntimeError("el host RECHAZÓ la password de root — verifica la clave "
                            "(nada se modificó en el host)") from None
     return cli
@@ -3154,14 +3211,15 @@ def _ssh_exec(cli, comando, stdin_data=None, timeout=60):
         raise RuntimeError("'%s' rc=%d: %s" % (comando.split()[0], rc, (e or o).strip()[:200]))
     return o
 
-def govc_root(args, ip, password, timeout=60):
-    """govc con credenciales root TEMPORALES (solo durante el wizard, jamás se
-    guardan). Mismo aislamiento de entorno que govc(host=); el password se
-    redacta de cualquier error antes de propagarlo (los detalles del job son
-    visibles en el dashboard)."""
+def govc_root(args, ip, password, timeout=60, usuario="root"):
+    """govc con credenciales TEMPORALES del wizard (jamás se guardan). `usuario` es
+    'root' (modo clave root) o 'svc-vps' (modo llave: svc-vps con Admin temporal crea
+    el rol mínimo y se auto-rebaja). Mismo aislamiento de entorno que govc(host=); el
+    password se redacta de cualquier error antes de propagarlo (los detalles del job
+    son visibles en el dashboard)."""
     env = {k: os.environ[k] for k in GOVC_ENV_SISTEMA if k in os.environ}
     env["GOVC_URL"] = "https://%s/sdk" % ip
-    env["GOVC_USERNAME"] = "root"
+    env["GOVC_USERNAME"] = usuario
     env["GOVC_PASSWORD"] = password
     env["GOVC_INSECURE"] = os.environ.get("GOVC_INSECURE", "1")
     try:
@@ -3181,6 +3239,33 @@ PASOS_PREPARAR = ["Verificar huella y conectar (root temporal)",
                   "Pinnear huella y guardar secreto",
                   "Validar en vivo y registrar"]
 
+def _svc_vps_rol(cli):
+    """Rol EFECTIVO de svc-vps (usuario, no grupo) por esxcli en CSV (columnas IsGroup,
+    Principal, Role, RoleDescription). Devuelve el NOMBRE exacto del rol, o None si no
+    aparece. Verificación POSITIVA (Codex llave #c): lanza ante salida vacía, cabecera
+    inesperada/duplicada, fila malformada de svc-vps, o MÚLTIPLES entradas de svc-vps
+    (ambigüedad) — nunca se asume éxito a partir de la primera coincidencia."""
+    out = _ssh_exec(cli, "esxcli --formatter=csv system permission list")
+    filas = list(csv.reader(io.StringIO(out)))
+    if not filas:
+        raise RuntimeError("no se pudo leer los permisos del host (salida vacía)")
+    hdr = filas[0]
+    for col in ("IsGroup", "Principal", "Role"):
+        if hdr.count(col) != 1:   # ausente o DUPLICADA → cabecera no confiable
+            raise RuntimeError("tabla de permisos con cabecera inesperada: %s" % (",".join(hdr)[:80]))
+    i_grp, i_pri, i_rol = hdr.index("IsGroup"), hdr.index("Principal"), hdr.index("Role")
+    roles = []
+    for row in filas[1:]:
+        if not row or (len(row) == 1 and row[0] == ""):
+            continue   # línea en blanco del CSV
+        if len(row) <= max(i_grp, i_pri, i_rol):
+            raise RuntimeError("fila de permisos malformada: %s" % (",".join(row)[:80]))
+        if row[i_pri] == "svc-vps" and row[i_grp].strip().lower() == "false":
+            roles.append(row[i_rol])
+    if len(roles) > 1:
+        raise RuntimeError("svc-vps tiene MÚLTIPLES entradas de permiso (%s) — ambiguo, revisar" % roles)
+    return roles[0] if roles else None
+
 def flujo_preparar_host(job, p):
     """Frontera de REDACCIÓN del wizard: _preparar_host hace el trabajo y aquí se
     borran ambas credenciales (root y svc-vps) de CUALQUIER excepción antes de que
@@ -3190,7 +3275,9 @@ def flujo_preparar_host(job, p):
     try:
         _preparar_host(job, p, svc_pass)
     except Exception as e:  # noqa: BLE001 — redacta y re-lanza (run_job hace el fail)
-        msg = str(e).replace(p["root_password"], "***").replace(svc_pass, "***")
+        msg = str(e).replace(svc_pass, "***")
+        if p.get("root_password"):   # en modo 'llave' no hay clave root (None)
+            msg = msg.replace(p["root_password"], "***")
         raise RuntimeError(msg) from None
 
 def _preparar_host(job, p, svc_pass):
@@ -3220,46 +3307,124 @@ def _preparar_host(job, p, svc_pass):
     if fp != p["huella"]:
         raise RuntimeError("la huella ACTUAL del host (%s) no coincide con la confirmada (%s) — "
                            "posible host suplantado; enrolamiento abortado" % (fp, p["huella"]))
-    govc_root(["about"], ip, p["root_password"], timeout=30)
-    cli = cliente_root_esxi(ip, puerto, p["root_password"], key_srv)
+    # DOS MODOS DE AUTH del wizard (2026-10-01):
+    #  - "password": clave root de un solo uso → API (govc) como root crea todo.
+    #  - "llave": llave de bootstrap del motor (sin clave root). La API de vSphere NO
+    #    acepta llaves SSH, así que svc-vps se crea por esxcli, se le da Admin TEMPORAL,
+    #    y con su propia sesión de API crea el rol mínimo y se AUTO-REBAJA a VpsOperator.
+    modo_auth = p.get("auth_modo") or "password"
+    if modo_auth == "password":
+        govc_root(["about"], ip, p["root_password"], timeout=30)
+        cli = cliente_root_esxi(ip, puerto, key_srv, password=p["root_password"])
+    else:
+        cli = cliente_root_esxi(ip, puerto, key_srv, root_key=_bootstrap_key())
     try:
-        job.paso("huella verificada; API y SSH de root responden")
+        job.paso("huella verificada; %s responde"
+                 % ("API y SSH de root" if modo_auth == "password"
+                    else "SSH de root por llave de bootstrap"))
 
-        # rol mínimo: si existe se VERIFICAN sus privilegios y se RECONCILIAN (un rol
-        # previo demasiado permisivo no se acepta a ciegas — Codex wizard #8). Solo
-        # "not found" cuenta como ausencia; cualquier otro error de API propaga.
-        try:
-            out_rol = govc_root(["role.ls", "VpsOperator"], ip, p["root_password"], timeout=30)
-            tiene = set(out_rol.split())
-            if tiene != set(PRIVS_VPSOPERATOR):
-                govc_root(["role.update", "VpsOperator", *PRIVS_VPSOPERATOR],
-                          ip, p["root_password"])
+        if modo_auth == "password":
+            # rol mínimo: si existe se VERIFICAN sus privilegios y se RECONCILIAN (un rol
+            # previo demasiado permisivo no se acepta a ciegas — Codex wizard #8). El
+            # "not found" SOLO distingue rol-ausente en role.ls; un fallo de role.update/
+            # create se propaga (no se confunde con "crear") — Codex llave r2.
+            try:
+                out_rol = govc_root(["role.ls", "VpsOperator"], ip, p["root_password"], timeout=30)
+                rol_existe = True
+            except RuntimeError as e:
+                if "not found" not in str(e).lower():
+                    raise   # error real de API/permisos ≠ "el rol no existe"
+                rol_existe = False
+            if not rol_existe:
+                govc_root(["role.create", "VpsOperator", *PRIVS_VPSOPERATOR], ip, p["root_password"])
+            elif set(out_rol.split()) != set(PRIVS_VPSOPERATOR):
+                govc_root(["role.update", "VpsOperator", *PRIVS_VPSOPERATOR], ip, p["root_password"])
                 job.detalle("rol VpsOperator existía con %d privilegios distintos — "
-                            "RECONCILIADO a los 46 exactos" % len(tiene))
+                            "RECONCILIADO a los 46 exactos" % len(set(out_rol.split())))
             else:
                 job.detalle("rol VpsOperator ya existía con los privilegios exactos")
-        except RuntimeError as e:
-            if "not found" not in str(e).lower():
-                raise   # error real de API/permisos ≠ "el rol no existe"
-            govc_root(["role.create", "VpsOperator", *PRIVS_VPSOPERATOR], ip, p["root_password"])
-        try:
-            govc_root(["host.account.create", "-id", "svc-vps", "-password", svc_pass],
+            try:
+                govc_root(["host.account.create", "-id", "svc-vps", "-password", svc_pass],
+                          ip, p["root_password"])
+            except RuntimeError as e:
+                if "already exist" not in str(e).lower():
+                    raise   # solo "ya existe" habilita la rotación; otro error propaga
+                govc_root(["host.account.update", "-id", "svc-vps", "-password", svc_pass],
+                          ip, p["root_password"])
+            govc_root(["permissions.set", "-principal", "svc-vps", "-role", "VpsOperator"],
                       ip, p["root_password"])
-        except RuntimeError as e:
-            if "already exist" not in str(e).lower():
-                raise   # solo "ya existe" habilita la rotación; otro error propaga
-            govc_root(["host.account.update", "-id", "svc-vps", "-password", svc_pass],
-                      ip, p["root_password"])
-        govc_root(["permissions.set", "-principal", "svc-vps", "-role", "VpsOperator"],
-                  ip, p["root_password"])
-        # una cuenta svc-vps PREVIA podría conservar permisos con otros roles en
-        # otras rutas — se verifica que TODOS sus permisos sean VpsOperator
-        permisos = govc_root(["permissions.ls"], ip, p["root_password"], timeout=30)
-        for lnp in permisos.splitlines():
-            if "svc-vps" in lnp and "VpsOperator" not in lnp:
-                raise RuntimeError("svc-vps conserva un permiso con OTRO rol (%s) — "
-                                   "retirarlo a mano antes de enrolar" % lnp.strip()[:100])
-        job.paso("svc-vps con rol VpsOperator (46 privilegios y permisos verificados)")
+            # una cuenta svc-vps PREVIA podría conservar permisos con otros roles en
+            # otras rutas — se verifica que TODOS sus permisos sean VpsOperator
+            permisos = govc_root(["permissions.ls"], ip, p["root_password"], timeout=30)
+            for lnp in permisos.splitlines():
+                if "svc-vps" in lnp and "VpsOperator" not in lnp:
+                    raise RuntimeError("svc-vps conserva un permiso con OTRO rol (%s) — "
+                                       "retirarlo a mano antes de enrolar" % lnp.strip()[:100])
+        else:
+            # modo LLAVE: svc-vps por esxcli (crea o rota la clave), Admin TEMPORAL, y
+            # auto-rebaje al rol mínimo con su propia sesión de API. svc_pass va entre
+            # comillas simples: token_urlsafe+Aa1! no contiene comillas simples.
+            # -s false: svc-vps es cuenta de API, SIN acceso de shell (igual que la API
+            # host.account.create del modo password; el default de esxcli sería true).
+            # svc-vps: crear si NO existe, o rotar su clave si ya está — determinista
+            # (nada de "cualquier fallo = ya existe"). -s false: cuenta de API, sin shell.
+            accs = _ssh_exec(cli, "esxcli system account list")
+            svc_existe = any(ln.split()[0:1] == ["svc-vps"] for ln in accs.splitlines())
+            _ssh_exec(cli, "esxcli system account %s -i svc-vps -p '%s' -c '%s' -s false%s"
+                      % ("set" if svc_existe else "add", svc_pass, svc_pass,
+                         "" if svc_existe else " -d vps-engine"))
+            # RECUPERACIÓN de la ventana Admin (Codex llave #b): si CUALQUIER paso falla
+            # tras conceder Admin, se intenta dejar svc-vps en NoAccess (estado seguro) y
+            # verificarlo; si tampoco se puede, se ALERTA de posible Admin residual (no se
+            # oculta). El host no queda registrado → se re-prepara.
+            admin_concedido = False
+            try:
+                # marcar ANTES del comando: si el permission set se aplica en el host pero
+                # la respuesta se pierde (timeout), igual hay que recuperar (Codex llave r3)
+                admin_concedido = True
+                _ssh_exec(cli, "esxcli system permission set -i svc-vps -r Admin")
+                # "not found" SOLO distingue rol-ausente en role.ls; un fallo de
+                # role.update/create se propaga (no se confunde con "crear").
+                try:
+                    out_rol = govc_root(["role.ls", "VpsOperator"], ip, svc_pass, timeout=30, usuario="svc-vps")
+                    rol_existe = True
+                except RuntimeError as e:
+                    if "not found" not in str(e).lower():
+                        raise
+                    rol_existe = False
+                if not rol_existe:
+                    govc_root(["role.create", "VpsOperator", *PRIVS_VPSOPERATOR], ip, svc_pass, usuario="svc-vps")
+                elif set(out_rol.split()) != set(PRIVS_VPSOPERATOR):
+                    govc_root(["role.update", "VpsOperator", *PRIVS_VPSOPERATOR], ip, svc_pass, usuario="svc-vps")
+                    job.detalle("rol VpsOperator RECONCILIADO a los 46 privilegios")
+                else:
+                    job.detalle("rol VpsOperator ya existía con los privilegios exactos")
+                # AUTO-REBAJE: svc-vps se asigna a sí mismo el rol mínimo (pierde Admin) —
+                # ÚLTIMA operación de API que requiere privilegios de autorización.
+                govc_root(["permissions.set", "-principal", "svc-vps", "-role", "VpsOperator"],
+                          ip, svc_pass, usuario="svc-vps")
+                # verificación POSITIVA: svc-vps debe quedar EXACTAMENTE en VpsOperator
+                rol_fin = _svc_vps_rol(cli)
+                if rol_fin != "VpsOperator":
+                    raise RuntimeError("tras el auto-rebaje svc-vps quedó en rol %r (se esperaba "
+                                       "VpsOperator)" % rol_fin)
+            except Exception as e_orig:
+                if admin_concedido:
+                    try:
+                        _ssh_exec(cli, "esxcli system permission set -i svc-vps -r NoAccess")
+                        rec = _svc_vps_rol(cli)   # verificación POSITIVA de la revocación
+                        if rec != "NoAccess":
+                            raise RuntimeError("revocación no verificada: rol observado %r" % rec)
+                    except Exception as e2:   # noqa: BLE001 — redactar svc_pass ANTES de truncar
+                        orig = str(e_orig).replace(svc_pass, "***")[:120]
+                        falla = str(e2).replace(svc_pass, "***")[:120]
+                        raise RuntimeError("el enrolamiento FALLÓ (%s) y NO se pudo revocar el Admin "
+                                           "temporal de svc-vps (%s) — POSIBLE ADMIN RESIDUAL, revisar "
+                                           "el host a mano" % (orig, falla)) from None
+                raise
+        job.paso("svc-vps con rol VpsOperator"
+                 + (" (46 privilegios y permisos verificados)" if modo_auth == "password"
+                    else " (auto-rebaje verificado; ventana Admin cerrada)"))
 
         # llave dedicada del motor (RSA: ESXi 8 RECHAZA ed25519) + wrapper + forced-command
         base = "/vmfs/volumes/%s/VPS" % datastore
@@ -3438,11 +3603,26 @@ def flujo_copiar_doradas(job, origen, destino):
             esxi_ssh("thin-plantilla %s" % n, host=destino, timeout=3600)
     job.ok("plantillas al día en %s — ya puedes ACTIVAR el host" % destino["id"])
 
+@app.route("/hosts/bootstrap-pubkey")
+def hosts_bootstrap_pubkey():
+    """Pública de la llave de bootstrap del motor — el admin la instala en root de cada
+    host nuevo para poder enrolar por 'llave' (sin clave root). Material público."""
+    rol = auth()
+    if not rol:
+        return jsonify({"error": "unauthorized"}), 401
+    if rol != "admin":
+        return jsonify({"error": ERR_SOLO_ADMIN}), 403
+    try:
+        return jsonify({"ok": True, "pubkey": bootstrap_pubkey_openssh(),
+                        "ruta_destino": "/etc/ssh/keys-root/authorized_keys"})
+    except Exception as e:  # noqa: BLE001
+        return jsonify({"error": "no se pudo obtener la llave de bootstrap: %s" % str(e)[:120]}), 500
+
 @app.route("/hosts/preparar", methods=["POST"])
 def hosts_preparar():
     """Wizard (2 pasos, sin estado server-side): accion=huella devuelve la huella
-    SHA256 para que el humano la coteje; accion=ejecutar (con huella_confirmada +
-    root_password) lanza el job que securiza, valida y registra el host."""
+    SHA256 para que el humano la coteje; accion=ejecutar lanza el job que securiza,
+    valida y registra el host. Auth del motor: clave root (1 uso) o llave de bootstrap."""
     rol = auth()
     if not rol:
         return jsonify({"error": "unauthorized"}), 401
@@ -3488,11 +3668,21 @@ def hosts_preparar():
     if not huella.startswith("SHA256:"):
         return jsonify({"error": "huella_confirmada requerida (formato SHA256:…) — "
                                  "obtenerla primero con accion=huella"}), 400
+    # modo de autenticación: "password" (clave root de 1 uso) | "llave" (bootstrap del
+    # motor, sin clave root — su pública ya instalada en root del host)
+    auth_modo = d.get("auth_modo", "password")
+    if auth_modo is None:            # default SOLO ante ausencia/null (no ante "", 0, [], …)
+        auth_modo = "password"
+    if auth_modo not in ("password", "llave"):   # tolera no-str (no coincide → 400 limpio)
+        return jsonify({"error": "auth_modo inválido (password | llave)"}), 400
     _rp = d.get("root_password")
-    if not isinstance(_rp, str) or not (1 <= len(_rp) <= 128):
-        return jsonify({"error": "root_password requerida (texto, 1-128)"}), 400
-    if any(ord(c) < 32 for c in _rp):
-        return jsonify({"error": "root_password con caracteres de control"}), 400
+    if auth_modo == "password":
+        if not isinstance(_rp, str) or not (1 <= len(_rp) <= 128):
+            return jsonify({"error": "root_password requerida (texto, 1-128)"}), 400
+        if any(ord(c) < 32 for c in _rp):
+            return jsonify({"error": "root_password con caracteres de control"}), 400
+    else:
+        _rp = None   # modo llave: el motor entra con su llave de bootstrap
     diag = d.get("diag_pubkey")
     if diag is not None:
         diag = diag.strip() if isinstance(diag, str) else None
@@ -3516,7 +3706,7 @@ def hosts_preparar():
         return jsonify({"error": "no se puede preparar %s ahora: %s" % (hid, conflicto)}), 409
     params = {"id": hid, "ip": ip, "ssh_port": puerto, "datastore": datastore,
               "huella": huella, "root_password": _rp, "diag_pubkey": diag, "notas": notas,
-              "uso_clientes": uso_clientes, "uso_admin": uso_admin}
+              "uso_clientes": uso_clientes, "uso_admin": uso_admin, "auth_modo": auth_modo}
     err = _lanzar_op_host(job, lambda j: flujo_preparar_host(j, params))
     if err:
         return err
