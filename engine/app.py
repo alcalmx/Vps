@@ -3403,11 +3403,15 @@ def _preparar_host(job, p, svc_pass):
                 # ÚLTIMA operación de API que requiere privilegios de autorización.
                 govc_root(["permissions.set", "-principal", "svc-vps", "-role", "VpsOperator"],
                           ip, svc_pass, usuario="svc-vps")
-                # verificación POSITIVA: svc-vps debe quedar EXACTAMENTE en VpsOperator
+                # verificación POSITIVA: esxcli rotula TODOS los roles personalizados como
+                # "Custom" (no expone el nombre). El permissions.set VpsOperator con rc=0
+                # justo antes garantiza que ese Custom ES VpsOperator; aquí se confirma que
+                # svc-vps quedó en un rol Custom — ni Admin, ni ReadOnly/NoAccess, ni ausente
+                # → la ventana Admin quedó cerrada (verificado en ESXi 8 real, 2026-10-01).
                 rol_fin = _svc_vps_rol(cli)
-                if rol_fin != "VpsOperator":
-                    raise RuntimeError("tras el auto-rebaje svc-vps quedó en rol %r (se esperaba "
-                                       "VpsOperator)" % rol_fin)
+                if rol_fin != "Custom":
+                    raise RuntimeError("tras el auto-rebaje svc-vps quedó en rol %r (se esperaba un "
+                                       "rol Custom = VpsOperator)" % rol_fin)
             except Exception as e_orig:
                 if admin_concedido:
                     try:

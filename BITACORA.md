@@ -24,6 +24,27 @@ crear" (multi-host y multi-datastore con balanceo). Acordado y documentado en
 - Prerrequisito nuevo detectado: **persistir histórico de host_recursos** (hoy el scan
   es en vivo) para que el informe de Jev tenga serie temporal.
 
+## 2026-10-01 (jueves) — 🧪 Gate de staging del modo llave: hallazgo real (esxcli rotula custom="Custom")
+
+Alcadio enroló esxi-20051 por el wizard en modo LLAVE (tras borrarlo y reinstalar la llave de
+bootstrap correcta — ver nota abajo). El job falló en la verificación del auto-rebaje:
+"svc-vps quedó en rol 'Custom' (se esperaba VpsOperator)". HALLAZGO que solo un ESXi real expone
+(ni mocks ni Codex lo sabían): **esxcli `system permission list` rotula TODOS los roles
+personalizados como "Custom"**, no da el nombre. El auto-rebaje SÍ funcionó (svc-vps perdió Admin y
+quedó en el rol custom); solo la verificación esperaba el literal "VpsOperator". La recuperación
+actuó bien (dejó svc-vps en NoAccess al fallar). FIX: la verificación acepta "Custom" (el
+`permissions.set VpsOperator` con rc=0 justo antes garantiza que ese Custom es VpsOperator; se
+rechazan Admin/ReadOnly/NoAccess/ausente → ventana Admin cerrada). Mock del test ajustado a la
+salida real. 16/16 verde. Motor redesplegado (health 200). **El gate de staging cumplió su función.**
+Pendiente: re-correr el enrolamiento (debe salir ok) y Codex del diff menor (dosificación).
+
+Nota llave de bootstrap: Alcadio había instalado la PRIMERA versión de la llave (antes del
+reemplazo a PEM); se corrigió en esxi-20051 (reemplazada la línea por la pública definitiva) y se
+VALIDÓ que el motor entra (BOOTSTRAP_OK). Para hosts nuevos usar siempre la pública definitiva
+(`...AAACAQC1LwUb...`) o el botón "Copiar llave del motor" del wizard. Se purgaron 3 VPS de prueba
+en papelera de esxi-20051 (carpetas + filas) y se borró el host del registro para el enrolamiento
+limpio. (2 Sends de bóveda de prueba quedan y expiran solos.)
+
 ## 2026-10-01 (jueves) — 🔑 WIZARD "root por llave": enrolar sin clave root + id auto-derivado
 
 Pedido de Alcadio: enrolar desde el wizard SIN teclear la clave root, usando una llave pre-instalada
