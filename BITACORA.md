@@ -5,7 +5,39 @@
 
 ---
 
-## ⏯️ PARA RETOMAR (2026-10-01) — MULTI-DATASTORE en construcción (Incremento 1)
+## ⏯️ PARA RETOMAR (2026-10-01) — MULTI-DATASTORE: Incremento 1 LISTO (falta desplegar) + Incremento 2
+
+**Incremento 1 (enrolar con 1..8 datastores): CÓDIGO COMPLETO y APROBADO por Codex (4 rondas).**
+NO desplegado aún (requiere OK de Alcadio). 16 suites verdes.
+
+Qué quedó hecho:
+- Esquema: `vms.datastore` + `hosts.datastores` (JSON [{"ds","ssh_key"},…], 1º = primario).
+- `ds_key_path(hid, ds, primario)`: primario = nombre histórico (compat); secundarios en namespace
+  `vps_engine_dsk_<hid>_<sha256(hid\0ds)[:16]>` (sin colisiones). Creación con O_EXCL.
+- `_parse_datastores` / `host_datastores(h, estricto)` / `host_ds_key(h, ds)`: NULL → deriva
+  primario; config presente-pero-rota = lectura tolerante + `datastores_error` visible, y ELEGIR
+  datastore lanza. Valida nombres con DATASTORE_RE.
+- `_preparar_host`: bucle por datastore (árbol VPS/ + wrapper BASE=ese ds + llave con command=);
+  publicación de authorized_keys atómica (temporal único, chmod 600, cadena &&, error de lectura
+  aborta) + verificación contra la línea COMPLETA (n==1, exactas==1). Diag key una sola vez.
+  Validación en vivo: API 1 vez + pong del wrapper de CADA ds. Primario INMUTABLE si hay VMs.
+- Endpoint: `datastores_extra` (lista, ≤7 extras, sin duplicados, DATASTORE_RE).
+- `host_recursos`: una consulta govc POR datastore (un secundario ausente ya no marca el host
+  inalcanzable) con `error` por ds. GET /hosts expone `datastores` y `datastores_error`.
+- Dashboard: wizard con "+ agregar otro datastore" (inputs dinámicos) y lista de hosts mostrando
+  cada datastore con su espacio libre.
+
+**GATE DE STAGING (condición de Codex, antes de producción, en ESXi 8 real):**
+1. la llave del datastore A opera SOLO bajo el BASE de A y NO el de B (y viceversa);
+2. un fallo real antes del `mv` conserva `authorized_keys` íntegro (bootstrap + diagnóstico).
+Hacerlo en esxi-20051 (staging), NUNCA en .39 (producción de Alcadio).
+
+**Incremento 2 (pendiente):** elegir datastore al CREAR (selector en Crear VPS como el de host);
+`flujo_crear` usa `host_ds_key(h, ds)` y clona del `_plantillas` de ESE ds; grabar `vms.datastore`;
+eliminar/editar/suspender resuelven la llave por `vms.datastore`; copiar-doradas por ds; cupo y
+reconciliación/purga por ds. **Después:** auto-selección por espacio (lo dejó Alcadio para luego).
+
+## ⏯️ (histórico) multi-datastore — fundación
 
 **Estado:** fundación commiteada en `b199127` (NO desplegada; el motor en prod sigue 1-datastore,
 intacto). Alcadio pidió construirlo YA. Se continúa posiblemente con otro modelo (Opus).

@@ -514,26 +514,65 @@ def hosts_lista():
     with DB_LOCK, db() as c:
         return [dict(r) for r in c.execute("SELECT * FROM hosts ORDER BY prioridad, created_at")]
 
-def host_datastores(h):
-    """Datastores USABLES del host: [{"ds": nombre, "ssh_key": ruta}, ...]. El primero es
-    el PRIMARIO. Si la columna `datastores` es NULL/ inválida (hosts previos al
-    multi-datastore), se deriva del primario (hosts.datastore/ssh_key) — compat total."""
+def ds_key_path(hid, ds, primario):
+    """Ruta de la llave confinada a (host, datastore). El PRIMARIO conserva el nombre
+    histórico (compat con hosts ya enrolados). Los secundarios van en un NAMESPACE propio
+    ('vps_engine_dsk_') + hash de (hid, ds) EXACTOS: sanear el nombre a [A-Za-z0-9_] podía
+    colisionar ("a.b" y "a-b" → mismo archivo) y la concatenación hid+sufijo podía chocar
+    con el primario de otro host ("esxi-a-b" vs "esxi-a"+ds "b") — Codex multids #d."""
+    # hid.replace("-","_") es INYECTIVO: HOST_ID_RE sólo admite [a-z0-9-] (el guion bajo no es
+    # un carácter válido de id) → dos hosts distintos nunca producen el mismo nombre.
+    if primario:
+        return os.path.join(ENROL_KEYS_DIR, "vps_engine_esxi_%s" % hid.replace("-", "_"))
+    h12 = hashlib.sha256(("%s\0%s" % (hid, ds)).encode("utf-8")).hexdigest()[:16]
+    return os.path.join(ENROL_KEYS_DIR, "vps_engine_dsk_%s_%s" % (hid.replace("-", "_"), h12))
+
+def _parse_datastores(h):
+    """(lista, error). lista = [{"ds","ssh_key"},…] con el PRIMARIO a la cabeza; error=None
+    si la configuración es coherente, o un texto si la columna existe pero es inválida.
+    Columna ausente/NULL = host previo al multi-datastore → se deriva del primario (compat);
+    una configuración PRESENTE pero rota NO se arregla en silencio (Codex multids #e)."""
+    primario = {"ds": h.get("datastore"), "ssh_key": h.get("ssh_key")}
     raw = h.get("datastores")
-    if raw:
-        try:
-            lst = json.loads(raw)
-            buena = [{"ds": d["ds"], "ssh_key": d.get("ssh_key")} for d in lst
-                     if isinstance(d, dict) and d.get("ds")]
-            if buena:
-                return buena
-        except (ValueError, TypeError, KeyError):
-            pass
-    return [{"ds": h.get("datastore"), "ssh_key": h.get("ssh_key")}]
+    if raw is None:      # SOLO la columna ausente/NULL es "host previo al multi-datastore";
+        return [primario], None     # un "" guardado es configuración PRESENTE y rota → error
+    try:
+        lst = json.loads(raw)
+    except (ValueError, TypeError):
+        return [primario], "JSON ilegible"
+    if not isinstance(lst, list) or not 1 <= len(lst) <= 8:
+        return [primario], "no es una lista de 1 a 8 entradas"
+    out, vistos = [], set()
+    for d in lst:
+        # el nombre se interpola en rutas/comandos → misma gramática estricta que al enrolar
+        if not isinstance(d, dict) or not isinstance(d.get("ds"), str) \
+                or not DATASTORE_RE.fullmatch(d["ds"]):
+            return [primario], "entrada sin datastore válido"
+        if not isinstance(d.get("ssh_key"), str) or not d["ssh_key"]:
+            return [primario], "entrada sin llave (%s)" % d["ds"][:40]
+        if d["ds"] in vistos:
+            return [primario], "datastore duplicado (%s)" % d["ds"][:40]
+        vistos.add(d["ds"])
+        out.append({"ds": d["ds"], "ssh_key": d["ssh_key"]})
+    if out[0]["ds"] != primario["ds"] or out[0]["ssh_key"] != primario["ssh_key"]:
+        return [primario], "el 1º de la lista no coincide con el datastore/llave primarios"
+    return out, None
+
+def host_datastores(h, estricto=False):
+    """Datastores USABLES del host ({"ds","ssh_key"}), primario a la cabeza. `estricto`
+    (operaciones que ELIGEN datastore) exige configuración coherente; las lecturas
+    (listados/scan) usan el modo tolerante y reportan el error aparte."""
+    lst, err = _parse_datastores(h)
+    if err and estricto:
+        raise RuntimeError("configuración de datastores inválida en el host %s: %s — "
+                           "re-preparar el host" % (h.get("id"), err))
+    return lst
 
 def host_ds_key(h, datastore):
     """ssh_key del wrapper confinado a `datastore` en el host; None si ese datastore NO
-    pertenece al host (jamás se opera un datastore no registrado — confinamiento)."""
-    for d in host_datastores(h):
+    pertenece al host (jamás se opera un datastore no registrado — confinamiento). Exige
+    configuración válida: elegir datastore sobre una lista corrupta sería inseguro."""
+    for d in host_datastores(h, estricto=True):
         if d.get("ds") == datastore:
             return d.get("ssh_key")
     return None
@@ -551,16 +590,30 @@ def host_recursos(h):
     por el motor en ese host. Cualquier falla → alcanzable=False (no lanza). Timeout
     corto por consulta para que un host lento no bloquee el listado (#4)."""
     out = {"alcanzable": False, "datastore_libre_gb": None, "cpu_cores": None,
-           "mem_total_gb": None, "mem_uso_gb": None}
+           "mem_total_gb": None, "mem_uso_gb": None, "datastores": []}
     try:
-        raw = govc("datastore.info", "-json", h["datastore"], host=h, timeout=SCAN_TIMEOUT)
-        data = json.loads(raw)
-        for ds in (data.get("datastores") or data.get("Datastores") or []):
-            s = ds.get("summary") or ds.get("Summary") or {}
-            if (s.get("name") or s.get("Name")) == h["datastore"]:
-                libre = s.get("freeSpace", s.get("FreeSpace"))
-                if libre is not None:
-                    out["datastore_libre_gb"] = int(libre) // (1024 ** 3)
+        # multi-datastore: UNA CONSULTA POR DATASTORE. Pedirlos todos juntos haría que un
+        # secundario inexistente abortara el comando entero y marcara el host inalcanzable
+        # pese a tener el primario sano (Codex multids #f). Así cada secundario falla solo.
+        lst_ds, err_ds = _parse_datastores(h)
+        if err_ds:
+            out["datastores_error"] = err_ds
+        nombres = [d["ds"] for d in lst_ds if d.get("ds")]
+        libres, errs = {}, {}
+        for n in nombres:
+            try:
+                data = json.loads(govc("datastore.info", "-json", n, host=h, timeout=SCAN_TIMEOUT))
+                for ds in (data.get("datastores") or data.get("Datastores") or []):
+                    s = ds.get("summary") or ds.get("Summary") or {}
+                    if (s.get("name") or s.get("Name")) == n:
+                        libre = s.get("freeSpace", s.get("FreeSpace"))
+                        if libre is not None:
+                            libres[n] = int(libre) // (1024 ** 3)
+            except Exception as e:  # noqa: BLE001 — un ds caído/ausente no invalida el host,
+                errs[n] = _redact(str(e))[:80]   # pero el motivo SÍ se reporta (no se oculta)
+        out["datastores"] = [dict({"ds": n, "libre_gb": libres.get(n)},
+                                  **({"error": errs[n]} if n in errs else {})) for n in nombres]
+        out["datastore_libre_gb"] = libres.get(h["datastore"])
         raw = govc("host.info", "-json", host=h, timeout=SCAN_TIMEOUT)
         data = json.loads(raw)
         hs = (data.get("hostSystems") or data.get("HostSystems") or [{}])[0]
@@ -2900,6 +2953,10 @@ def hosts_get():
         d = {k: h[k] for k in ("id", "ip", "datastore", "estado", "prioridad", "notas", "created_at")}
         d["uso_clientes"] = bool(h.get("uso_clientes"))
         d["uso_admin"] = bool(h.get("uso_admin"))
+        _lst, _err = _parse_datastores(h)
+        d["datastores"] = [x["ds"] for x in _lst if x.get("ds")]
+        if _err:
+            d["datastores_error"] = _err
         d["recursos"] = host_recursos(h)
         salida.append(d)
     return jsonify({"hosts": salida})
@@ -3319,6 +3376,9 @@ def _preparar_host(job, p, svc_pass):
     """Fases A+B del runbook ejecutadas por el motor (wizard). p trae la
     root_password SOLO en memoria; ningún paso/detalle la contiene."""
     hid, ip, puerto, datastore = p["id"], p["ip"], p["ssh_port"], p["datastore"]
+    # MULTI-DATASTORE: lista completa (el 1º es el PRIMARIO = p["datastore"]). Cada datastore
+    # recibe su árbol VPS/, su wrapper (BASE=ese ds) y su llave confinada por command=.
+    ds_lista = p.get("datastores") or [datastore]
     pass_var = "GOVC_PASSWORD_" + re.sub(r"[^A-Z0-9]", "_", hid.upper())
     job.paso()
     # pre-chequeos para NO romper un host operativo con la rotación (Codex wizard #6):
@@ -3334,6 +3394,17 @@ def _preparar_host(job, p, svc_pass):
     if existente and existente.get("ip") != ip:
         raise RuntimeError("el host %s ya existe con otra ip (%s) — no se re-prepara hacia %s"
                            % (hid, existente.get("ip"), ip))
+    # el PRIMARIO es inmutable mientras haya VMs: re-preparar recupera configuración y
+    # credenciales, NO migra máquinas — cambiarlo dejaría las VMs existentes apuntando a un
+    # datastore que ya no es el del host (Codex multids r2). Agregar datastores sí se permite.
+    if existente and existente.get("datastore") and existente["datastore"] != datastore:
+        with DB_LOCK, db() as c:
+            n_vms = c.execute("SELECT COUNT(*) n FROM vms WHERE host=?", (hid,)).fetchone()["n"]
+        if n_vms:
+            raise RuntimeError("el host %s tiene %d VM(s) en el datastore %s — no se re-prepara "
+                               "cambiando el primario a %s (las VMs quedarían desalineadas); "
+                               "mueve/elimina esas VMs o conserva el primario actual"
+                               % (hid, n_vms, existente["datastore"], datastore))
     otro = next((h for h in hosts_lista() if h.get("ip") == ip and h.get("id") != hid), None)
     if otro:
         raise RuntimeError("la ip %s ya pertenece al host '%s' — dos ids sobre el mismo host "
@@ -3465,32 +3536,69 @@ def _preparar_host(job, p, svc_pass):
                  + (" (46 privilegios y permisos verificados)" if modo_auth == "password"
                     else " (auto-rebaje verificado; ventana Admin cerrada)"))
 
-        # llave dedicada del motor (RSA: ESXi 8 RECHAZA ed25519) + wrapper + forced-command
-        base = "/vmfs/volumes/%s/VPS" % datastore
+        # UNA LLAVE CONFINADA POR DATASTORE (RSA: ESXi 8 RECHAZA ed25519): cada datastore
+        # tiene su árbol VPS/, su wrapper con BASE=ese ds y su llave con command= a ESE
+        # wrapper → el confinamiento auditado se mantiene idéntico (una llave jamás puede
+        # tocar otro datastore). El primario conserva el nombre histórico de llave (compat).
+        AK = "/etc/ssh/keys-root/authorized_keys"
         os.makedirs(ENROL_KEYS_DIR, exist_ok=True)
-        key_path = os.path.join(ENROL_KEYS_DIR, "vps_engine_esxi_%s" % hid.replace("-", "_"))
-        if os.path.isfile(key_path):
-            rsa = paramiko.RSAKey.from_private_key_file(key_path)
-            job.detalle("llave del motor ya existía — se reutiliza")
-        else:
-            rsa = paramiko.RSAKey.generate(4096)
-            fdk = os.open(key_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-            with os.fdopen(fdk, "w") as fk:
-                rsa.write_private_key(fk)
         with open(WRAPPER_TEMPLATE, encoding="utf-8") as f:
+            wrapper_tpl = f.read()
+        ds_meta, reusadas = [], 0
+        for i, ds in enumerate(ds_lista):
+            base = "/vmfs/volumes/%s/VPS" % ds
+            key_path = ds_key_path(hid, ds, primario=(i == 0))
+            if os.path.isfile(key_path):
+                rsa = paramiko.RSAKey.from_private_key_file(key_path)
+                reusadas += 1
+            else:
+                rsa = paramiko.RSAKey.generate(4096)
+                try:   # O_EXCL: si otro hilo la creó entre el isfile y aquí, se usa la suya
+                    fdk = os.open(key_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+                    with os.fdopen(fdk, "w") as fk:
+                        rsa.write_private_key(fk)
+                except FileExistsError:
+                    rsa = paramiko.RSAKey.from_private_key_file(key_path)
+                    reusadas += 1
             # lambda: el string de reemplazo de re.sub interpreta backslashes (Codex #1)
-            wrapper = re.sub(r"(?m)^BASE=.*$", lambda _m: "BASE=" + base, f.read(), count=1)
-        _ssh_exec(cli, "mkdir -p %s/_plantillas %s/_papelera %s/_bin" % (base, base, base))
-        _ssh_exec(cli, "cat > %s/_bin/vps-wrapper.sh && chmod 755 %s/_bin/vps-wrapper.sh"
-                  % (base, base), stdin_data=wrapper)
-        b64 = rsa.get_base64()
-        linea = ('command="%s/_bin/vps-wrapper.sh",no-port-forwarding,no-X11-forwarding,'
-                 'no-agent-forwarding,no-pty ssh-rsa %s vps-engine@noc-monitor (%s)'
-                 % (base, b64, hid))
-        ya = _ssh_exec(cli, "grep -cF '%s' /etc/ssh/keys-root/authorized_keys 2>/dev/null || true"
-                       % b64[:40])
-        if (ya.strip() or "0") == "0":
-            _ssh_exec(cli, "cat >> /etc/ssh/keys-root/authorized_keys", stdin_data=linea + "\n")
+            wrapper = re.sub(r"(?m)^BASE=.*$", lambda _m: "BASE=" + base, wrapper_tpl, count=1)
+            _ssh_exec(cli, "mkdir -p %s/_plantillas %s/_papelera %s/_bin" % (base, base, base))
+            _ssh_exec(cli, "cat > %s/_bin/vps-wrapper.sh && chmod 755 %s/_bin/vps-wrapper.sh"
+                      % (base, base), stdin_data=wrapper)
+            b64 = rsa.get_base64()
+            linea = ('command="%s/_bin/vps-wrapper.sh",no-port-forwarding,no-X11-forwarding,'
+                     'no-agent-forwarding,no-pty ssh-rsa %s vps-engine@noc-monitor (%s/%s)'
+                     % (base, b64, hid, ds))
+            # dedup + alta en UN SOLO comando ATÓMICO: se filtra cualquier línea previa con
+            # ESTA llave (una con otro BASE ganaría en sshd y dejaría el wrapper apuntando al
+            # datastore viejo), se anexa la correcta a un temporal ÚNICO, se le fijan permisos
+            # y recién ahí se publica con mv. Encadenado con && → si algún paso falla NO se
+            # reemplaza el archivo (jamás se pierden bootstrap/diagnóstico), y el temporal se
+            # borra. El archivo ausente se trata como entrada VACÍA (no se crea antes).
+            # index() es literal: el base64 trae + y / que en regex son metacaracteres.
+            # OJO (Codex multids r3): el archivo AUSENTE es entrada vacía, pero un ERROR DE
+            # LECTURA de un archivo existente debe ABORTAR (no publicar un temporal truncado
+            # que perdería bootstrap/diagnóstico) → if/else en vez de `cat … || true`.
+            tmp = "%s.new.%s" % (AK, uuid.uuid4().hex[:8])
+            _ssh_exec(cli, ("if test -e {ak}; then awk -v k='{k}' 'index($0,k)==0' {ak} > {tmp}; "
+                            "else : > {tmp}; fi "
+                            "&& printf '%s\\n' '{linea}' >> {tmp} "
+                            "&& chmod 600 {tmp} && mv {tmp} {ak} "
+                            "|| {{ rm -f {tmp}; exit 1; }}"
+                            ).format(ak=AK, k=b64, linea=linea, tmp=tmp))
+            # verificación POSITIVA: EXACTAMENTE una línea con esta llave y que sea EXACTAMENTE
+            # la esperada (command= al wrapper de ESTE datastore + opciones + llave).
+            chk = _ssh_exec(cli, "awk -v k='%s' -v want='%s' "
+                            "'index($0,k)>0 {n++} $0==want {ok++} END{print n+0, ok+0}' %s"
+                            % (b64, linea, AK))
+            if chk.split() != ["1", "1"]:
+                raise RuntimeError("la llave del motor para el datastore %s no quedó instalada "
+                                   "correctamente (líneas con la llave / exactas = %s)"
+                                   % (ds, chk.strip()))
+            ds_meta.append({"ds": ds, "ssh_key": key_path})
+        base = "/vmfs/volumes/%s/VPS" % datastore   # primario (para el mensaje del paso)
+        if reusadas:
+            job.detalle("%d llave(s) del motor ya existían — se reutilizan" % reusadas)
         diag_msg = ""   # se anexa al CIERRE del paso: job.paso() sobrescribe los detalle()
         if p.get("diag_pubkey"):   # llave de diagnóstico IA/humano: shell pleno, SIN command=
             # idempotencia RIGUROSA (Codex personalizado #2): no basta con que el
@@ -3507,8 +3615,8 @@ def _preparar_host(job, p, svc_pass):
                 diag_msg = "; llave de diagnóstico (Claude) INSTALADA (shell pleno)"
             else:
                 diag_msg = "; llave de diagnóstico (Claude) ya estaba instalada"
-        job.paso("wrapper instalado con BASE=%s; llave del motor confinada por command=%s"
-                 % (base, diag_msg))
+        job.paso("wrapper + llave confinada instalados en %d datastore(s): %s%s"
+                 % (len(ds_meta), ", ".join(d["ds"] for d in ds_meta), diag_msg))
     finally:
         cli.close()
 
@@ -3516,15 +3624,23 @@ def _preparar_host(job, p, svc_pass):
     secreto_host_guardar(pass_var, svc_pass)
     job.paso("huella pinneada; secreto %s en el almacén (sin reinicio del motor)" % pass_var)
 
-    # validación EN VIVO con las credenciales NUEVAS (misma vara que POST /hosts)
+    # validación EN VIVO con las credenciales NUEVAS (misma vara que POST /hosts): la API
+    # una vez, y el wrapper de CADA datastore (cada uno con su propia llave confinada).
+    key_primaria = ds_meta[0]["ssh_key"]
     candidato = {"id": hid, "ip": ip, "api_url": "https://%s/sdk" % ip,
                  "govc_user": "svc-vps", "pass_env": pass_var,
-                 "datastore": datastore, "ssh_port": puerto, "ssh_key": key_path}
+                 "datastore": datastore, "ssh_port": puerto, "ssh_key": key_primaria}
     govc("about", host=candidato, timeout=30)
-    pong = esxi_ssh("ping", host=candidato, timeout=30)
-    if pong.strip() != "pong":
-        raise RuntimeError("el wrapper no respondió pong: %r" % pong[:40])
-    libre = datastore_libre_gb(candidato)
+    libres = {}
+    for d in ds_meta:
+        cand_ds = dict(candidato, datastore=d["ds"], ssh_key=d["ssh_key"])
+        pong = esxi_ssh("ping", host=cand_ds, timeout=30)
+        if pong.strip() != "pong":
+            raise RuntimeError("el wrapper del datastore %s no respondió pong: %r"
+                               % (d["ds"], pong[:40]))
+        libres[d["ds"]] = datastore_libre_gb(cand_ds)
+    libre = libres[datastore]
+    ds_json = json.dumps(ds_meta)
     with DB_LOCK, db() as c:
         # (consulta en ESTA conexión: host_get() toma DB_LOCK y no es reentrante)
         if c.execute("SELECT 1 FROM hosts WHERE id=?", (hid,)).fetchone():
@@ -3532,21 +3648,25 @@ def _preparar_host(job, p, svc_pass):
             # queda EXPLÍCITO en pausado (el pre-chequeo ya lo exigió) — así el
             # mensaje final "registrado PAUSADO" es verdad siempre (Codex #6)
             c.execute("UPDATE hosts SET ip=?, api_url=?, govc_user='svc-vps', pass_env=?, "
-                      "datastore=?, ssh_port=?, ssh_key=?, estado='pausado' WHERE id=?",
-                      (ip, candidato["api_url"], pass_var, datastore, puerto, key_path, hid))
+                      "datastore=?, ssh_port=?, ssh_key=?, datastores=?, estado='pausado' "
+                      "WHERE id=?",
+                      (ip, candidato["api_url"], pass_var, datastore, puerto, key_primaria,
+                       ds_json, hid))
         else:
             # host nuevo: fija los USOS elegidos en el wizard (motor clientes/admin).
             # En re-preparación (UPDATE arriba) los usos NO se tocan: se gestionan desde
             # los toggles de la pestaña Motor, la re-preparación es solo de credenciales.
             c.execute("INSERT INTO hosts(id, ip, api_url, govc_user, pass_env, datastore, "
-                      "ssh_port, ssh_key, estado, prioridad, notas, uso_clientes, uso_admin) "
-                      "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                      "ssh_port, ssh_key, estado, prioridad, notas, uso_clientes, uso_admin, "
+                      "datastores) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                       (hid, ip, candidato["api_url"], "svc-vps", pass_var, datastore, puerto,
-                       key_path, "pausado", 100, p.get("notas") or "",
-                       1 if p.get("uso_clientes") else 0, 1 if p.get("uso_admin") else 0))
-    job.set_resultado({"host": hid, "datastore_libre_gb": libre,
+                       key_primaria, "pausado", 100, p.get("notas") or "",
+                       1 if p.get("uso_clientes") else 0, 1 if p.get("uso_admin") else 0,
+                       ds_json))
+    job.set_resultado({"host": hid, "datastore_libre_gb": libre, "datastores": libres,
                        "siguiente": "copiar doradas (botón en la pestaña Motor) y luego ACTIVAR"})
-    job.ok("validado en vivo (API + pong + %d GB libres) — registrado PAUSADO" % libre)
+    job.ok("validado en vivo (API + pong por datastore) — %s — registrado PAUSADO"
+           % " · ".join("%s: %d GB libres" % (k, v) for k, v in libres.items()))
 
 PASOS_DORADAS = ["Listar plantillas de origen y destino",
                  "Copiar plantillas (streaming vía el motor)",
@@ -3704,6 +3824,25 @@ def hosts_preparar():
     if not DATASTORE_RE.fullmatch(datastore or ""):
         return jsonify({"error": "datastore inválido (un nombre simple: letras/dígitos/._- "
                                  "hasta 64, sin espacios ni separadores)"}), 400
+    # MULTI-DATASTORE: lista opcional de datastores ADICIONALES. El primario (`datastore`)
+    # encabeza siempre la lista; cada uno recibe su árbol+wrapper+llave confinada. Misma
+    # gramática estricta para todos (se interpolan igual), sin duplicados y con tope.
+    ds_extra = d.get("datastores_extra", [])
+    if ds_extra is None:          # ausente o null → sin adicionales; "" / 0 / {} NO son lista
+        ds_extra = []
+    if not isinstance(ds_extra, list):
+        return jsonify({"error": "datastores_extra debe ser una lista de nombres"}), 400
+    if len(ds_extra) > 7:
+        return jsonify({"error": "demasiados datastores (máx 8 por host)"}), 400
+    ds_lista = [datastore]
+    for x in ds_extra:
+        if not isinstance(x, str) or not DATASTORE_RE.fullmatch(x.strip()):
+            return jsonify({"error": "datastore adicional inválido: %r (nombre simple: "
+                                     "letras/dígitos/._- hasta 64)" % (x if isinstance(x, str) else type(x).__name__)}), 400
+        x = x.strip()
+        if x in ds_lista:
+            return jsonify({"error": "datastore repetido: %s" % x}), 400
+        ds_lista.append(x)
     if not huella.startswith("SHA256:"):
         return jsonify({"error": "huella_confirmada requerida (formato SHA256:…) — "
                                  "obtenerla primero con accion=huella"}), 400
@@ -3744,6 +3883,7 @@ def hosts_preparar():
     if not job:
         return jsonify({"error": "no se puede preparar %s ahora: %s" % (hid, conflicto)}), 409
     params = {"id": hid, "ip": ip, "ssh_port": puerto, "datastore": datastore,
+              "datastores": ds_lista,
               "huella": huella, "root_password": _rp, "diag_pubkey": diag, "notas": notas,
               "uso_clientes": uso_clientes, "uso_admin": uso_admin, "auth_modo": auth_modo}
     err = _lanzar_op_host(job, lambda j: flujo_preparar_host(j, params))
