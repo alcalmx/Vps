@@ -5,10 +5,38 @@
 
 ---
 
-## ⏯️ PARA RETOMAR (2026-10-01) — MULTI-DATASTORE: Incremento 1 LISTO (falta desplegar) + Incremento 2
+## 2026-10-01 (jueves) — 🎯 GATE DE STAGING SUPERADO en ESXi 8 real: modo llave + multi-datastore
 
-**Incremento 1 (enrolar con 1..8 datastores): CÓDIGO COMPLETO y APROBADO por Codex (4 rondas).**
-NO desplegado aún (requiere OK de Alcadio). 16 suites verdes.
+**esxi-20039 (192.168.200.39) enrolado por Alcadio desde el dashboard, en MODO LLAVE y con DOS
+DATASTORES** (job 2f81159f35f7, los 5 pasos en verde). Primera prueba real de ambas features:
+- Entró por la llave de bootstrap del motor (SIN clave root) y el auto-rebaje de svc-vps quedó
+  verificado ("ventana Admin cerrada").
+- Instaló wrapper + llave confinada en `Raid10-20039` y `Raid10-20039A`, validó cada uno por
+  separado (1925 GB / 1501 GB libres) y registró el host PAUSADO.
+
+**Gate que exigía Codex, CUMPLIDO en sus dos partes (evidencia empírica, no mocks):**
+1. **Aislamiento A/B:** `df` del wrapper con cada llave → la primaria reporta
+   `/vmfs/volumes/Raid10-20039` y la secundaria `/vmfs/volumes/Raid10-20039A`. Cada llave opera
+   SOLO bajo el BASE de su datastore.
+2. **Integridad de authorized_keys:** tras DOS reescrituras (una por datastore) sobreviven las 9
+   líneas correctas — las 2 llaves de Fabián, `raid-check-automation`, la de diagnóstico de Claude
+   y la de bootstrap intactas — más las 2 del motor con su `command=` propio. Permisos 0600, sin
+   temporales `.new.` sueltos.
+
+**Incidente previo (2 intentos fallidos, ambos sin tocar el host):** el .39 tenía instalada la
+PRIMERA versión de la llave de bootstrap (antes del regenerado a PEM) → el motor la rechazó con
+mensaje claro. Corregido por Claude con respaldo (`authorized_keys.bak-20261001-claude`),
+reemplazando SOLO esa línea y verificando el conteo antes de publicar. **Lección: la única fuente
+fiable de la pública es el botón "Copiar llave del motor" del wizard (la lee del motor).**
+
+Estado de hosts: esxi-245 (pausado, ambos motores), esxi-20051 (pausado, solo admin, datastore1),
+esxi-20039 (pausado, solo admin, 2 datastores). Siguiente de Alcadio: creación de prueba en
+esxi-20051 para validar que el flujo de creación sigue impecable tras los cambios.
+
+## ⏯️ PARA RETOMAR (2026-10-01) — MULTI-DATASTORE: Incremento 1 DESPLEGADO + falta Incremento 2
+
+**Incremento 1 (enrolar con 1..8 datastores): DESPLEGADO 2026-10-01 y APROBADO por Codex (4 rondas) + GATE DE STAGING SUPERADO en ESXi real (ver entrada de arriba).**
+16 suites verdes. Validado en vivo con esxi-20039 (2 datastores, aislamiento A/B demostrado).
 
 Qué quedó hecho:
 - Esquema: `vms.datastore` + `hosts.datastores` (JSON [{"ds","ssh_key"},…], 1º = primario).
