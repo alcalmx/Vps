@@ -5,6 +5,25 @@
 
 ---
 
+## 2026-10-01 (jueves) — 💬 DISEÑO CONVERSADO (sin código): placement automático + Jev asesor
+
+Sesión solo de conversación con Alcadio sobre el futuro "que el motor decida solo dónde
+crear" (multi-host y multi-datastore con balanceo). Acordado y documentado en
+**docs/DISENO-PLACEMENT-AUTOMATICO.md** — leer ese doc al retomar el tema. Lo esencial:
+- Placement = **scoring determinista** (filtrar→puntuar→elegir), estrategia **spread**
+  (menor % de uso post-creación), prioridad actual queda como desempate. Nada de LLM en
+  el camino síncrono de /crear.
+- Multi-datastore: el candidato pasa a ser el par (host, datastore); exige doradas en
+  cada datastore y presupuesto por datastore (nota #8: compartido ⇒ se suman).
+- Despliegue en **modo sombra** primero (el motor registra qué habría elegido, decide
+  Alcadio); el host forzado queda como override permanente. NO se cruza a rebalanceo en
+  vivo (svMotion) por ahora.
+- **Jev = asesor de capacidad periódico** ("estadísticas más lindas" — le encantó a
+  Alcadio): informes de proyección de llenado, desbalance y fricciones sobre el
+  histórico de host_recursos + jobs. Opina sobre tendencias; nunca decide en caliente.
+- Prerrequisito nuevo detectado: **persistir histórico de host_recursos** (hoy el scan
+  es en vivo) para que el informe de Jev tenga serie temporal.
+
 ## 2026-10-01 (jueves) — 🧩 DOS MOTORES: creación de clientes (autónoma) vs admin (manual), separadas
 
 Pedido de Alcadio: reestructurar el dashboard para tener DOS motores independientes sobre un
