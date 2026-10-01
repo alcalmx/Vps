@@ -27,8 +27,13 @@ APROBADO por Codex en 3 rondas y desplegado.
   REALMENTE se clonará: con cPanel acepta `-cpanel` o la base, por el fallback ya auditado).
 - `vms.so` registra el SO de cada VM; `/health` expone el catálogo y el dashboard tiene **selector
   de SO** que se preselecciona con el del plan y avisa si se combina cPanel con un SO que no lo soporta.
-- **Plan nuevo `vps-estandar-ubuntu`** (so_default ubuntu26.04, sin cPanel): así **WHMCS puede
-  vender Ubuntu sin tocar el módulo PHP** — el producto apunta a ese sabor.
+- **UI afinada con Alcadio:** el selector de SO muestra solo el nombre del sistema; el selector
+  de plantilla (cPanel) es **condicional** — con Ubuntu la opción "con cPanel" se deshabilita y se
+  fuerza "sin"; y el selector de host ya **no** ofrece "por defecto" (el NOC elige host siempre).
+  Se descartó crear un plan `vps-estandar-ubuntu`: con el selector de SO al lado, duplicar planes
+  por sistema no aporta (3 planes × N sistemas no escala). **Consecuencia:** hoy WHMCS NO puede
+  vender Ubuntu (su token no elige SO, por diseño); cuando se quiera, se agrega una opción de SO
+  al módulo PHP (como el checkbox de cPanel) y se sube con el `curl` documentado.
 
 **Hallazgos de Codex corregidos:** KeyError si llegaba un `so` desconocido al worker (→ validador
 único para las dos vías); valores falsy (`False`/`0`/`[]`/`{}`) colándose como "sin parámetro";

@@ -188,8 +188,9 @@ no soporta 26.04) — es la dorada para los VPS "limpios".
 ## ✅ Soporte en el motor (desplegado 2026-10-01)
 
 El motor ya elige SO: catálogo `SISTEMAS` (SO → dorada + familia + si admite cPanel), respeta el
-`so_default` del plan, el NOC puede forzar otro SO al crear, y **genera la red según la familia**
-(netplan para Ubuntu, nmcli para AlmaLinux). Plan listo para vender: `vps-estandar-ubuntu`.
+`so_default` del plan, el NOC puede forzar otro SO al crear desde el dashboard, y **genera la red
+según la familia** (netplan para Ubuntu, nmcli para AlmaLinux). Venta por WHMCS: pendiente de
+agregar una opción de SO al módulo PHP (hoy su token no puede elegir SO, por diseño).
 
 **PENDIENTE operativo:** prueba real de creación Ubuntu en staging (IP/ruta/DNS/SSH + reinicio,
 verificando qué archivos de red reaparecen) antes de ofrecerlo a clientes, y copiar la dorada a
