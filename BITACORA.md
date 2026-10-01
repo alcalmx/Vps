@@ -243,7 +243,30 @@ creación. Nota esperada: `vms.datastore` queda NULL — poblarlo es parte del I
 creación usa siempre el datastore primario del host. Además, la creación en un host **pausado**
 funcionó como estaba diseñado (pausado = solo frena al motor de clientes, no al admin).
 
-## ⏯️ PARA RETOMAR (2026-10-01) — MULTI-DATASTORE: Incremento 1 DESPLEGADO + falta Incremento 2
+## ⏯️ PARA RETOMAR (seguimos el 2026-10-02)
+
+Todo lo de hoy quedó **desplegado, commiteado y pusheado** (`d87dcfa`). El motor y el dashboard
+en noc-monitor corren la última versión; 18 suites verdes, ahora persistidas en `engine/tests/`.
+
+**Lo primero al retomar — dos pruebas en staging (esxi-20051, NUNCA en .39 que es producción):**
+1. **Crear un VPS con cPanel desde el dashboard** y confirmar que la clave de root generada
+   **la acepta WHM** (política de contraseñas de cPanel). Es lo único que Codex dejó fuera de su
+   aprobación. La clave aparece en el panel verde de la ventana de pasos, con botón de copiar.
+2. Ver las **dos columnas nuevas de VPS gestionados** (Mis VPS / Clientes) con datos reales: hoy
+   la lista estaba vacía, así que el reparto por `whmcs_serviceid` no se ha visto en vivo.
+
+**Frentes abiertos, en el orden en que conviene tomarlos:**
+- **Copiar la dorada Ubuntu a esxi-245 y esxi-20039** — hoy solo existe en esxi-20051, así que
+  Ubuntu únicamente se puede crear ahí.
+- **Multi-datastore Incremento 2** (elegir el datastore al crear) — el detalle está abajo.
+- **Licencia cPanel automática** — el último paso antes del go-live.
+- Menores: reactivar el review gate de Codex, #24 gunicorn, backup@esxi con Fabián, correo de
+  bienvenida, y la opción de SO en el módulo WHMCS si se quiere vender Ubuntu online.
+
+**Deuda de Codex:** 1 ítem abierto (la UI de las dos columnas, cambio de presentación sin lógica).
+Entra en el próximo lote.
+
+## ⏯️ (histórico) MULTI-DATASTORE: Incremento 1 DESPLEGADO + falta Incremento 2
 
 **Incremento 1 (enrolar con 1..8 datastores): DESPLEGADO 2026-10-01 y APROBADO por Codex (4 rondas) + GATE DE STAGING SUPERADO en ESXi real (ver entrada de arriba).**
 16 suites verdes. Validado en vivo con esxi-20039 (2 datastores, aislamiento A/B demostrado).
