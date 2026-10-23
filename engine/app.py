@@ -964,17 +964,35 @@ def _octs_arp_vivo(out_arp, red):
     return octs
 
 
+def _octs_reglas(red):
+    """Octetos de red.X que aparecen en reglas de firewall (filter/raw: src, dst o comentario) o en
+    address-lists de RouterData. Son IPs que el router CONOCE: servidores antiguos con reglas por IP,
+    listas de acceso. Una VM nueva con esa IP heredaría esas reglas (lección 2026-10-23: 10.100.36.253
+    tenía un drop de SSH de un servidor compartido viejo y la creación murió esperando sshd). Devuelve
+    (octetos, consultas_fallidas): si una consulta falla no bloquea la creación, se avisa."""
+    octs, fallas = set(), []
+    for nombre, cmd in (("filter", "/ip firewall filter print terse"),
+                        ("raw", "/ip firewall raw print terse"),
+                        ("address-list", '/ip firewall address-list print terse where address~"^%s."' % red)):
+        ok, out = mikrotik(cmd)
+        if not ok:
+            fallas.append(nombre)
+            continue
+        octs |= _octs(out or "", red)
+    return octs, fallas
+
 def ip_libre_produccion(subred, gateway, job=None):
-    """IP privada libre por RouterData (NAT+ARP), no por ping — noc-monitor no
-    barre la 10.100.16.x pero RouterData es la fuente de verdad. ocupadas =
-    NAT ∪ ARP-vivo ∪ {.1} ∪ registro; octeto más alto libre desde .254."""
+    """IP privada libre por RouterData, no por ping — noc-monitor no barre la 10.100.16.x
+    pero RouterData es la fuente de verdad. ocupadas = NAT ∪ ARP-vivo ∪ reglas/listas de
+    firewall ∪ {.1} ∪ registro; octeto más alto libre desde .254."""
     red = ".".join(subred.split("/")[0].split(".")[:3])
     ok_nat, out_nat = mikrotik("/ip firewall nat print terse")
     ok_arp, out_arp = mikrotik("/ip arp print terse")
     if not ok_nat or not ok_arp:
         raise RuntimeError("no pude consultar RouterData (NAT/ARP) para la IP privada")
     en_nat, en_arp = _octs(out_nat, red), _octs_arp_vivo(out_arp, red)
-    ocupadas = en_nat | en_arp | {int(gateway.split(".")[-1])}
+    en_reglas, fallas_reglas = _octs_reglas(red)
+    ocupadas = en_nat | en_arp | en_reglas | {int(gateway.split(".")[-1])}
     with DB_LOCK, db() as c:
         for row in c.execute("SELECT ip FROM vms WHERE ip LIKE ? AND estado!='papelera'", (red + ".%",)):
             try:
@@ -982,8 +1000,9 @@ def ip_libre_produccion(subred, gateway, job=None):
             except (ValueError, AttributeError):
                 pass
     if job:
-        job.detalle("RouterData %s: %d en NAT · %d vivas en ARP · %d ocupadas"
-                    % (red, len(en_nat), len(en_arp), len(ocupadas)))
+        job.detalle("RouterData %s: %d en NAT · %d vivas en ARP · %d en reglas/listas de firewall · %d ocupadas%s"
+                    % (red, len(en_nat), len(en_arp), len(en_reglas), len(ocupadas),
+                       (" · aviso: no pude leer %s" % ", ".join(fallas_reglas)) if fallas_reglas else ""))
     for o in range(254, 1, -1):
         if o not in ocupadas:
             return "%s.%d" % (red, o)

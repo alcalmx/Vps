@@ -416,11 +416,19 @@ print("ok - flujo de creación real (stubs): la VM de planetahosting.cl nace en 
 _mk = motor.mikrotik
 NAT_FAKE = " 0    chain=srcnat action=src-nat to-addresses=38.19.57.100 src-address=10.100.24.250 comment=[NOC] x\n"
 ARP_FAKE = " 0 DC address=10.100.24.249 mac-address=AA:BB interface=vlan_85 status=reachable\n"            " 1 D  address=10.100.24.248 interface=vlan_85 status=failed\n"
+REGLAS = {"filter": "", "raw": "", "address-list": ""}
 def mk_fake(cmd, host=None, timeout=25):
     if "nat print" in cmd:
         return True, NAT_FAKE
     if "arp print" in cmd:
         return True, ARP_FAKE
+    if "filter print" in cmd:
+        return True, REGLAS["filter"]
+    if "raw print" in cmd:
+        return True, REGLAS["raw"]
+    if "address-list print" in cmd:
+        assert 'address~"^10.100.' in cmd, cmd
+        return True, REGLAS["address-list"]
     raise AssertionError("mikrotik inesperado: %s" % cmd)
 creadas = []
 try:
@@ -445,6 +453,24 @@ try:
     assert motor.ip_libre_produccion(sub, gw) == "10.100.24.253", "libre tras reordenar: la marca no influye"
     # y la otra red (VLAN 82) no se ve afectada por nada de lo anterior
     assert motor.ip_libre_produccion("10.100.18.0/24", "10.100.18.1") == "10.100.18.254"
+    # lección 2026-10-23: una IP con reglas de firewall o en una address-list del router está OCUPADA
+    # (10.100.36.253 tenía un drop de SSH de un servidor viejo y la creación murió esperando sshd)
+    REGLAS["filter"] = " 46 chain=forward action=drop protocol=tcp dst-address=10.100.18.254 dst-port=22,2420\n"
+    REGLAS["raw"] = " 3 chain=prerouting action=drop src-address=10.100.18.253 comment=viejo\n"
+    REGLAS["address-list"] = "12 list=Ips_Privadas_Nuestras address=10.100.18.252\n"
+    j = JobFalso() if "JobFalso" in dir() else None
+    assert motor.ip_libre_produccion("10.100.18.0/24", "10.100.18.1", j) == "10.100.18.251"
+    if j:
+        assert any("3 en reglas/listas de firewall" in d for d in j.detalles), j.detalles
+    # si no se pueden leer las reglas, no bloquea: avisa y sigue con NAT+ARP
+    _mk2 = motor.mikrotik
+    motor.mikrotik = lambda cmd, host=None, timeout=25: (False, "") if ("filter print" in cmd or "raw print" in cmd or "address-list print" in cmd) else mk_fake(cmd)
+    j = JobFalso() if "JobFalso" in dir() else None
+    assert motor.ip_libre_produccion("10.100.18.0/24", "10.100.18.1", j) == "10.100.18.254"
+    if j:
+        assert any("no pude leer filter, raw, address-list" in d for d in j.detalles), j.detalles
+    motor.mikrotik = _mk2
+    REGLAS.update({"filter": "", "raw": "", "address-list": ""})
 finally:
     motor.mikrotik = _mk
     with motor.DB_LOCK, motor.db() as c:
