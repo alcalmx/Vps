@@ -206,17 +206,20 @@ El mapeo marca → red VPS es el mismo que usa **Alta de Servicios** del dashboa
 | Marca | Prefijo VM | Red VPS (producción) | VLAN | Planes |
 |---|---|---|---|---|
 | hosting.cl | `vps-hcl` | 10.100.16.0/24 | 81 | 4 (web) |
-| planetahosting.cl | `vps-phcl` | 10.100.18.0/24 | 82 | pendientes |
-| planetahosting.pe | `vps-phpe` | 10.100.20.0/24 | 83 | pendientes |
-| planetahosting.com.co | `vps-phco` | 10.100.22.0/24 | 84 | pendientes |
-| inkahosting.pe | `vps-ihpe` | 10.100.24.0/24 | 85 | pendientes |
-| unohosting.pe | `vps-uhpe` | 10.100.24.0/24 (compartida) | 85 | pendientes |
-| hosting.pe | `vps-hpe` | 10.100.24.0/24 (compartida) | 85 | pendientes |
-| hostingcenter.cl | `vps-hccl` | 10.100.26.0/24 | 86 | pendientes |
+| planetahosting.cl | `vps-phcl` | 10.100.18.0/24 | 82 | los de hosting.cl (heredados) |
+| planetahosting.pe | `vps-phpe` | 10.100.20.0/24 | 83 | los de hosting.cl (heredados) |
+| planetahosting.com.co | `vps-phco` | 10.100.22.0/24 | 84 | los de hosting.cl (heredados) |
+| inkahosting.pe | `vps-ihpe` | 10.100.24.0/24 | 85 | los de hosting.cl (heredados) |
+| unohosting.pe | `vps-uhpe` | 10.100.24.0/24 (compartida) | 85 | los de hosting.cl (heredados) |
+| hosting.pe | `vps-hpe` | 10.100.24.0/24 (compartida) | 85 | los de hosting.cl (heredados) |
+| hostingcenter.cl | `vps-hccl` | 10.100.26.0/24 | 86 | los de hosting.cl (heredados) |
 
 - **Redes compartidas:** la VLAN 85 / 10.100.24.0/24 la usan Inkahosting.pe, unohosting.pe y
   Hosting.pe (así está en RouterData). Es seguro: la IP libre se elige por red (NAT + ARP + registro),
   no por marca; lo único que debe ser único por marca es el prefijo de VM.
+- **Planes heredados:** una marca con `"sabores_de": "hosting.cl"` y sin planes propios usa los de
+  hosting.cl (decisión de Alcadio 2026-10-23: los mismos planes para todas mientras tanto). Para darle
+  planes propios: sus JSON en `sabores/<marca>/` y quitar `sabores_de` (tener ambos es error al arrancar).
 - **Red de pruebas común:** `marcas/_pruebas.json` (los archivos `_*.json` no son marcas).
   Una marca sin `red_pruebas` propia la hereda; así la red de staging se cambia en un solo lugar.
 - **IP pública:** mientras dure el staging todas usan `Red57-0` con `publica_rango_prueba`
@@ -311,5 +314,5 @@ Vps/
 - [ ] engine: eliminar (papelera) / suspender / editar
 - [ ] Sección "VPS" en dashboard NOC + notificaciones
 - [ ] Encadenar con vps-provision (llave del cliente a la bóveda)
-- [x] Multi-marca: 8 marcas con VPS cargadas desde `marcas/` (2026-10-23); faltan los planes de las 7 nuevas
+- [x] Multi-marca: 8 marcas con VPS cargadas desde `marcas/` (2026-10-23); las 7 nuevas heredan los planes de hosting.cl
 - [ ] Futuro: WHMCS → creación automática; NetBox IPAM

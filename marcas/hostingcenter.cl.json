@@ -23,5 +23,6 @@
   },
   "_red_pruebas_nota": "Hereda la red de pruebas común de marcas/_pruebas.json.",
   "dominio_hostname": "hostingcenter.cl",
-  "nota": "Alta 2026-10-23 (multi-marca). Sabores PENDIENTES de dictar en sabores/hostingcenter.cl/: hasta entonces solo se ofrece el plan Personalizado."
+  "sabores_de": "hosting.cl",
+  "nota": "Alta 2026-10-23 (multi-marca). Planes: HEREDA los de hosting.cl (sabores_de) por decisión de Alcadio 2026-10-23 (\"los planes para todas las marcas siguen siendo los mismos que de hosting mientras tanto\"). Para darle planes propios: crear sabores/hostingcenter.cl/*.json y quitar sabores_de."
 }

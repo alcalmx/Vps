@@ -291,6 +291,35 @@ for marca_dir in os.listdir(os.path.join(CONFIG_DIR, "sabores")):
                                        % (marca_dir, f, s.get("marca")))
                 SABORES[(s["marca"], s["slug"])] = s
 
+def heredar_sabores(marcas, sabores):
+    """Planes HEREDADOS: una marca con "sabores_de": "<marca>" y SIN planes propios usa los de esa
+    marca (copias con `marca` cambiada y `heredado_de`). Decisión de Alcadio 2026-10-23: "los planes
+    para todas las marcas siguen siendo los mismos que de hosting mientras tanto". Para darle planes
+    propios a una marca: crear sus JSON en sabores/<marca>/ y quitar `sabores_de` (tener ambos es
+    error, igual que heredar de una marca que a su vez hereda o que no tiene planes)."""
+    for mid, m in sorted(marcas.items()):
+        origen = m.get("sabores_de")
+        if origen is None:
+            continue
+        if not isinstance(origen, str) or origen not in marcas or origen == mid:
+            raise RuntimeError("marcas/%s.json: sabores_de=%r debe ser OTRA marca existente" % (mid, origen))
+        if marcas[origen].get("sabores_de"):
+            raise RuntimeError("marcas/%s.json: sabores_de=%r apunta a una marca que a su vez hereda — "
+                               "apuntar a la marca con planes propios" % (mid, origen))
+        if any(k[0] == mid for k in sabores):
+            raise RuntimeError("marcas/%s.json: tiene sabores_de=%r Y planes propios en sabores/%s/ — "
+                               "dejar uno de los dos" % (mid, origen, mid))
+        base = [v for k, v in sabores.items() if k[0] == origen]
+        if not base:
+            raise RuntimeError("marcas/%s.json: la marca %r no tiene planes que heredar" % (mid, origen))
+        for sb in base:
+            copia = json.loads(json.dumps(sb))
+            copia["marca"], copia["heredado_de"] = mid, origen
+            sabores[(mid, sb["slug"])] = copia
+    return sabores
+
+heredar_sabores(MARCAS, SABORES)
+
 # ── Registro (SQLite) ────────────────────────────────────────────────────────
 DB_LOCK = threading.Lock()
 # Serializan las secciones de ASIGNACIÓN de recursos compartidos entre creaciones
@@ -2915,6 +2944,7 @@ def health():
     detalle = [{"marca": s["marca"], "slug": s["slug"], "nombre_web": s["nombre_web"],
                 "vcpu": s["vcpu"], "ram_mb": s["ram_mb"], "disco_gb": s["disco_gb"],
                 "so_default": s.get("so_default") or SO_DEFAULT,
+                "heredado_de": s.get("heredado_de"),
                 "activo": s.get("activo", True)} for s in SABORES.values()]
     detalle.sort(key=lambda s: (s["marca"], s["slug"]))
     sistemas = [{"so": k, "nombre": v["nombre"], "cpanel": bool(v.get("cpanel"))}
@@ -2927,6 +2957,7 @@ def health():
         rd, rp = m["red_default"], m["red_pruebas"]
         marcas_det.append({"marca": mid, "nombre": m["nombre"], "prefijo_vm": m["prefijo_vm"],
                            "dominio": m["dominio_hostname"], "pub_lista": m.get("pub_lista"),
+                           "sabores_de": m.get("sabores_de"),
                            "pub_red": PUB_REDES.get(m.get("pub_lista")),
                            "publica_rango_prueba": rd.get("publica_rango_prueba"),
                            "red_default": {"subred": rd["subred"], "gateway": rd["gateway"],

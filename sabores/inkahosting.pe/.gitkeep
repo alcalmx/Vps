@@ -1,2 +1,2 @@
-Sabores (planes) de Inkahosting.pe: pendientes de dictar por Alcadio desde la web de la marca.
-Formato en sabores/SCHEMA.md. Mientras no haya archivos aquí, el dashboard solo ofrece 'Personalizado'.
+Planes de Inkahosting.pe: hoy HEREDA los de hosting.cl (sabores_de en marcas/inkahosting.pe.json, decisión de Alcadio 2026-10-23).
+Para darle planes propios: poner aquí sus JSON (formato en sabores/SCHEMA.md) y quitar sabores_de de la marca.

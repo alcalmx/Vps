@@ -174,14 +174,41 @@ assert p["red_default"] == {"subred": "10.100.18.0/24", "gateway": "10.100.18.1"
                             "portgroup": "Vps_Planetahosting.cl"}
 assert p["red_pruebas"]["subred"] == "192.168.200.0/24" and p["red_pruebas"]["vlan"] == 0
 assert p["pub_lista"] == "Red57-0" and p["pub_red"] == "38.19.57" and p["publica_rango_prueba"] == [100, 102]
-assert p["sabores"] == 0, "planetahosting.cl aún no tiene planes dictados"
-assert det["hosting.cl"]["sabores"] == sum(1 for k, v in motor.SABORES.items()
-                                           if k[0] == "hosting.cl" and v.get("activo", True)) >= 3
+# planes HEREDADOS (decisión de Alcadio 2026-10-23): las 7 marcas nuevas usan los de hosting.cl
+n_hcl = sum(1 for k, v in motor.SABORES.items() if k[0] == "hosting.cl" and v.get("activo", True))
+assert det["hosting.cl"]["sabores"] == n_hcl >= 3 and det["hosting.cl"]["sabores_de"] is None
+for mid in ESPERADAS:
+    if mid == "hosting.cl":
+        continue
+    assert det[mid]["sabores"] == n_hcl and det[mid]["sabores_de"] == "hosting.cl", (mid, det[mid])
+    assert (mid, "vps-estandar") in motor.SABORES
+    cop = motor.SABORES[(mid, "vps-estandar")]
+    assert cop["marca"] == mid and cop["heredado_de"] == "hosting.cl" and cop["vcpu"] == motor.SABORES[("hosting.cl", "vps-estandar")]["vcpu"]
+    assert cop is not motor.SABORES[("hosting.cl", "vps-estandar")], "copia, no el mismo dict"
+assert motor.SABORES[("hosting.cl", "vps-estandar")].get("heredado_de") is None
+sd = {(x["marca"], x["slug"]): x for x in h["sabores_detalle"]}
+assert sd[("planetahosting.cl", "vps-estandar")]["heredado_de"] == "hosting.cl" and sd[("hosting.cl", "vps-estandar")]["heredado_de"] is None
+# reglas de la herencia: origen inexistente / a sí misma / en cadena / con planes propios / sin planes
+def hereda_falla(marcas, sabores, *frag):
+    try:
+        motor.heredar_sabores(marcas, sabores)
+        raise AssertionError("debía fallar: %s" % (frag,))
+    except RuntimeError as e:
+        for f in frag:
+            assert f in str(e), (f, str(e))
+PLAN = {"marca": "a.cl", "slug": "p1", "nombre_web": "P1", "vcpu": 1, "ram_mb": 1024, "disco_gb": 25, "activo": True, "extras": {}}
+hereda_falla({"a.cl": {}, "b.cl": {"sabores_de": "zzz"}}, {("a.cl", "p1"): PLAN}, "marcas/b.cl.json", "OTRA marca existente")
+hereda_falla({"a.cl": {}, "b.cl": {"sabores_de": "b.cl"}}, {("a.cl", "p1"): PLAN}, "OTRA marca existente")
+hereda_falla({"a.cl": {}, "b.cl": {"sabores_de": "a.cl"}, "c.cl": {"sabores_de": "b.cl"}}, {("a.cl", "p1"): PLAN}, "marcas/c.cl.json", "a su vez hereda")
+hereda_falla({"a.cl": {}, "b.cl": {"sabores_de": "a.cl"}}, {("a.cl", "p1"): PLAN, ("b.cl", "px"): dict(PLAN, marca="b.cl", slug="px")}, "Y planes propios")
+hereda_falla({"a.cl": {}, "b.cl": {"sabores_de": "a.cl"}}, {}, "no tiene planes que heredar")
+ok = motor.heredar_sabores({"a.cl": {}, "b.cl": {"sabores_de": "a.cl"}, "c.cl": {"sabores_de": "a.cl"}}, {("a.cl", "p1"): PLAN})
+assert set(ok) == {("a.cl", "p1"), ("b.cl", "p1"), ("c.cl", "p1")} and ok[("c.cl", "p1")]["marca"] == "c.cl"
 for d in h["marcas_detalle"]:
     assert "nota" not in d and "_pub_lista_nota" not in d, "el detalle no arrastra notas internas"
 hw = cli.get("/health", headers=WHMCS).get_json()
 assert hw == {"ok": True}, "rol whmcs: mínimo, sin catálogo"
-print("ok - /health expone marcas_detalle (nombre, prefijo, redes, VLAN, lista pública, nº de planes)")
+print("ok - /health expone marcas_detalle (nombre, prefijo, redes, VLAN, lista pública, nº de planes); planes heredados de hosting.cl con sus reglas")
 
 # ── marca inactiva: desaparece del selector y /crear la rechaza ──────────────
 motor.MARCAS["inkahosting.pe"]["activo"] = False
