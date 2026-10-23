@@ -72,7 +72,8 @@ print("ok - validación del catálogo: ids, duplicados, nombre, lista, solo púb
 
 # ── /crear: validación de llaves_equipo (sin lanzar nada) ───────────────────
 base = {"marca": "hosting.cl", "sabor": "personalizado", "cliente": "acme", "hostname": "h1", "vcpu": 2, "ram_mb": 2048,
-        "disco_gb": 30, "modo": "pruebas", "instalar_cpanel": False, "actor": "alcadio", "uso": "personal"}
+        "disco_gb": 30, "modo": "produccion", "instalar_cpanel": False, "actor": "alcadio", "uso": "personal"}
+# (uso personal = producción siempre: el motor lo fuerza; se deja explícito para que la suite se lea sola — Codex)
 for malo, frag, code in (("alcadio", "lista de ids", 400), ([1], "lista de ids", 400), (["x"] * 21, "lista de ids", 400),
                          (["noexiste"], "desconocida", 400), (["jonatan"], "todavía no tiene una llave", 400)):
     r = cli.post("/crear", headers=ADMIN, json=dict(base, llaves_equipo=malo))
