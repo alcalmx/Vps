@@ -14,6 +14,7 @@
 | `/api/vpseng/vms` | GET | `/vms` | `vps_engine` |
 | `/api/vpseng/accion` | POST | `/accion` | `vps_engine` |
 | `/api/vpseng/editar` | POST | `/editar` | `vps_engine` |
+| (todas las rutas de VPS, desde 2026-10-23) | | el proxy agrega `?usuario=<sesión>&total=0|1` a `/vms`, `/jobs`, `/job/<id>` y `admin_total` a `/accion` y `/editar`: los VPS de uso personal solo los ve y opera su dueño o un superadmin | |
 | `/api/vpseng/salud` | GET | `/health` (para poblar selects de marca/sabor; desde 2026-10-23 trae `marcas_detalle`: nombre, prefijo, redes, VLAN, lista pública y nº de planes por marca, y `marcas` lista solo las activas) | `vps_engine` |
 
 - Permiso nuevo **`vps_engine`** en `_ALL_PAGES`, `PROTECTED_PAGES`, `permPages`
