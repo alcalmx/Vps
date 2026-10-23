@@ -5,6 +5,90 @@
 
 ---
 
+## 2026-10-23 (viernes) — 🏷️ MULTI-MARCA: crear VPS de CUALQUIER marca desde el dashboard — APROBADO por Codex (3 rondas), PENDIENTE DE DEPLOY (esperando OK)
+
+Pedido de Alcadio: *"Trabajemos solo en el noc monitor y la creación de vps desde el dashboard. Debo
+terminar esta parte y masificarla para poder crear vps de cualquier marca"* → *"en lo inmediato que
+aparezcan otras marcas y también en el entorno que aparezcan las redes de esas marcas; en alguna parte
+del proyecto está el mapeo de qué red le corresponde a qué marca, o en Alta de Servicios"*.
+
+**Dónde estaba el mapeo:** en `ALTA_MARCAS` de Alta de Servicios (dashboard NOC), tipo VPS: VLAN 8x y
+red 10.100.x por marca. Verificado contra RouterData (`/ip address`): las seis VLAN de VPS existen con
+gateway `.1`. Corrección de Alcadio en la sesión: la VLAN 85 / 10.100.24.0/24 la COMPARTEN
+**Inkahosting.pe, unohosting.pe y Hosting.pe** (así dice el comentario de la interfaz en RouterData).
+
+| Marca | Prefijo VM | Red VPS | VLAN | Planes |
+|---|---|---|---|---|
+| hosting.cl | vps-hcl | 10.100.16.0/24 | 81 | 4 |
+| planetahosting.cl | vps-phcl | 10.100.18.0/24 | 82 | pendientes |
+| planetahosting.pe | vps-phpe | 10.100.20.0/24 | 83 | pendientes |
+| planetahosting.com.co | vps-phco | 10.100.22.0/24 | 84 | pendientes |
+| inkahosting.pe | vps-ihpe | 10.100.24.0/24 | 85 | pendientes |
+| unohosting.pe | vps-uhpe | 10.100.24.0/24 (compartida) | 85 | pendientes |
+| hosting.pe | vps-hpe | 10.100.24.0/24 (compartida) | 85 | pendientes |
+| hostingcenter.cl | vps-hccl | 10.100.26.0/24 | 86 | pendientes |
+
+NinjaHosting no tiene tipo VPS en el NOC → no se incluyó. Los prefijos son propuesta de Claude
+(cambiar antes del primer VPS de esa marca si Alcadio quiere otros).
+
+**Qué se construyó (motor, `engine/app.py`):**
+- `cargar_marcas` + `validar_marcas`: fail-fast al arrancar (como la guarda de SISTEMAS). Exige
+  nombre/prefijo/dominio, red de producción /24 IPv4 con gateway dentro (ni red ni broadcast), DNS IPv4,
+  VLAN 1-4094 en producción (0 = sin etiqueta permitido en pruebas), lista pública conocida en
+  `PUB_REDES`, prefijo `vps-<letras>` (lo exige el wrapper) ÚNICO entre marcas, `fullmatch`. Varias
+  marcas SÍ pueden compartir subred (la IP libre se elige por red: NAT+ARP de RouterData + registro).
+- `marcas/_pruebas.json`: red de PRUEBAS común (los `_*.json` no son marcas); la heredan las marcas sin
+  `red_pruebas` propia (hosting.cl incluida). Declara `vlan: 0` explícita.
+- **Hallazgo que cambió el diseño:** cada host rotula sus portgroups a su manera — esxi-245 y
+  esxi-20051 `Vps_Hosting.cl`; esxi-20039 `vps_Hosting.cl`, `vps_PlanetahostingCL`, `vps_inkape`.
+  Antes el motor comparaba el nombre exacto → crear hosting.cl en el 20039 habría fallado. Ahora
+  `resolver_portgroup(h, red, modo, job)`: nombre exacto → si no existe, el portgroup del host cuya
+  **VLAN** sea la de la marca (`govc host.portgroup.info -json`; verificado que svc-vps puede leerlo en
+  ESXi 7 y 8); si el nombre existe en OTRA VLAN se rechaza (la VM nacería en otra red; incluye la red
+  de pruebas con vlan 0); dos candidatos en la misma VLAN → gana el único que diga "vps", si no es
+  ambiguo y falla; VLAN ilegible en el inventario = DESCONOCIDA (None, no 0): vale solo por nombre con
+  constancia y nunca resuelve por VLAN; si el host no deja leer las VLAN, chequeo por nombre de siempre
+  con causa CONTROLADA (nunca el error crudo). Devuelve `(nombre, nota)` y la nota queda en el CIERRE
+  del paso 3 ("IP x reservada · portgroup 'y' — resuelto por VLAN 82 …"), porque `job.detalle()`
+  sobreescribe el detalle del paso (lo destapó la prueba de flujo completo).
+- `/health` (admin): `marcas_detalle` (nombre, prefijo, dominio, redes, VLAN, lista pública, rango de
+  prueba, nº de planes); `marcas` lista solo las ACTIVAS. `/crear` rechaza marca inactiva (400). El
+  paso 1 del job dice "Marca: red x (VLAN n)".
+- Marcas nuevas con `pub_lista: Red57-0` + `publica_rango_prueba [100,102]` (staging, como hosting.cl).
+  Go-live de una marca = `Red107-0` y quitar el rango. Sin planes dictados solo se ofrece Personalizado.
+
+**Dashboard (`containers/dashboard/dashboard.py` del repo fastnetmon, parche
+`patch_vps_marcas_v1.py`, CRLF conservado, 6 bloques JS validados con `node --check`):** el selector
+de Marca muestra el NOMBRE; debajo "Red VPS 10.100.18.0/24 · VLAN 82 · pública Red57-0 (38.19.57.x) ·
+sin planes dictados: solo Personalizado"; las opciones de Entorno dicen la red de ESA marca
+("Producción — PlanetaHosting.cl: 10.100.18.0/24 (VLAN 82) + IP pública Red57-0 + NAT + securización");
+el aviso de producción ya no dice "10.100.16.x" fijo; el ejemplo de nombre de VM usa el prefijo de la
+marca. Sin `marcas_detalle` (motor viejo) degrada a lo de antes. Anclas por id/función únicos (regla del
+01-10).
+
+**Codex (3 rondas, dosificado):** R1 — 3 medios + 2 menores (VLAN en pruebas sin verificar; gateway
+red/broadcast y DNS no-IP; error crudo al paso a paso; `match`→`fullmatch`; rutas absolutas en la
+suite) → todos corregidos. R2 (`--resume-last`) — 2 pendientes (VLAN ilegible convertida en 0; aislamiento
+de la suite) + recomendación de probar el asignador real con subred compartida → hechos. R3 —
+**APROBADO, sin hallazgos nuevos**. Codex no ejecutó pruebas (solo lectura).
+
+**Pruebas:** suite nueva `engine/tests/test_marcas.py` (catálogo, validador, cargador, prefijo por
+marca, /health, marca inactiva, resolver_portgroup en 10 escenarios, **flujo REAL de creación con
+stubs** hasta `vm.register` verificando que el VMX lleva `ethernet0.networkName = "vps_PlanetahostingCL"`
+para planetahosting.cl en producción sobre un host tipo 20039, y asignador real con dos marcas en
+10.100.24.0/24). **19 suites verdes.** Commits `bed4000` y `7b479b7`, pusheados.
+
+**Estado: PENDIENTE DE DEPLOY** (CLAUDE.md: deploys a noc-monitor con OK explícito). Preparado:
+`/tmp/vps-marcas/` en noc-monitor (app.py md5 2e1e86a3…, marcas/, sabores/, `desplegar_motor_marcas.sh`:
+respaldo tgz del build + copia + build + restart + /health con las marcas) y `/tmp/dashboard.py.vpsmarcas`
+(md5 2246d278…, igual al repo) para `deploy_dashboard.sh … vpsmarcas`.
+
+**Pendientes que dependen de Alcadio:** (1) OK de despliegue; (2) confirmar prefijos; (3) planes de las
+7 marcas nuevas (¿los mismos de hosting.cl, dictados, o leídos de cada web para confirmar?); (4) en los
+hosts solo hay portgroups para las VLAN 81, 82 y 85 (esxi-20039): para planetahosting.pe (83),
+.com.co (84) y hostingcenter.cl (86) hay que crear el portgroup con su VLAN en el ESXi antes del primer
+VPS (el motor avisa con el inventario del host); (5) go-live por marca (Red107-0).
+
 ## 2026-10-01 (jueves) — 🔑 CLAVE DE ROOT PARA WHM + VPS gestionados en dos columnas
 
 Pregunta de Alcadio: *"cuando yo creo el vps desde el dashboard un vps con cPanel, ¿qué contraseña
