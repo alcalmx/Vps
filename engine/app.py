@@ -974,7 +974,10 @@ def _octs_reglas(red):
     for nombre, cmd in (("filter", "/ip firewall filter print terse"),
                         ("raw", "/ip firewall raw print terse"),
                         ("address-list", '/ip firewall address-list print terse where address~"^%s."' % red)):
-        ok, out = mikrotik(cmd)
+        try:   # best effort de verdad: un timeout o error de SSH tampoco aborta (Codex P1)
+            ok, out = mikrotik(cmd)
+        except (subprocess.TimeoutExpired, OSError, RuntimeError):
+            ok, out = False, ""
         if not ok:
             fallas.append(nombre)
             continue

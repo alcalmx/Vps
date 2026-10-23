@@ -469,6 +469,19 @@ try:
     assert motor.ip_libre_produccion("10.100.18.0/24", "10.100.18.1", j) == "10.100.18.254"
     if j:
         assert any("no pude leer filter, raw, address-list" in d for d in j.detalles), j.detalles
+    # un TIMEOUT (o error de SSH) en esas consultas tampoco aborta la creación (Codex P1)
+    import subprocess as _sp
+    def mk_timeout(cmd, host=None, timeout=25):
+        if "filter print" in cmd:
+            raise _sp.TimeoutExpired(cmd, timeout)
+        if "raw print" in cmd:
+            raise RuntimeError("ssh: connection reset")
+        return mk_fake(cmd)
+    motor.mikrotik = mk_timeout
+    j = JobFalso() if "JobFalso" in dir() else None
+    assert motor.ip_libre_produccion("10.100.18.0/24", "10.100.18.1", j) == "10.100.18.254"
+    if j:
+        assert any("no pude leer filter, raw" in d for d in j.detalles), j.detalles
     motor.mikrotik = _mk2
     REGLAS.update({"filter": "", "raw": "", "address-list": ""})
 finally:
