@@ -200,7 +200,28 @@ try:
     assert r.status_code == 403 and "uso personal" in r.get_json()["error"]
     assert cli.get("/job/%s?usuario=jonatan&total=1" % jid, headers=ADMIN).status_code == 200
     assert cli.get("/job/%s" % jid, headers=WHMCS).status_code == 403, "el conector WHMCS no ve jobs personales"
-    print("ok - visibilidad: /vms, /jobs y /job solo para el dueño o un superadmin (total=1)")
+    # Codex bloqueante #1: con token WHMCS los parámetros de vista se IGNORAN (no puede afirmar identidad ni total)
+    for q in ("?total=1", "?usuario=gerardo", "?usuario=gerardo&total=1", "?total=true"):
+        assert cli.get("/job/%s%s" % (jid, q), headers=WHMCS).status_code == 403, q
+    assert cli.get("/jobs?total=1", headers=WHMCS).status_code == 403 and cli.get("/vms?total=1", headers=WHMCS).status_code == 403
+    # papelera: también filtrada por dueño
+    with motor.DB_LOCK, motor.db() as c:
+        c.execute("UPDATE vms SET estado='papelera', papelera_entrada='20261023-000000-%s' WHERE nombre=?" % nombre, (nombre,))
+    pap = lambda u, t: [p["nombre"] for p in cli.get("/vms?usuario=%s&total=%d" % (u, t), headers=ADMIN).get_json()["papelera"]]
+    assert nombre in pap("gerardo", 0) and nombre not in pap("jonatan", 0) and nombre in pap("jonatan", 1)
+    with motor.DB_LOCK, motor.db() as c:
+        c.execute("UPDATE vms SET estado='activo', papelera_entrada=NULL WHERE nombre=?", (nombre,))
+    # Codex medio #4: 61 jobs personales AJENOS recientes no vacían la lista de los demás (filtro antes del LIMIT)
+    with motor.DB_LOCK, motor.db() as c:
+        for i in range(61):
+            c.execute("INSERT INTO jobs(id,tipo,vm,estado,pasos,actor,motor,uso,propietario,created_at) "
+                      "VALUES(?,?,?,?,?,?,?,?,?,datetime('now','localtime','+1 hour'))",
+                      ("ajeno%07d" % i, "crear", "vps-int-9%03d-otro" % i, "ok", "[]", "otro", "admin", "personal", "otro"))
+    assert jid in jobs("gerardo", 0), "los jobs propios siguen visibles aunque haya 61 personales ajenos más nuevos"
+    assert not any(x.startswith("ajeno") for x in jobs("gerardo", 0)) and any(x.startswith("ajeno") for x in jobs("x", 1))
+    with motor.DB_LOCK, motor.db() as c:
+        c.execute("DELETE FROM jobs WHERE id LIKE 'ajeno%'")
+    print("ok - visibilidad: /vms (y papelera), /jobs y /job solo para el dueño o un superadmin; WHMCS no puede afirmar identidad; filtro antes del LIMIT")
 
     # ── operar: solo el dueño o superadmin; suspender apaga, reanudar enciende ──
     r = cli.post("/accion", headers=ADMIN, json={"vm": nombre, "accion": "suspender", "actor": "jonatan"})
@@ -230,6 +251,33 @@ try:
     assert r.status_code == 200, "admin_total lo afirma el proxy (solo lo pone para superadmin)"
     esperar(r.get_json()["job_id"])
     print("ok - operar: 403 para otros usuarios, el dueño suspende (apaga) y reanuda (enciende), superadmin también")
+
+    # Codex medio #3: el job de EDICIÓN nace ya con dueño (sin ventana en que otro lo vea)
+    r = cli.post("/editar", headers=ADMIN, json={"vm": nombre, "sabor": "vps-empresas", "actor": "gerardo"})
+    assert r.status_code == 200, r.get_json()
+    jed = r.get_json()["job_id"]
+    with motor.DB_LOCK, motor.db() as c:
+        row = dict(c.execute("SELECT uso,propietario FROM jobs WHERE id=?", (jed,)).fetchone())
+    assert row == {"uso": "personal", "propietario": "gerardo"}, row
+    assert cli.get("/job/%s?usuario=jonatan&total=0" % jed, headers=ADMIN).status_code == 403
+    esperar(jed)   # termine como termine con los stubs, no debe quedar corriendo
+    print("ok - el job de edición de un VPS personal nace con su dueño")
+
+    # Codex bloqueante #2: uso personal va SIEMPRE a la red interna aunque pidan modo pruebas
+    r = cli.post("/crear", headers=ADMIN, json={"marca": "hosting.cl", "sabor": "personalizado", "cliente": "",
+                                                "hostname": "lab2", "vcpu": 2, "ram_mb": 2048, "disco_gb": 30,
+                                                "modo": "pruebas", "instalar_cpanel": False, "uso": "personal", "actor": "fabian"})
+    assert r.status_code == 200, r.get_json()
+    jf = esperar(r.get_json()["job_id"])
+    assert jf["estado"] == "ok", json.dumps(jf, ensure_ascii=False)[:1200]
+    pf = "\n".join(p["detalle"] for p in jf["pasos"])
+    assert "modo produccion" in pf and "red 10.100.36.0/24" in pf and "192.168.200" not in pf, pf
+    regf = motor.vm_registrada(jf["vm"])
+    assert regf["ip"] == "10.100.36.250" and regf["propietario"] == "fabian" and jf["vm"] == "vps-int-0002-fabian"
+    with motor.DB_LOCK, motor.db() as c:
+        av = c.execute("SELECT detalle FROM operaciones WHERE actor='fabian' AND resultado='aviso'").fetchall()
+    assert any("modo 'pruebas' ignorado" in a["detalle"] for a in av), [dict(a) for a in av]
+    print("ok - uso personal con modo pruebas → producción forzada (solo la red interna), con aviso en la auditoría")
 
     # ── un VPS de CLIENTE sigue siendo visible para todos y no lleva dueño ──
     r = cli.post("/crear", headers=ADMIN, json={"marca": "planetahosting.cl", "sabor": "personalizado", "cliente": "acme",

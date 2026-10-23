@@ -3078,6 +3078,10 @@ def crear():
             return jsonify({"error": "un VPS de uso personal no se asocia a un servicio de WHMCS"}), 400
         marca, propietario = MARCA_INTERNA, actor
         cliente = (cliente or actor)[:40]
+        if modo != "produccion":   # la red interna es la ÚNICA posible: nada de red de pruebas
+            audit(actor, "crear", "-", "uso personal: modo '%s' ignorado — va SIEMPRE a la red interna "
+                  "(producción)" % modo, "aviso")
+            modo = "produccion"
     elif MARCA_INTERNA and marca == MARCA_INTERNA:
         return jsonify({"error": "la red interna (%s) es solo para VPS de uso personal" % marca}), 400
     if marca not in MARCAS:
@@ -3248,8 +3252,12 @@ def _visible_para(row, usuario, total):
         return True
     return bool(usuario) and row.get("propietario") == usuario
 
-def _vista_args():
-    """Quién mira (usuario del dashboard, lo manda el proxy) y si ve todo."""
+def _vista_args(rol):
+    """Quién mira (usuario del dashboard, lo manda el proxy) y si ve todo. SOLO el rol admin (el
+    dashboard) puede afirmarlo: con cualquier otro token (WHMCS) los parámetros se IGNORAN y lo
+    personal queda oculto (Codex uso personal #1)."""
+    if rol != "admin":
+        return "", False
     usuario = (request.args.get("usuario") or "").strip()[:60]
     total = request.args.get("total") in ("1", "true")
     return usuario, total
@@ -3264,7 +3272,7 @@ def job_get(jid):
     if not row:
         return jsonify({"error": "job no existe"}), 404
     d = dict(row)
-    usuario, total = _vista_args()
+    usuario, total = _vista_args(rol)
     if not _visible_para(d, usuario, total):
         return jsonify({"error": "job de un VPS de uso personal de otro usuario"}), 403
     d["pasos"] = json.loads(d["pasos"])
@@ -3297,10 +3305,13 @@ def jobs_list():
         return jsonify({"error": "unauthorized"}), 401
     if rol != "admin":
         return jsonify({"error": ERR_SOLO_ADMIN}), 403
+    usuario, total = _vista_args(rol)
     with DB_LOCK, db() as c:
+        # la visibilidad va en el SQL, ANTES del LIMIT: 60 jobs personales ajenos no deben vaciar
+        # la lista de los demás (Codex uso personal #4). NULL = cliente.
         rows = c.execute("SELECT id,tipo,vm,estado,error,motor,created_at,updated_at,uso,propietario "
-                         "FROM jobs ORDER BY created_at DESC LIMIT 60").fetchall()
-    usuario, total = _vista_args()
+                         "FROM jobs WHERE (uso IS NULL OR uso != 'personal' OR ?=1 OR propietario=?) "
+                         "ORDER BY created_at DESC LIMIT 60", (1 if total else 0, usuario)).fetchall()
     # motor NULL (jobs previos a la separación) → se infiere por tipo para el agrupado
     out = []
     for r in rows:
@@ -3323,7 +3334,7 @@ def vms_list():
             "SELECT * FROM vms WHERE estado != 'papelera' ORDER BY nombre").fetchall()]
         papelera = [dict(r) for r in c.execute(
             "SELECT nombre,papelera_entrada,updated_at,uso,propietario FROM vms WHERE estado='papelera'").fetchall()]
-    usuario, total = _vista_args()
+    usuario, total = _vista_args(rol)
     rows = [r for r in rows if _visible_para(r, usuario, total)]
     papelera = [r for r in papelera if _visible_para(r, usuario, total)]
     hcache = {h["id"]: h for h in hosts_lista()}
@@ -3495,14 +3506,11 @@ def editar():
     job, activo = lanzar_job_exclusivo("editar", vm, actor,
               ["Calcular cambio de plan (upgrade/downgrade)", "Aplicar CPU/RAM",
                "Ajustar disco (solo crece, nunca se achica)", "Actualizar registro"],
-              motor="clientes" if rol == "whmcs" else "admin")
+              motor="clientes" if rol == "whmcs" else "admin",
+              uso=reg.get("uso"), propietario=reg.get("propietario"))   # nace con su dueño
     if not job:
         return jsonify({"error": "la VM %s tiene un job en curso (%s, id %s) — reintenta cuando termine"
                         % (vm, activo["tipo"], activo["id"])}), 409
-    if (reg.get("uso") or "cliente") == "personal":
-        with DB_LOCK, db() as c:   # el job de edición hereda el dueño (visibilidad en Jobs)
-            c.execute("UPDATE jobs SET uso=?, propietario=? WHERE id=?",
-                      (reg.get("uso"), reg.get("propietario"), job.id))
     err = lanzar_o_fallar(job, lambda j: flujo_editar(j, sabor))
     if err:
         return err
