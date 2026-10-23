@@ -260,7 +260,10 @@ try:
         row = dict(c.execute("SELECT uso,propietario FROM jobs WHERE id=?", (jed,)).fetchone())
     assert row == {"uso": "personal", "propietario": "gerardo"}, row
     assert cli.get("/job/%s?usuario=jonatan&total=0" % jed, headers=ADMIN).status_code == 403
-    esperar(jed)   # termine como termine con los stubs, no debe quedar corriendo
+    je = esperar(jed)
+    assert je["estado"] == "ok", "editar un VPS personal debe funcionar (Codex r2): %s" % json.dumps(je, ensure_ascii=False)[:1200]
+    rege = motor.vm_registrada(nombre)
+    assert rege["sabor"] == "vps-empresas" and rege["estado"] == "activo" and rege["uso"] == "personal", dict(rege)
     print("ok - el job de edición de un VPS personal nace con su dueño")
 
     # Codex bloqueante #2: uso personal va SIEMPRE a la red interna aunque pidan modo pruebas
