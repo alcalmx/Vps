@@ -204,6 +204,12 @@ hereda_falla({"a.cl": {}, "b.cl": {"sabores_de": "a.cl"}}, {("a.cl", "p1"): PLAN
 hereda_falla({"a.cl": {}, "b.cl": {"sabores_de": "a.cl"}}, {}, "no tiene planes que heredar")
 ok = motor.heredar_sabores({"a.cl": {}, "b.cl": {"sabores_de": "a.cl"}, "c.cl": {"sabores_de": "a.cl"}}, {("a.cl", "p1"): PLAN})
 assert set(ok) == {("a.cl", "p1"), ("b.cl", "p1"), ("c.cl", "p1")} and ok[("c.cl", "p1")]["marca"] == "c.cl"
+# las copias son independientes: tocar extras de una no altera el original ni a otra marca (Codex r4)
+ok[("b.cl", "p1")]["extras"]["cpanel_licencia_cuentas"] = 99
+assert "cpanel_licencia_cuentas" not in PLAN["extras"] and "cpanel_licencia_cuentas" not in ok[("c.cl", "p1")]["extras"]
+motor.SABORES[("planetahosting.cl", "vps-estandar")]["extras"]["_prueba"] = 1
+assert "_prueba" not in motor.SABORES[("hosting.cl", "vps-estandar")]["extras"] and "_prueba" not in motor.SABORES[("hosting.pe", "vps-estandar")]["extras"]
+del motor.SABORES[("planetahosting.cl", "vps-estandar")]["extras"]["_prueba"]
 for d in h["marcas_detalle"]:
     assert "nota" not in d and "_pub_lista_nota" not in d, "el detalle no arrastra notas internas"
 hw = cli.get("/health", headers=WHMCS).get_json()
