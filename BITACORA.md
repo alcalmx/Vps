@@ -5,7 +5,15 @@
 
 ---
 
-## 2026-10-23 (viernes, ~17:00) — 🔑 LLAVES DEL EQUIPO: tildes en Crear VPS (Alcadio, Fabián, Jonatan) — APROBADO por Codex (2 rondas), PENDIENTE DE DEPLOY (esperando OK)
+## 2026-10-23 (viernes, 17:01–17:04) — 🔑 LLAVES DEL EQUIPO: tildes en Crear VPS (Alcadio, Fabián, Jonatan) — EN PRODUCCIÓN, APROBADO por Codex (2 rondas)
+
+**DESPLEGADO con OK de Alcadio ("ok despliega"):** motor con `noc-monitor/desplegar-motor.sh equipo` (primer uso del guion
+del repo: copia app.py, Containerfile, marcas, sabores y equipo; respaldo `build.bak-equipo-20261023-1701.tgz` +
+`app.py.bak-equipo-20261023-1701`; imagen 72a2852deca7; 200 en 2 s; DEPLOY MOTOR OK). `/health` en producción:
+alcadio (disponible, SHA256:GEHyGvIX…), fabian (disponible, 2 huellas), jonatan (no disponible); `/app/config/equipo/llaves.json`
+dentro del contenedor. Dashboard con `deploy_dashboard.sh … vpseq` (respaldo `dashboard.py.bak.20261023-vpseq`, md5
+4dfe768b…, imagen v2 d9b0711eb0fb, 200 en 2 s, DEPLOY OK).
+
 
 Pedido de Alcadio: *"agreguemos debajo de la caja de la llave SSH unos tildes con mi llave pública donde, si la
 selecciono, automáticamente meta mi key en ese VPS; también Fabián y Jonathan"*.
