@@ -1528,7 +1528,9 @@ def red_activa(marca_cfg, modo):
 
 def portgroups_host(h):
     """[(nombre, vlan)] de los portgroups estándar del host — `govc host.portgroup.info -json`
-    (svc-vps puede leerlo: verificado 2026-10-23 en ESXi 7 y 8). Lanza si govc falla."""
+    (svc-vps puede leerlo: verificado 2026-10-23 en ESXi 7 y 8). Lanza si govc falla.
+    vlan = int (0 = sin etiqueta) o None si el inventario no trae un entero (ausente, bool,
+    texto): DESCONOCIDA, que no es lo mismo que sin etiqueta (Codex 2ª pasada #1)."""
     data = json.loads(govc("host.portgroup.info", "-json", host=h) or "{}")
     res = []
     for pg in (data.get("portgroup") or []) if isinstance(data, dict) else []:
@@ -1537,7 +1539,7 @@ def portgroups_host(h):
         if not isinstance(nombre, str) or not nombre:
             continue
         vlan = spec.get("vlanId")
-        res.append((nombre, vlan if isinstance(vlan, int) and not isinstance(vlan, bool) else 0))
+        res.append((nombre, vlan if isinstance(vlan, int) and not isinstance(vlan, bool) else None))
     return res
 
 def resolver_portgroup(h, red, modo, job=None):
@@ -1581,13 +1583,19 @@ def resolver_portgroup(h, red, modo, job=None):
                            % (h["id"], deseado, modo, ", ".join(redes) or "ninguna", etiqueta))
     por_nombre = dict(pgs)
     if deseado in por_nombre:
-        if vlan is not None and por_nombre[deseado] != vlan:
+        v_host = por_nombre[deseado]
+        if v_host is None:
+            # el nombre existe pero su VLAN no se pudo leer: vale por nombre, con constancia
+            nota = "VLAN del portgroup ilegible en el inventario del host; VLAN no verificada"
+            if job:
+                job.detalle("portgroup '%s' %s" % (deseado, nota))
+            return deseado, nota
+        if vlan is not None and v_host != vlan:
             raise RuntimeError("el portgroup '%s' del host %s está en la VLAN %s pero la red %s "
                                "de la marca es la VLAN %s — corregir el portgroup en el ESXi "
-                               "antes de crear" % (deseado, h["id"], por_nombre[deseado],
-                                                   red["subred"], etiqueta))
+                               "antes de crear" % (deseado, h["id"], v_host, red["subred"], etiqueta))
         return deseado, ""
-    inventario = ", ".join("%s (VLAN %s)" % (n, v) for n, v in pgs)
+    inventario = ", ".join("%s (VLAN %s)" % (n, "?" if v is None else v) for n, v in pgs)
     if vlan:
         cand = [n for n, v in pgs if v == vlan]
         if len(cand) > 1:

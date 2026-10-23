@@ -24,6 +24,8 @@ os.environ.pop("DORADA", None)
 sys.path.insert(0, str(RAIZ / "engine"))
 import app as motor  # noqa: E402
 
+assert motor.DB_PATH == os.environ["DB_PATH"] and motor.CONFIG_DIR == str(RAIZ),     "esta suite debe correr en su propio proceso (el motor ya estaba importado con otro entorno)"
+
 cli = motor.app.test_client()
 ADMIN = {"X-Auth-Token": "tok-admin-test"}
 WHMCS = {"X-Auth-Token": "tok-whmcs-test"}
@@ -299,6 +301,20 @@ try:
     # i) vlan NO declarada → solo nombre (la etiqueta no se puede verificar, y así se documenta)
     motor.govc = con_host([("VM Network", 85)])
     assert rp(HOST, RED_SIN, "pruebas") == "VM Network"
+    # j) Codex 2ª pasada #1: una VLAN ILEGIBLE en el inventario ("85", true, ausente) NO es "sin etiqueta":
+    #    el nombre vale solo por nombre, con constancia; y nunca sirve para resolver por VLAN
+    for raro in ("85", True, None):
+        j = JobFalso()
+        motor.govc = con_host([("VM Network", raro), ("Management Network", 0)])
+        nombre_pg, nota_pg = motor.resolver_portgroup(HOST, RED_PRU, "pruebas", j)
+        assert nombre_pg == "VM Network" and "ilegible" in nota_pg and "VLAN no verificada" in nota_pg, (raro, nota_pg)
+        assert any("VLAN no verificada" in d for d in j.detalles), j.detalles
+    motor.govc = con_host([("VM Network", 0), ("vps_PlanetahostingCL", "82")])
+    try:
+        rp(HOST, RED_PH, "produccion")
+        raise AssertionError("una VLAN ilegible no puede resolver por VLAN")
+    except RuntimeError as e:
+        assert "ni otro en la VLAN 82" in str(e) and "vps_PlanetahostingCL (VLAN ?)" in str(e), str(e)
 finally:
     motor.govc = _govc_real
 print("ok - portgroup del host: nombre exacto, VLAN (rótulos distintos por host), VLAN equivocada rechazada (incl. sin etiqueta), ambigüedad, fallback por nombre con constancia")
@@ -356,7 +372,49 @@ try:
 finally:
     motor.govc, motor.esxi_ssh, motor.ip_libre_produccion, motor.datastore_libre_gb, motor.listar_wrapper = _orig
     with motor.DB_LOCK, motor.db() as c:
-        c.execute("DELETE FROM vms WHERE marca='planetahosting.cl'")
+        c.execute("DELETE FROM vms WHERE nombre='vps-phcl-0001-acme'")
 print("ok - flujo de creación real (stubs): la VM de planetahosting.cl nace en la red de su marca y el VMX lleva el portgroup resuelto por VLAN")
+
+# ── subred COMPARTIDA (VLAN 85): el asignador real no repite IP entre marcas ───────────
+# ip_libre_produccion consulta NAT+ARP de RouterData (aquí stub) y el REGISTRO por subred, sin
+# mirar la marca: una reserva de unohosting.pe bloquea esa IP para hosting.pe e inkahosting.pe.
+_mk = motor.mikrotik
+NAT_FAKE = " 0    chain=srcnat action=src-nat to-addresses=38.19.57.100 src-address=10.100.24.250 comment=[NOC] x\n"
+ARP_FAKE = " 0 DC address=10.100.24.249 mac-address=AA:BB interface=vlan_85 status=reachable\n"            " 1 D  address=10.100.24.248 interface=vlan_85 status=failed\n"
+def mk_fake(cmd, host=None, timeout=25):
+    if "nat print" in cmd:
+        return True, NAT_FAKE
+    if "arp print" in cmd:
+        return True, ARP_FAKE
+    raise AssertionError("mikrotik inesperado: %s" % cmd)
+creadas = []
+try:
+    motor.mikrotik = mk_fake
+    sub, gw = "10.100.24.0/24", "10.100.24.1"
+    assert motor.ip_libre_produccion(sub, gw) == "10.100.24.254"
+    for marca, ip, estado in (("unohosting.pe", "10.100.24.254", "creando"), ("hosting.pe", "10.100.24.253", "activo"),
+                              ("inkahosting.pe", "10.100.24.252", "papelera")):
+        nombre = "%s-9%03d-t" % (motor.MARCAS[marca]["prefijo_vm"], len(creadas))
+        with motor.DB_LOCK, motor.db() as c:
+            c.execute("INSERT INTO vms(nombre,marca,estado,ip,host) VALUES(?,?,?,?,'esxi-b')", (nombre, marca, estado, ip))
+        creadas.append(nombre)
+    # .254 (unohosting, creando) y .253 (hosting.pe, activo) ocupadas; .252 está en papelera → libre;
+    # .250 en NAT y .249 viva en ARP también ocupadas; .248 'failed' en ARP = libre
+    assert motor.ip_libre_produccion(sub, gw) == "10.100.24.252"
+    with motor.DB_LOCK, motor.db() as c:
+        c.execute("UPDATE vms SET ip='10.100.24.252', estado='creando' WHERE nombre=?", (creadas[2],))
+    assert motor.ip_libre_produccion(sub, gw) == "10.100.24.251"
+    with motor.DB_LOCK, motor.db() as c:
+        c.execute("UPDATE vms SET ip='10.100.24.251' WHERE nombre=?", (creadas[0],))
+        c.execute("UPDATE vms SET ip='10.100.24.254' WHERE nombre=?", (creadas[1],))
+    assert motor.ip_libre_produccion(sub, gw) == "10.100.24.253", "libre tras reordenar: la marca no influye"
+    # y la otra red (VLAN 82) no se ve afectada por nada de lo anterior
+    assert motor.ip_libre_produccion("10.100.18.0/24", "10.100.18.1") == "10.100.18.254"
+finally:
+    motor.mikrotik = _mk
+    with motor.DB_LOCK, motor.db() as c:
+        for n in creadas:
+            c.execute("DELETE FROM vms WHERE nombre=?", (n,))
+print("ok - subred compartida: el asignador real (NAT + ARP + registro por red) no repite IP entre marcas")
 
 print("TODO OK - test_marcas")
