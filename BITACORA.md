@@ -5,7 +5,19 @@
 
 ---
 
-## 2026-10-23 (viernes, tarde) — 👤 USO PERSONAL vs CLIENTE: VPS internos con dueño, red 10.100.36.0/24 — APROBADO por Codex (3 rondas), PENDIENTE DE DEPLOY (esperando OK)
+## 2026-10-23 (viernes, tarde) — 👤 USO PERSONAL vs CLIENTE: VPS internos con dueño, red 10.100.36.0/24 — EN PRODUCCIÓN 14:46 (motor) y 14:49 (dashboard), APROBADO por Codex (3 rondas)
+
+**DESPLEGADO con OK de Alcadio ("ok despliega"):** motor con `desplegar_motor_marcas.sh` (respaldo
+`/opt/vps-engine/build.bak-uso-20261023-1446.tgz` + `app.py.bak-uso-20261023-1446`; imagen 1e7a4d30311f; 200 en 2 s; 0
+tracebacks). `/health` en producción: 8 marcas comerciales en el selector + `interno` ("Sistemas internos", uso interno,
+vps-int, 10.100.36.0/24, pub Red57-0, 3 planes) en el detalle; columnas `uso`/`propietario` creadas en `vms` y `jobs`.
+Dashboard con `deploy_dashboard.sh … vpsuso` (respaldo `dashboard.py.bak.20261023-vpsuso`, imagen v2 b8bd7f221ef9, 200 en
+3 s, DEPLOY OK); repo fastnetmon sincronizado y commiteado. Nota del guion del motor: la lectura del token con `source`
+se cambió por `grep`, pero la línea quedó mal citada por el `sed` y la verificación final falló (el deploy ya estaba
+completo); se verificó a mano. **Dejar el guion corregido en el repo (`noc-monitor/desplegar-motor.sh`) la próxima vez.**
+**Queda para Alcadio:** crear el portgroup `Sistemas_Internos` en los hosts y probar un VPS personal; futuro: selector de
+lista pública en Crear VPS.
+
 
 Pedido de Alcadio (tras validar quién puede crear VPS: superadmin alcadio + rol NOC jonatan, fabian,
 cristian, gerardo, roni; operaciones y soporte no): *"Hay 2 tipos de creaciones: 1) uso personal, un
