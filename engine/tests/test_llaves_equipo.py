@@ -72,14 +72,17 @@ print("ok - validación del catálogo: ids, duplicados, nombre, lista, solo púb
 
 # ── /crear: validación de llaves_equipo (sin lanzar nada) ───────────────────
 base = {"marca": "hosting.cl", "sabor": "personalizado", "cliente": "acme", "hostname": "h1", "vcpu": 2, "ram_mb": 2048,
-        "disco_gb": 30, "modo": "pruebas", "instalar_cpanel": False, "actor": "alcadio"}
+        "disco_gb": 30, "modo": "pruebas", "instalar_cpanel": False, "actor": "alcadio", "uso": "personal"}
 for malo, frag, code in (("alcadio", "lista de ids", 400), ([1], "lista de ids", 400), (["x"] * 21, "lista de ids", 400),
                          (["noexiste"], "desconocida", 400), (["jonatan"], "todavía no tiene una llave", 400)):
     r = cli.post("/crear", headers=ADMIN, json=dict(base, llaves_equipo=malo))
     assert r.status_code == code and frag in r.get_json()["error"], (malo, r.get_json())
-r = cli.post("/crear", headers=WHMCS, json=dict(base, sabor="vps-estandar", whmcs_serviceid="9", llaves_equipo=["alcadio"]))
+r = cli.post("/crear", headers=WHMCS, json=dict(base, uso="cliente", sabor="vps-estandar", whmcs_serviceid="9", llaves_equipo=["alcadio"]))
 assert r.status_code == 403 and "solo el NOC puede agregar llaves" in r.get_json()["error"], r.get_json()
-print("ok - /crear: llaves_equipo validado (lista de ids, conocidos, con llave cargada; WHMCS no puede)")
+# Alcadio 2026-10-23: un VPS de CLIENTE no admite llaves del equipo
+r = cli.post("/crear", headers=ADMIN, json=dict(base, uso="cliente", llaves_equipo=["alcadio"]))
+assert r.status_code == 400 and "solo para VPS de uso personal" in r.get_json()["error"], r.get_json()
+print("ok - /crear: llaves_equipo validado (lista de ids, conocidos, con llave cargada, solo uso personal; WHMCS no puede)")
 
 # ── flujo completo con stubs ────────────────────────────────────────────────
 capt = {"inst": [], "secv": 0}
@@ -154,24 +157,22 @@ try:
     assert reg == {"instaladas": ["alcadio"], "fallidas": []}
     print("ok - uso personal + llave de Alcadio: instalada una vez, sin llave de entrega, acceso 'ssh root@<pública>'")
 
-    # b) cliente + Fabián, sin BYO → se genera la del cliente Y se agregan las 2 de Fabián
-    j = crear(hostname="srv1", modo="produccion", llaves_equipo=["fabian"])
-    assert capt["secv"] == 1 and sorted(p for _, p in capt["inst"]) == sorted(LE["fabian"]["llaves"])
-    r = j["resultado"]
-    assert r["send_url"] == "https://send/x" and r["llaves_equipo"] == ["Fabián"] and r["ssh_cmd"].startswith("ssh -i id_ed25519")
-    assert "ENTREGAR al cliente" in j["pasos"][13]["detalle"] and "instaladas Fabián" in j["pasos"][13]["detalle"]
-    print("ok - VPS de cliente + Fabián: llave del cliente generada y entregada, más las 2 de Fabián")
+    # b) VPS de cliente sin llaves del equipo → se genera y entrega la del cliente (sin cambios)
+    j = crear(uso="cliente", hostname="srv1", modo="produccion")
+    assert capt["secv"] == 1 and capt["inst"] == [] and j["resultado"]["llaves_equipo"] == []
+    assert j["resultado"]["send_url"] == "https://send/x" and j["resultado"]["ssh_cmd"].startswith("ssh -i id_ed25519")
+    print("ok - VPS de cliente: llave del cliente generada y entregada, sin llaves del equipo")
 
-    # c) pruebas + Alcadio y Fabián → también se instalan (sin securización)
-    j = crear(hostname="srv2", modo="pruebas", llaves_equipo=["alcadio", "fabian"])
-    assert len(capt["inst"]) == 3 and capt["secv"] == 0 and capt["inst"][0][0] == "192.168.200.240"
-    assert "omitido (modo pruebas" in j["pasos"][13]["detalle"] and "instaladas Alcadio (YubiKey), Fabián" in j["pasos"][13]["detalle"]
-    assert j["resultado"]["ssh_cmd"] == "ssh root@192.168.200.240"
-    print("ok - modo pruebas: las llaves del equipo también se instalan")
+    # c) uso personal + Alcadio y Fabián → las 3 llaves instaladas, sin llave de entrega
+    j = crear(hostname="srv2", llaves_equipo=["alcadio", "fabian"])
+    assert len(capt["inst"]) == 3 and capt["secv"] == 0 and capt["inst"][0][0] == "10.100.36.250"
+    assert "instaladas Alcadio (YubiKey), Fabián" in j["pasos"][13]["detalle"]
+    assert j["resultado"]["ssh_cmd"] == "ssh root@38.19.57.101"
+    print("ok - uso personal con dos personas del equipo: todas sus llaves instaladas")
 
     # d) una falla no aborta: aviso en el paso, en el resultado y en la auditoría
     FALLA_EN.add("fabian")
-    j = crear(hostname="srv3", modo="pruebas", llaves_equipo=["alcadio", "fabian"])
+    j = crear(hostname="srv3", llaves_equipo=["alcadio", "fabian"])
     r = j["resultado"]
     assert r["llaves_equipo"] == ["Alcadio (YubiKey)"] and r["llaves_equipo_fallidas"] == ["Fabián"]
     assert "NO se pudo instalar: Fabián" in j["pasos"][13]["detalle"]
@@ -190,11 +191,11 @@ try:
     assert not r.get("send_url") and capt["secv"] == 0 and r["llaves_equipo_fallidas"] == ["Alcadio (YubiKey)"]
     assert "sin llave de acceso de usuario" in j["pasos"][-1]["detalle"], j["pasos"][-1]["detalle"]
     FALLA_EN.clear()
-    # pruebas sin ninguna llave: tampoco se inventa 'ssh -i id_ed25519' (antes sí)
-    j = crear(hostname="srv4", modo="pruebas")
+    # pruebas sin ninguna llave (VPS de cliente): tampoco se inventa 'ssh -i id_ed25519' (antes sí)
+    j = crear(uso="cliente", hostname="srv4", modo="pruebas")
     assert j["resultado"]["ssh_cmd"] is None and j["resultado"]["sin_llave_usuario"] is True and j["resultado"]["modo"] == "pruebas"
     # con llave real instalada, sin_llave_usuario es False
-    assert crear(hostname="srv5", modo="pruebas", llaves_equipo=["alcadio"])["resultado"]["sin_llave_usuario"] is False
+    assert crear(hostname="srv5", llaves_equipo=["alcadio"])["resultado"]["sin_llave_usuario"] is False
     print("ok - sin ninguna llave de usuario instalada: sin comando SSH falso, con aviso (producción y pruebas)")
 
     # e) BYO pegada + llave del equipo en uso personal: la BYO se instala y la del equipo también

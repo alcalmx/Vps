@@ -3265,6 +3265,10 @@ def crear():
     if llaves_equipo_ids:
         if rol != "admin":
             return jsonify({"error": "solo el NOC puede agregar llaves del equipo"}), 403
+        # Alcadio 2026-10-23: las llaves del equipo son SOLO para VPS de uso personal (un VPS de cliente
+        # no lleva llaves nuestras); marcar una = no se genera llave de entrega
+        if uso != "personal":
+            return jsonify({"error": "las llaves del equipo son solo para VPS de uso personal"}), 400
         for x in llaves_equipo_ids:
             if x not in LLAVES_EQUIPO:
                 return jsonify({"error": "llave del equipo desconocida: %s (opciones: %s)"
