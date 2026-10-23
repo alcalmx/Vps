@@ -33,14 +33,15 @@ WHMCS = {"X-Auth-Token": "tok-whmcs-test"}
 assert motor.MARCA_INTERNA == "interno"
 assert "interno" in motor.MARCAS and "interno" not in motor.marcas_activas()
 mi = motor.MARCAS["interno"]
-assert mi["uso"] == "interno" and mi["prefijo_vm"] == "vps-int" and mi["pub_lista"] is None
-assert mi["red_default"]["subred"] == "10.100.36.0/24" and mi["red_default"]["vlan"] == 0
+assert mi["uso"] == "interno" and mi["prefijo_vm"] == "vps-int" and mi["pub_lista"] == "Red57-0", "también lleva pública + NAT"
+assert mi["red_default"]["subred"] == "10.100.36.0/24" and mi["red_default"]["vlan"] is None, "VLAN 1 o nativa: no se verifica"
+assert mi["red_default"]["publica_rango_prueba"] == [100, 102]
 assert ("interno", "vps-estandar") in motor.SABORES and motor.SABORES[("interno", "vps-estandar")]["heredado_de"] == "hosting.cl"
 h = cli.get("/health", headers=ADMIN).get_json()
 assert "interno" not in h["marcas"], "la red interna NO va en el selector de marcas comerciales"
 det = {d["marca"]: d for d in h["marcas_detalle"]}
 assert det["interno"]["uso"] == "interno" and det["interno"]["red_default"]["subred"] == "10.100.36.0/24"
-assert det["interno"]["pub_lista"] is None and det["interno"]["sabores"] == det["hosting.cl"]["sabores"]
+assert det["interno"]["pub_lista"] == "Red57-0" and det["interno"]["sabores"] == det["hosting.cl"]["sabores"]
 assert all(d["uso"] == "cliente" for m, d in det.items() if m != "interno")
 # el validador exige VLAN a las marcas comerciales pero no a la interna; 'uso' raro falla; alias válidos
 def marca_ok(mid="demo.cl", **cambios):
@@ -89,12 +90,9 @@ try:
     assert motor.resolver_portgroup(HOST, RED_INT, "produccion") == ("Sistemas Internos", ""), "alias por nombre"
     motor.govc = con_host([("VM Network", 0), ("Sistemas_Internos", 0), ("Sistemas Internos", 0)])
     assert motor.resolver_portgroup(HOST, RED_INT, "produccion")[0] == "Sistemas_Internos", "el principal gana"
-    motor.govc = con_host([("VM Network", 0), ("Sistemas Internos", 85)])
-    try:
-        motor.resolver_portgroup(HOST, RED_INT, "produccion")
-        raise AssertionError("alias en VLAN 85 debía rechazarse (la red interna va sin etiqueta)")
-    except RuntimeError as e:
-        assert "VLAN 85" in str(e) and "sin etiqueta" in str(e), str(e)
+    motor.govc = con_host([("VM Network", 0), ("Sistemas Internos", 1)])
+    assert motor.resolver_portgroup(HOST, RED_INT, "produccion") == ("Sistemas Internos", ""), \
+        "la red interna va 'VLAN 1 o sin VLAN' (vlan null): no se verifica la etiqueta, solo el nombre"
     motor.govc = con_host([("VM Network", 0), ("Vps_Hosting.cl", 81)])
     try:
         motor.resolver_portgroup(HOST, RED_INT, "produccion")
@@ -147,15 +145,20 @@ def mk_no(*a, **k):
     raise AssertionError("un VPS personal NO debe tocar RouterData: %r" % (a,))
 _orig = {k: getattr(motor, k) for k in ("govc", "esxi_ssh", "ip_libre_produccion", "ip_publica_libre", "crear_nat",
                                         "datastore_libre_gb", "listar_wrapper", "netbox_ip_add", "securizar_vps",
-                                        "mikrotik", "power_state")}
+                                        "mikrotik", "power_state", "set_bloqueo_publica")}
 os.makedirs("/tmp", exist_ok=True)
 try:
     motor.govc = govc_flujo
     motor.esxi_ssh = lambda cmd, timeout=300, host=None: "OK"
     motor.ip_libre_produccion = lambda subred, gateway, job=None: subred.replace("0/24", "250")
-    motor.ip_publica_libre = mk_no
-    motor.crear_nat = mk_no
+    # pública + NAT IGUAL que un cliente (decisión de Alcadio): se simulan y se registran las llamadas
+    def pub_libre(lista, rango=None, job=None):
+        capt["pub_lista"] = (lista, rango)
+        return "38.19.57.101", []
+    motor.ip_publica_libre = pub_libre
+    motor.crear_nat = lambda ip, publica, lista, fqdn, nombre_marca, job=None: capt.setdefault("nat", []).append((ip, publica, lista, fqdn, nombre_marca))
     motor.mikrotik = mk_no
+    motor.set_bloqueo_publica = lambda lista, publica, bloquear, job=None: capt.setdefault("bloqueos", []).append((lista, publica, bloquear))
     motor.datastore_libre_gb = lambda host=None: 999
     motor.listar_wrapper = lambda cmd, host=None: [motor.SISTEMAS["almalinux9"]["dorada"]]
     motor.netbox_ip_add = lambda cidr, dns, desc: capt.setdefault("netbox", []).append((cidr, dns, desc)) or "nb%d" % len(capt["netbox"])
@@ -175,21 +178,23 @@ try:
     pasos = "\n".join(p["detalle"] for p in j["pasos"])
     nombre = j["vm"]
     assert nombre == "vps-int-0001-gerardo", nombre
-    assert "USO PERSONAL de gerardo" in pasos and "Uso interno (sistemas internos): red 10.100.36.0/24" in pasos, pasos
-    assert "uso personal: sin IP pública ni NAT (red interna 10.100.36.0/24)" in pasos, pasos
+    assert "USO PERSONAL de gerardo" in pasos and "Sistemas internos: red 10.100.36.0/24" in pasos, pasos
+    assert "pública 38.19.57.101 ↔ privada 10.100.36.250 (NAT 1:1 activo)" in pasos, pasos
     assert 'ethernet0.networkName = "Sistemas_Internos"' in capt["vmx"]
-    assert capt["netbox"] and capt["netbox"][0][0] == "10.100.36.250/24" and len(capt["netbox"]) == 1, capt["netbox"]
+    assert capt["pub_lista"] == ("Red57-0", [100, 102]), "lista pública de la red interna con su rango de prueba"
+    assert capt["nat"] == [("10.100.36.250", "38.19.57.101", "Red57-0", "lab-gerardo.hosting.cl", "Sistemas internos")], capt.get("nat")
+    assert [n[0] for n in capt["netbox"]] == ["10.100.36.250/24", "38.19.57.101/32"], capt["netbox"]
     res = j["resultado"]
-    assert res["publica"] is None and res["privada"] == "10.100.36.250" and res["acceso_ip"] == "10.100.36.250"
+    assert res["publica"] == "38.19.57.101" and res["privada"] == "10.100.36.250" and res["acceso_ip"] == "38.19.57.101"
     assert res["send_url"] == "https://send/x", "la llave se entrega al dueño por la bóveda"
     reg = motor.vm_registrada(nombre)
     assert reg["estado"] == "activo" and reg["uso"] == "personal" and reg["propietario"] == "gerardo"
-    assert reg["marca"] == "interno" and reg["publica"] is None and reg["ip"] == "10.100.36.250"
+    assert reg["marca"] == "interno" and reg["publica"] == "38.19.57.101" and reg["pub_lista"] == "Red57-0" and reg["ip"] == "10.100.36.250"
     assert reg["cliente"] == "gerardo", "sin cliente → el dueño va en el nombre"
     with motor.DB_LOCK, motor.db() as c:
         jrow = dict(c.execute("SELECT uso,propietario FROM jobs WHERE id=?", (jid,)).fetchone())
     assert jrow == {"uso": "personal", "propietario": "gerardo"}
-    print("ok - creación de uso personal: red interna, sin pública/NAT/RouterData, NetBox solo privada, llave por bóveda, dueño registrado")
+    print("ok - creación de uso personal: red interna + pública/NAT como un cliente, NetBox ambas, llave por bóveda, dueño registrado")
 
     # ── visibilidad: solo el dueño (o total=1) ───────────────────────────────
     ver = lambda u, t: [v["nombre"] for v in cli.get("/vms?usuario=%s&total=%d" % (u, t), headers=ADMIN).get_json()["vms"]]
@@ -240,17 +245,32 @@ try:
     r = cli.post("/accion", headers=ADMIN, json={"vm": nombre, "accion": "suspender", "actor": "gerardo"})
     assert r.status_code == 200, r.get_json()
     j2 = esperar(r.get_json()["job_id"])
-    assert j2["estado"] == "ok" and [p["nombre"] for p in j2["pasos"]][1].startswith("Apagar la VM"), j2["pasos"]
-    assert "-s" in capt["power"] and motor.vm_registrada(nombre)["estado"] == "suspendido"
+    assert j2["estado"] == "ok" and [p["nombre"] for p in j2["pasos"]][1] == "Bloquear IP pública (address-list)", j2["pasos"]
+    assert capt.get("bloqueos") == [("Red57-0", "38.19.57.101", True)] and "-s" not in capt.get("power", []), "con pública: se bloquea la IP, no se apaga"
+    assert motor.vm_registrada(nombre)["estado"] == "suspendido"
     assert j2["uso"] == "personal" and j2["propietario"] == "gerardo", "el job de acción hereda el dueño"
     r = cli.post("/accion", headers=ADMIN, json={"vm": nombre, "accion": "reanudar", "actor": "alcadio", "admin_total": True})
     assert r.status_code == 200, "un superadmin sí puede operarlo: %s" % r.get_json()
     j3 = esperar(r.get_json()["job_id"])
-    assert j3["estado"] == "ok" and capt["power"][-1] == "-on" and motor.vm_registrada(nombre)["estado"] == "activo"
+    assert j3["estado"] == "ok" and capt["bloqueos"][-1] == ("Red57-0", "38.19.57.101", False) and motor.vm_registrada(nombre)["estado"] == "activo"
+    # caso residual: un VPS personal SIN pública se suspende apagando y se reanuda encendiendo
+    with motor.DB_LOCK, motor.db() as c:
+        c.execute("INSERT INTO vms(nombre,marca,sabor,cliente,estado,ip,host,uso,propietario) "
+                  "VALUES('vps-int-0099-gerardo','interno','vps-estandar','gerardo','activo','10.100.36.249',?, 'personal','gerardo')",
+                  (reg["host"],))
+    r = cli.post("/accion", headers=ADMIN, json={"vm": "vps-int-0099-gerardo", "accion": "suspender", "actor": "gerardo"})
+    assert r.status_code == 200, r.get_json()
+    j4 = esperar(r.get_json()["job_id"])
+    assert j4["estado"] == "ok" and [p["nombre"] for p in j4["pasos"]][1].startswith("Apagar la VM") and "-s" in capt["power"], j4["pasos"]
+    r = cli.post("/accion", headers=ADMIN, json={"vm": "vps-int-0099-gerardo", "accion": "reanudar", "actor": "gerardo"})
+    j5 = esperar(r.get_json()["job_id"])
+    assert j5["estado"] == "ok" and capt["power"][-1] == "-on" and motor.vm_registrada("vps-int-0099-gerardo")["estado"] == "activo"
+    with motor.DB_LOCK, motor.db() as c:
+        c.execute("DELETE FROM vms WHERE nombre='vps-int-0099-gerardo'")
     r = cli.post("/accion", headers=ADMIN, json={"vm": nombre, "accion": "reanudar", "actor": "jonatan", "admin_total": "1"})
     assert r.status_code == 200, "admin_total lo afirma el proxy (solo lo pone para superadmin)"
     esperar(r.get_json()["job_id"])
-    print("ok - operar: 403 para otros usuarios, el dueño suspende (apaga) y reanuda (enciende), superadmin también")
+    print("ok - operar: 403 para otros; con pública se bloquea/desbloquea la IP (como cliente), sin pública se apaga/enciende; superadmin también")
 
     # Codex medio #3: el job de EDICIÓN nace ya con dueño (sin ventana en que otro lo vea)
     r = cli.post("/editar", headers=ADMIN, json={"vm": nombre, "sabor": "vps-empresas", "actor": "gerardo"})
@@ -274,7 +294,7 @@ try:
     jf = esperar(r.get_json()["job_id"])
     assert jf["estado"] == "ok", json.dumps(jf, ensure_ascii=False)[:1200]
     pf = "\n".join(p["detalle"] for p in jf["pasos"])
-    assert "modo produccion" in pf and "red 10.100.36.0/24" in pf and "192.168.200" not in pf, pf
+    assert "modo produccion" in pf and "red 10.100.36.0/24" in pf and "192.168.200" not in pf and "NAT 1:1 activo" in pf, pf
     regf = motor.vm_registrada(jf["vm"])
     assert regf["ip"] == "10.100.36.250" and regf["propietario"] == "fabian" and jf["vm"] == "vps-int-0002-fabian"
     with motor.DB_LOCK, motor.db() as c:

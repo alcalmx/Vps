@@ -253,8 +253,9 @@ def validar_marcas(marcas):
                                           and rango[0] <= rango[1]):
                 falla("%s: 'publica_rango_prueba' debe ser [desde, hasta] entre 1 y 254" % clave)
         lista = m.get("pub_lista")
-        if lista is not None and lista not in PUB_REDES:
-            falla("pub_lista %r desconocida (opciones: %s)" % (lista, ", ".join(sorted(PUB_REDES))))
+        if not isinstance(lista, str) or lista not in PUB_REDES:
+            falla("pub_lista %r desconocida o ausente (opciones: %s) — la usa el paso de IP pública + NAT"
+                  % (lista, ", ".join(sorted(PUB_REDES))))
     return marcas
 
 def cargar_marcas(config_dir):
@@ -1873,7 +1874,7 @@ def flujo_crear(job, marca, sabor_slug, cliente, hostname, instalar_cpanel, modo
                     % (nombre, sabor["nombre_web"], sabor["vcpu"], sabor["ram_mb"],
                        sabor["disco_gb"], so_info["nombre"], modo, h["id"], marca_cfg["nombre"],
                        red["subred"], (" (VLAN %s)" % red["vlan"]) if red.get("vlan") else "",
-                       (" · USO PERSONAL de %s (sin IP pública)" % job.actor) if uso == "personal" else ""))
+                       (" · USO PERSONAL de %s" % job.actor) if uso == "personal" else ""))
 
         # 2. IP privada libre — RouterData en producción, barrido local en pruebas.
         #    Bajo IP_PRIV_LOCK: elegir y GRABAR es atómico entre jobs (ambos flujos
@@ -2061,17 +2062,9 @@ def flujo_crear(job, marca, sabor_slug, cliente, hostname, instalar_cpanel, modo
     # 12. IP pública + NAT 1:1 (solo producción)
     job.paso()
     publica = pub_lista = None
-    if modo == "produccion" and uso == "personal":
-        # USO PERSONAL: red interna, SIN IP pública ni NAT. Solo la privada va a NetBox (best effort).
-        desc_base = "%s - VPS uso personal de %s (%s)" % (fqdn, job.actor, nombre)
-        nb_priv = netbox_ip_add(ip + "/24", fqdn, desc_base + " · red interna, sin IP pública · alta vps-engine")
-        if nb_priv:
-            with DB_LOCK, db() as c:
-                c.execute("UPDATE vms SET nb_priv_id=? WHERE nombre=?", (nb_priv, nombre))
-        job.detalle("uso personal: sin IP pública ni NAT (red interna %s) · NetBox: %s"
-                    % (red["subred"], "IP privada registrada" if nb_priv else "no disponible — registrar a mano"))
-    elif modo == "produccion":
-        pub_lista = marca_cfg.get("pub_lista", "Red107-0")
+    # (uso personal: también lleva pública + NAT 1:1, igual que un cliente — Alcadio 2026-10-23)
+    if modo == "produccion":
+        pub_lista = marca_cfg.get("pub_lista") or "Red107-0"
         rango = red.get("publica_rango_prueba")   # [lo, hi] para restringir en pruebas de prod
         # Bajo IP_PUB_LOCK: elegir pública + crear NAT + grabar es atómico entre jobs
         # (tras crear_nat la IP queda visiblemente tomada en RouterData: NAT + entrada
@@ -2236,8 +2229,9 @@ def flujo_suspender(job):
     if vm["estado"] == "suspendido":
         job.ok("VPS %s ya estaba suspendido" % job.vm)
         return
-    if (vm.get("uso") or "cliente") == "personal":
-        # USO PERSONAL: no hay IP pública que bloquear → se APAGA la VM (graceful, forzado a los 60 s)
+    if (vm.get("uso") or "cliente") == "personal" and not (vm.get("publica") and vm.get("pub_lista")):
+        # USO PERSONAL sin IP pública (no debería ocurrir desde 2026-10-23: también llevan NAT) →
+        # no hay IP que bloquear: se APAGA la VM (graceful, forzado a los 60 s)
         h = host_de_vm(job.vm)
         job.paso("VM %s validada (uso personal de %s) — se apaga" % (job.vm, vm.get("propietario")))
         apagar_graceful(job, job.vm, host=h)
@@ -2261,7 +2255,7 @@ def flujo_reanudar(job):
     if vm["estado"] != "suspendido":
         job.ok("VPS %s no estaba suspendido (estado %s) — nada que reanudar" % (job.vm, vm["estado"]))
         return
-    if (vm.get("uso") or "cliente") == "personal":
+    if (vm.get("uso") or "cliente") == "personal" and not (vm.get("publica") and vm.get("pub_lista")):
         h = host_de_vm(job.vm)
         job.paso("VM %s validada (uso personal) — se enciende" % job.vm)
         try:
@@ -3345,7 +3339,7 @@ def vms_list():
         r["power"] = power_state(r["nombre"], host=_h) if _h else "?"
     return jsonify({"vms": rows, "papelera": papelera})
 
-# VPS de uso PERSONAL (sin IP pública): suspender = apagar, reanudar = encender
+# VPS de uso PERSONAL SIN IP pública (caso residual): suspender = apagar, reanudar = encender
 ACCIONES_PERSONAL_PASOS = {
     "suspender": ["Validar guardarraíles", "Apagar la VM (uso personal, sin IP pública)", "Marcar suspendido"],
     "reanudar": ["Validar guardarraíles", "Encender la VM", "Marcar activo"]}
@@ -3450,7 +3444,8 @@ def accion():
         if not (conf == vm or (por_sid and conf == serviceid)):
             return jsonify({"error": "confirmación requerida: reescribe el nombre exacto de la VM"}), 400
     fn, pasos = ACCIONES[acc]
-    if (reg.get("uso") or "cliente") == "personal" and acc in ACCIONES_PERSONAL_PASOS:
+    if ((reg.get("uso") or "cliente") == "personal" and acc in ACCIONES_PERSONAL_PASOS
+            and not (reg.get("publica") and reg.get("pub_lista"))):
         pasos = ACCIONES_PERSONAL_PASOS[acc]
     # motor del job según el origen (clientes = WHMCS, admin = NOC)
     job, activo = lanzar_job_exclusivo(acc, vm, actor, pasos,

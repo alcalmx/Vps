@@ -1,11 +1,12 @@
 {
   "marca": "interno",
-  "nombre": "Uso interno (sistemas internos)",
+  "nombre": "Sistemas internos",
   "uso": "interno",
-  "_uso_nota": "uso=interno: NO es una marca comercial. Es la red de los VPS de USO PERSONAL de los usuarios del NOC (decisión de Alcadio 2026-10-23): no aparece en el selector de marcas; /crear la usa SOLO cuando uso=personal. Sin IP pública ni NAT; solo el dueño (y un superadmin) ve y opera esos VPS.",
+  "_uso_nota": "uso=interno: NO es una marca comercial. Es la red de los VPS de USO PERSONAL de los usuarios del NOC (decisión de Alcadio 2026-10-23): no aparece en el selector de marcas; /crear la usa SOLO cuando uso=personal. Reciben IP pública + NAT 1:1 igual que un cliente (Alcadio: 'hay que crearle un NAT tal cual de alguna IP pública'); solo el dueño (y un superadmin) ve y opera esos VPS.",
   "prefijo_vm": "vps-int",
   "activo": true,
-  "pub_lista": null,
+  "pub_lista": "Red57-0",
+  "_pub_lista_nota": "Igual que las marcas: mientras dure el staging la pública sale del rango de PRUEBAS 38.19.57.100-102 (publica_rango_prueba). Futuro (Alcadio 2026-10-23): un campo en Crear VPS para elegir la red pública donde buscar la IP.",
   "sabores_de": "hosting.cl",
   "red_default": {
     "subred": "10.100.36.0/24",
@@ -20,9 +21,13 @@
       "Sistemas_Internos",
       "Sistemas Internos"
     ],
-    "vlan": 0,
-    "nota": "Red 'Sistemas Internos Hosting.cl' (RouterData: 10.100.36.1/24 en sfp28-2 'Switch A Rack 1- Rack12', SIN etiqueta VLAN; verificado 2026-10-23). Como no hay VLAN, el motor solo puede encontrar el portgroup por NOMBRE: en cada host donde se vayan a crear VPS personales debe existir un portgroup llamado 'Sistemas_Internos' (o 'Sistemas Internos') en VLAN 0 sobre el uplink que lleve esta red nativa; si el host lo llama distinto, agregar ese nombre a 'portgroups'. PENDIENTE de Alcadio: definir ese portgroup en los hosts (hoy ninguno lo tiene)."
+    "publica_rango_prueba": [
+      100,
+      102
+    ],
+    "vlan": null,
+    "nota": "Red 'Sistemas Internos Hosting.cl' (RouterData: 10.100.36.1/24 en sfp28-2 'Switch A Rack 1- Rack12'; VLAN 1 o sin VLAN, según Alcadio 2026-10-23 → 'vlan': null = no se verifica la etiqueta, solo el NOMBRE). En cada host donde se creen VPS personales debe existir un portgroup llamado 'Sistemas_Internos' (o 'Sistemas Internos') sobre el uplink que lleve esta red; si el host lo llama distinto, agregar el nombre a 'portgroups'. Lo crea Alcadio en el VMware host."
   },
   "dominio_hostname": "hosting.cl",
-  "nota": "Alta 2026-10-23. Planes: hereda los de hosting.cl (sabores_de). Para VPS de uso personal: salida a internet / IP pública NO la gestiona el motor (en RouterData los sistemas internos tienen NAT a mano, p.ej. srcnat compartido a 201.148.106.2); decisión pendiente de Alcadio."
+  "nota": "Alta 2026-10-23. Planes: hereda los de hosting.cl (sabores_de). VPS de uso personal = red interna + IP pública/NAT como un cliente; suspender bloquea la pública (si no tuviera pública, apaga la VM)."
 }

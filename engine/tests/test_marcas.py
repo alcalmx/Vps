@@ -122,7 +122,7 @@ for malo in ([100], [102, 100], [0, 5], [1, 255], ["100", "102"], [True, 102]):
     m = marca_ok(); m["red_default"]["publica_rango_prueba"] = malo
     debe_fallar({"demo.cl": m}, "publica_rango_prueba")
 debe_fallar({"demo.cl": marca_ok(pub_lista="Red999-0")}, "pub_lista 'Red999-0' desconocida", "Red107-0")
-assert motor.validar_marcas({"demo.cl": marca_ok(pub_lista=None)}), "sin pub_lista es válido (usa el default del flujo)"
+debe_fallar({"demo.cl": marca_ok(pub_lista=None)}, "pub_lista", "ausente")   # toda marca activa la necesita (paso 12)
 print("ok - validador de marcas: prefijo, redes /24, gateway, VLAN, rango, lista pública, duplicados")
 
 # ── cargador: archivos '_' ignorados, nombre de archivo = marca, herencia ────

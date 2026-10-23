@@ -245,15 +245,15 @@ Al crear un VPS se elige el **uso**:
 | | Para un cliente | Uso personal (interno) |
 |---|---|---|
 | Quién lo ve y lo opera | Todos los usuarios con `vps_engine` | Solo su dueño (y un superadmin) |
-| Marca / red | La marca elegida (VLAN 8x) | Fija: `interno` = 10.100.36.0/24, sin VLAN (nativa) |
-| IP pública / NAT | Sí (lista pública de la marca) | **No** (solo IP privada; NetBox registra la privada) |
+| Marca / red | La marca elegida (VLAN 8x) | Fija: `interno` = 10.100.36.0/24 (VLAN 1 o nativa; no se verifica etiqueta) |
+| IP pública / NAT | Sí (lista pública de la marca) | Sí, igual que un cliente (hoy Red57-0 rango de prueba) |
 | Nombre de VM | `vps-<marca>-NNNN-<cliente>` | `vps-int-NNNN-<usuario>` |
-| Suspender / reanudar | Bloquear / desbloquear la IP pública | **Apagar / encender** la VM |
+| Suspender / reanudar | Bloquear / desbloquear la IP pública | Igual; si no tuviera pública, apagar / encender |
 | Llave de acceso | Bóveda + Send al cliente | Bóveda + Send al dueño |
 | WHMCS | Puede venir de WHMCS | Nunca |
 
 La red interna es `marcas/interno.json` con `"uso": "interno"`: no aparece en el selector de marcas y
-`/crear` la usa solo con `uso=personal`. Como va sin VLAN, el portgroup del host se busca **solo por
+`/crear` la usa solo con `uso=personal` (y fuerza modo producción). Como va sin VLAN, el portgroup del host se busca **solo por
 nombre** (`portgroup` + alias `portgroups`): cada host donde se creen VPS personales necesita un portgroup
 `Sistemas_Internos` (o `Sistemas Internos`) en VLAN 0 sobre el uplink que lleve esa red. El motor filtra
 `/vms`, `/jobs` y `/job` con `usuario` y `total` (los pone el proxy del dashboard; `total=1` solo para
