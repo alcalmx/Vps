@@ -5,7 +5,7 @@
 
 ---
 
-## 2026-10-23 (viernes, tarde) — 👤 USO PERSONAL vs CLIENTE: VPS internos con dueño, red 10.100.36.0/24 — APROBADO por Codex (2 rondas), PENDIENTE DE DEPLOY (esperando OK)
+## 2026-10-23 (viernes, tarde) — 👤 USO PERSONAL vs CLIENTE: VPS internos con dueño, red 10.100.36.0/24 — APROBADO por Codex (3 rondas), PENDIENTE DE DEPLOY (esperando OK)
 
 Pedido de Alcadio (tras validar quién puede crear VPS: superadmin alcadio + rol NOC jonatan, fabian,
 cristian, gerardo, roni; operaciones y soporte no): *"Hay 2 tipos de creaciones: 1) uso personal, un
@@ -34,14 +34,14 @@ propia…), 32 ARP vivas. Ningún host enrolado tiene hoy un portgroup para esa 
 - **Flujo personal:** IP privada por `ip_libre_produccion` sobre 10.100.36.0/24 (NAT+ARP de RouterData +
   registro); **sin IP pública, sin NAT, sin WHMCS**; NetBox registra solo la privada; cPanel según plan;
   securización y Send igual que siempre (el dueño recibe la llave por la bóveda). Paso 1 dice "USO
-  PERSONAL de <usuario> (sin IP pública)".
+  PERSONAL de <usuario>". **(Diseño inicial "sin IP pública" cambiado por Alcadio el mismo día, ver cierre.)**
 - **Visibilidad por dueño:** columnas `vms.uso/propietario` y `jobs.uso/propietario` (ALTER idempotente,
   NULL = cliente). `/vms`, `/jobs`, `/job/<id>` reciben `?usuario=&total=` del proxy (`total=1` solo si el
   usuario es superadmin del dashboard) — **solo con rol admin**: con token WHMCS los parámetros se
   ignoran y lo personal queda oculto. El filtro de `/jobs` va en el SQL antes del `LIMIT 60`. `/accion` y
   `/editar` exigen dueño o `admin_total` (lo pone el proxy); los jobs de acción/edición nacen con el dueño.
-- **Suspender un VPS personal = apagar** (graceful + forzado a los 60 s); **reanudar = encender**
-  (`ACCIONES_PERSONAL_PASOS`). Eliminar: igual (no hay NAT que liberar).
+- **Suspender/reanudar**: igual que un cliente (bloquear/desbloquear la pública); solo si el VPS personal
+  no tuviera pública, **apagar/encender** (`ACCIONES_PERSONAL_PASOS`, caso residual). Eliminar: igual.
 - **Dashboard** (`patch_vps_uso_personal_v1.py` + `v2.py` en fastnetmon/containers/dashboard): radio
   **Uso** en PARA QUIÉN; con personal la marca queda fija en "Uso interno (sistemas internos)" (option al
   vuelo + select deshabilitado), Cliente = usuario de sesión (readOnly), **Entorno fijo en Producción**,
@@ -61,11 +61,23 @@ RouterData para la pública, visibilidad en /vms (y papelera)/jobs/job incl. WHM
 403 para otros, suspender apaga / reanudar enciende, superadmin opera, edición con dueño y exitosa,
 modo pruebas forzado a producción con aviso, VPS de cliente visible para todos). **20 suites verdes.**
 
-**PENDIENTE de Alcadio:** (1) OK de despliegue (archivos en `/tmp/vps-marcas` y
-`/tmp/dashboard.py.vpsuso` de noc-monitor); (2) **salida a internet de los VPS personales**: el motor no
-crea NAT para ellos (¿a mano, o srcnat automático por la 201.148.106.2 compartida?); (3) **portgroup de la
-red interna** en cada host (`Sistemas_Internos` / `Sistemas Internos`, VLAN 0, sobre el uplink que lleve
-la red nativa) — hoy ninguno lo tiene; (4) confirmar que el superadmin vea los VPS personales de todos.
+**CIERRE DE DISEÑO (decisiones de Alcadio, ~15:00):** (1) *"Los VPS personales hay que crearle un NAT tal
+cual de alguna IP pública"* → el flujo personal es el MISMO que el de cliente en el paso 12 (pública de
+`Red57-0` con el rango de prueba [100,102] como todas las marcas, NAT 1:1, NetBox ambas; comentario NAT
+`VPS Sistemas internos` → agrupa en el Monitoreo externo); se quitó la rama "sin pública"; el validador
+exige `pub_lista` conocida a toda marca activa. (2) *"La red 10.100.36.0/24 es VLAN 1 o sin VLAN; es un
+portgroup que debe estar creado en el VMware host"* → `vlan: null` (no se verifica etiqueta, solo el
+nombre `Sistemas_Internos` / alias) y el portgroup lo crea él en cada host. (3) *"Exacto"*: el superadmin
+ve y opera los VPS personales de todos. Además: *"por el momento el motor sigue bloqueado con solo 2 IPs
+públicas; más adelante abriremos eso; al final podemos agregar otro campo donde seleccionaremos la red
+pública en la cual deseamos que se busque la IP pública"* → **FUTURO: selector de lista pública (pub_lista)
+en Crear VPS**. `marcas/interno.json`: nombre "Sistemas internos". Commit `bc49cbb`; 20 suites verdes.
+**Codex R3** (sobre las decisiones finales): 1 medio (la `pub_lista` obligatoria también a marcas inactivas →
+ahora solo a las activas; una inactiva puede no tenerla) + 1 menor (texto "sin VLAN" → "VLAN no verificada,
+portgroup por nombre") → ambos aplicados; el camino compartido de pública/NAT, la suspensión según pública
+y los permisos los dio por coherentes. 20 suites verdes.
+**PENDIENTE:** OK de despliegue (archivos en `/tmp/vps-marcas` y `/tmp/dashboard.py.vpsuso`) y crear el
+portgroup `Sistemas_Internos` en los hosts.
 
 ## 2026-10-23 (viernes) — 🏷️ MULTI-MARCA: crear VPS de CUALQUIER marca desde el dashboard — EN PRODUCCIÓN 12:26 (motor) y 12:30 (dashboard), APROBADO por Codex (4 rondas)
 

@@ -253,9 +253,11 @@ def validar_marcas(marcas):
                                           and rango[0] <= rango[1]):
                 falla("%s: 'publica_rango_prueba' debe ser [desde, hasta] entre 1 y 254" % clave)
         lista = m.get("pub_lista")
-        if not isinstance(lista, str) or lista not in PUB_REDES:
-            falla("pub_lista %r desconocida o ausente (opciones: %s) — la usa el paso de IP pública + NAT"
-                  % (lista, ", ".join(sorted(PUB_REDES))))
+        if lista is not None and lista not in PUB_REDES:
+            falla("pub_lista %r desconocida (opciones: %s)" % (lista, ", ".join(sorted(PUB_REDES))))
+        if lista is None and m.get("activo", True):   # una marca ACTIVA la necesita en el paso 12
+            falla("pub_lista ausente — toda marca activa la necesita para la IP pública + NAT (opciones: %s)"
+                  % ", ".join(sorted(PUB_REDES)))
     return marcas
 
 def cargar_marcas(config_dir):
