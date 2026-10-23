@@ -196,19 +196,27 @@ def validar_marcas(marcas):
                 falla("falta el campo '%s'" % campo)
         if not isinstance(m.get("activo", True), bool):
             falla("'activo' debe ser true/false")
+        uso_m = m.get("uso", "cliente")
+        if uso_m not in ("cliente", "interno"):
+            falla("'uso' debe ser 'cliente' (marca comercial) o 'interno' (red de los VPS de uso personal)")
         pref = m["prefijo_vm"]
         if not PREFIJO_VM_RE.fullmatch(pref):
             falla("prefijo_vm %r no cumple 'vps-<letras>' (lo exige el wrapper del ESXi)" % pref)
         if pref in vistos_pref:
             falla("prefijo_vm %r repetido con la marca %s" % (pref, vistos_pref[pref]))
         vistos_pref[pref] = mid
-        for clave, exige_vlan in (("red_default", True), ("red_pruebas", False)):
+        # la red interna va SIN etiqueta (nativa en el puerto): no se le exige VLAN
+        for clave, exige_vlan in (("red_default", uso_m != "interno"), ("red_pruebas", False)):
             red = m.get(clave)
             if not isinstance(red, dict):
                 falla("falta '%s' (la de pruebas puede heredarse de marcas/_pruebas.json)" % clave)
             for campo in ("subred", "gateway", "portgroup"):
                 if not isinstance(red.get(campo), str) or not red[campo].strip():
                     falla("%s: falta '%s'" % (clave, campo))
+            alias = red.get("portgroups")
+            if alias is not None and not (isinstance(alias, list) and alias
+                                          and all(isinstance(x, str) and x.strip() for x in alias)):
+                falla("%s: 'portgroups' debe ser una lista de nombres (alias del portgroup por host)" % clave)
             try:
                 net = ipaddress.ip_network(red["subred"], strict=True)
                 gw = ipaddress.ip_address(red["gateway"])
@@ -274,11 +282,16 @@ def cargar_marcas(config_dir):
     return validar_marcas(marcas)
 
 def marcas_activas():
-    """Marcas que se OFRECEN para crear (activo != false). Las inactivas siguen cargadas
-    para operar las VMs que ya existen (editar/suspender/eliminar)."""
-    return sorted(k for k, v in MARCAS.items() if v.get("activo", True))
+    """Marcas COMERCIALES que se OFRECEN para crear (activo != false). Las inactivas siguen
+    cargadas para operar las VMs que ya existen (editar/suspender/eliminar). La marca de uso
+    interno (red de los VPS personales) no es comercial y no va en el selector."""
+    return sorted(k for k, v in MARCAS.items()
+                  if v.get("activo", True) and v.get("uso", "cliente") != "interno")
 
 MARCAS = cargar_marcas(CONFIG_DIR)
+# red de los VPS de USO PERSONAL (Alcadio 2026-10-23): la única marca con uso=interno activa
+MARCA_INTERNA = next((k for k, v in sorted(MARCAS.items())
+                      if v.get("uso") == "interno" and v.get("activo", True)), None)
 SABORES = {}
 for marca_dir in os.listdir(os.path.join(CONFIG_DIR, "sabores")):
     d = os.path.join(CONFIG_DIR, "sabores", marca_dir)
@@ -363,7 +376,9 @@ def init_db():
                           ("byo_pubkey_fp", "TEXT"), ("nb_priv_id", "TEXT"), ("nb_pub_id", "TEXT"),
                           ("whmcs_serviceid", "TEXT"), ("host", "TEXT"),
                           ("datastore", "TEXT"),    # multi-datastore: datastore donde VIVE la VM
-                          ("so", "TEXT")):          # sistema operativo con el que se creó
+                          ("so", "TEXT"),           # sistema operativo con el que se creó
+                          ("uso", "TEXT"),          # 'cliente' (NULL = cliente) | 'personal' (uso interno de un usuario)
+                          ("propietario", "TEXT")): # usuario del dashboard dueño de un VPS 'personal'
             try:
                 c.execute("ALTER TABLE vms ADD COLUMN %s %s" % (col, decl))
             except sqlite3.OperationalError as e:
@@ -440,6 +455,13 @@ def init_db():
         # reasignaría una fila host=NULL al host equivocado y anularía la protección de
         # host_de_vm — hallazgo Codex A1 #1). api_url se DERIVA de ESXI_HOST (no del
         # GOVC_URL literal, que podría traer credenciales embebidas — #3b).
+        # uso personal (2026-10-23): el job también lleva dueño, para filtrar Jobs por usuario
+        for col in ("uso", "propietario"):
+            try:
+                c.execute("ALTER TABLE jobs ADD COLUMN %s TEXT" % col)
+            except sqlite3.OperationalError as e:
+                if "duplicate column name" not in str(e).lower():
+                    raise
         # marca de migración PERSISTENTE (PRAGMA user_version): la adopción legacy corre
         # UNA sola vez en la vida de la BD — no basta "tabla hosts vacía" (podría
         # re-vaciarse). user_version 0 = BD previa al multi-host → migrar; ≥1 = ya migrada.
@@ -496,15 +518,18 @@ class Job:
     """Job asíncrono cuyo avance (pasos) se persiste en SQLite y el dashboard
     lo va leyendo por GET /job/<id>. Cada paso: pendiente → corriendo → ok/error."""
 
-    def __init__(self, tipo, vm, actor, nombres_pasos, motor=None):
+    def __init__(self, tipo, vm, actor, nombres_pasos, motor=None, uso=None, propietario=None):
         self.id = uuid.uuid4().hex[:12]
         self.tipo, self.vm, self.actor = tipo, vm, actor
         self.motor = motor or _motor_por_defecto(tipo)
+        self.uso, self.propietario = uso, propietario   # 'personal' + dueño → visible solo para él
         self.pasos = [{"nombre": n, "estado": "pendiente", "detalle": "", "ts": ""} for n in nombres_pasos]
         self._i = -1
         with DB_LOCK, db() as c:
-            c.execute("INSERT INTO jobs(id,tipo,vm,estado,pasos,actor,motor) VALUES(?,?,?,?,?,?,?)",
-                      (self.id, tipo, vm, "corriendo", json.dumps(self.pasos), actor, self.motor))
+            c.execute("INSERT INTO jobs(id,tipo,vm,estado,pasos,actor,motor,uso,propietario) "
+                      "VALUES(?,?,?,?,?,?,?,?,?)",
+                      (self.id, tipo, vm, "corriendo", json.dumps(self.pasos), actor, self.motor,
+                       uso, propietario))
 
     def _save(self, estado=None, error=None):
         with DB_LOCK, db() as c:
@@ -567,7 +592,7 @@ def job_activo(vm):
                         (vm,)).fetchone()
     return dict(row) if row else None
 
-def lanzar_job_exclusivo(tipo, vm, actor, pasos, motor=None):
+def lanzar_job_exclusivo(tipo, vm, actor, pasos, motor=None, uso=None, propietario=None):
     """Gate de EXCLUSIÓN MUTUA por VM: un solo job activo a la vez. Chequeo +
     creación del job en una sección crítica (JOB_GATE_LOCK por fuera, DB_LOCK por
     dentro) para que dos requests simultáneas no pasen ambas el chequeo. Evita
@@ -581,7 +606,7 @@ def lanzar_job_exclusivo(tipo, vm, actor, pasos, motor=None):
         act = job_activo(vm)
         if act:
             return None, act
-        job = Job(tipo, vm, actor, pasos, motor=motor)
+        job = Job(tipo, vm, actor, pasos, motor=motor, uso=uso, propietario=propietario)
     return job, None
 
 def lanzar_o_fallar(job, fn):
@@ -1533,7 +1558,7 @@ def datastore_libre_gb(host=None):
     raise RuntimeError("no pude obtener el espacio libre del datastore %s" % ds_nombre)
 
 def reservar_vm(marca, marca_cfg, sabor_slug, sabor, cliente, hostname, whmcs_serviceid=None,
-                host=None):
+                host=None, uso="cliente", propietario=None):
     """Elige el siguiente nombre y lo RESERVA (INSERT estado='creando', CON su host)
     en una sola sección crítica. Antes el nombre se calculaba en el endpoint y se
     insertaba después en el hilo del job: dos creaciones simultáneas podían calcular
@@ -1545,11 +1570,11 @@ def reservar_vm(marca, marca_cfg, sabor_slug, sabor, cliente, hostname, whmcs_se
         validar_cupo(sabor["vcpu"], sabor["ram_mb"], sabor["disco_gb"], host=host)
         nombre = siguiente_nombre(marca_cfg, cliente)
         with DB_LOCK, db() as c:
-            c.execute("INSERT INTO vms(nombre,marca,sabor,cliente,hostname,estado,vcpu,ram_mb,disco_gb,whmcs_serviceid,host) "
-                      "VALUES(?,?,?,?,?,'creando',?,?,?,?,?)",
+            c.execute("INSERT INTO vms(nombre,marca,sabor,cliente,hostname,estado,vcpu,ram_mb,disco_gb,"
+                      "whmcs_serviceid,host,uso,propietario) VALUES(?,?,?,?,?,'creando',?,?,?,?,?,?,?)",
                       (nombre, marca, sabor_slug, cliente, hostname,
                        sabor["vcpu"], sabor["ram_mb"], sabor["disco_gb"], whmcs_serviceid,
-                       (host or {}).get("id")))
+                       (host or {}).get("id"), uso or "cliente", propietario))
     return nombre
 
 def red_activa(marca_cfg, modo):
@@ -1583,6 +1608,8 @@ def resolver_portgroup(h, red, modo, job=None):
     Devuelve (nombre_del_portgroup, nota): la nota ("" si el nombre coincidió tal cual) la
     escribe el flujo en el CIERRE del paso, porque job.detalle() se sobreescribe."""
     deseado = red["portgroup"]
+    # nombres aceptables: el principal + alias ('portgroups'): cada host puede rotular distinto
+    nombres_ok = [deseado] + [x for x in (red.get("portgroups") or []) if x != deseado]
     # vlan: None = no declarada (solo nombre) · 0 = sin etiqueta (el nombre debe estar en VLAN 0,
     # y con VLAN 0 no se adivina: hay muchos portgroups sin etiqueta) · >0 = por nombre o por VLAN
     vlan = red.get("vlan")
@@ -1601,29 +1628,31 @@ def resolver_portgroup(h, red, modo, job=None):
         # que la VLAN NO se pudo verificar
         redes = [ln.rsplit("/", 1)[-1] for ln in govc("ls", "network", host=h).splitlines()
                  if ln.strip()]
-        if deseado in redes:
+        hit = next((n for n in nombres_ok if n in redes), None)
+        if hit is not None:
             nota = "validado solo por nombre — %s; VLAN no verificada" % motivo
             if job:
-                job.detalle("portgroup '%s' %s" % (deseado, nota))
-            return deseado, nota
+                job.detalle("portgroup '%s' %s" % (hit, nota))
+            return hit, nota
         raise RuntimeError("el host %s NO tiene el portgroup '%s' que usa el modo %s "
                            "(redes del host: %s) — crearlo en el ESXi (Networking → "
                            "Port groups, VLAN %s) antes de crear aquí"
                            % (h["id"], deseado, modo, ", ".join(redes) or "ninguna", etiqueta))
     por_nombre = dict(pgs)
-    if deseado in por_nombre:
-        v_host = por_nombre[deseado]
+    hit = next((n for n in nombres_ok if n in por_nombre), None)
+    if hit is not None:
+        v_host = por_nombre[hit]
         if v_host is None:
             # el nombre existe pero su VLAN no se pudo leer: vale por nombre, con constancia
             nota = "VLAN del portgroup ilegible en el inventario del host; VLAN no verificada"
             if job:
-                job.detalle("portgroup '%s' %s" % (deseado, nota))
-            return deseado, nota
+                job.detalle("portgroup '%s' %s" % (hit, nota))
+            return hit, nota
         if vlan is not None and v_host != vlan:
             raise RuntimeError("el portgroup '%s' del host %s está en la VLAN %s pero la red %s "
                                "de la marca es la VLAN %s — corregir el portgroup en el ESXi "
-                               "antes de crear" % (deseado, h["id"], v_host, red["subred"], etiqueta))
-        return deseado, ""
+                               "antes de crear" % (hit, h["id"], v_host, red["subred"], etiqueta))
+        return hit, ""
     inventario = ", ".join("%s (VLAN %s)" % (n, "?" if v is None else v) for n, v in pgs)
     if vlan:
         cand = [n for n, v in pgs if v == vlan]
@@ -1804,7 +1833,7 @@ def entregar_root_password(res, root_password, auto, aplicada):
 
 def flujo_crear(job, marca, sabor_slug, cliente, hostname, instalar_cpanel, modo,
                 pubkey_cliente=None, root_password=None, whmcs_serviceid=None,
-                sabor_def=None, host=None, so=None, root_password_auto=False):
+                sabor_def=None, host=None, so=None, root_password_auto=False, uso="cliente"):
     nombre = job.vm
 
     # TODO lo previo a tocar el ESXi va dentro del bloque que COMPENSA: si algo falla aquí la
@@ -1840,10 +1869,11 @@ def flujo_crear(job, marca, sabor_slug, cliente, hostname, instalar_cpanel, modo
         if not reg or reg.get("estado") != "creando":
             raise RuntimeError("reserva de %s no encontrada o en estado inesperado" % nombre)
         set_estado(nombre, "creando", so=so)   # deja registrado el SO desde el inicio
-        job.detalle("%s · %s (%d vCPU / %d MB / %d GB) · %s · modo %s · host %s · %s: red %s%s"
+        job.detalle("%s · %s (%d vCPU / %d MB / %d GB) · %s · modo %s · host %s · %s: red %s%s%s"
                     % (nombre, sabor["nombre_web"], sabor["vcpu"], sabor["ram_mb"],
                        sabor["disco_gb"], so_info["nombre"], modo, h["id"], marca_cfg["nombre"],
-                       red["subred"], (" (VLAN %s)" % red["vlan"]) if red.get("vlan") else ""))
+                       red["subred"], (" (VLAN %s)" % red["vlan"]) if red.get("vlan") else "",
+                       (" · USO PERSONAL de %s (sin IP pública)" % job.actor) if uso == "personal" else ""))
 
         # 2. IP privada libre — RouterData en producción, barrido local en pruebas.
         #    Bajo IP_PRIV_LOCK: elegir y GRABAR es atómico entre jobs (ambos flujos
@@ -2031,7 +2061,16 @@ def flujo_crear(job, marca, sabor_slug, cliente, hostname, instalar_cpanel, modo
     # 12. IP pública + NAT 1:1 (solo producción)
     job.paso()
     publica = pub_lista = None
-    if modo == "produccion":
+    if modo == "produccion" and uso == "personal":
+        # USO PERSONAL: red interna, SIN IP pública ni NAT. Solo la privada va a NetBox (best effort).
+        desc_base = "%s - VPS uso personal de %s (%s)" % (fqdn, job.actor, nombre)
+        nb_priv = netbox_ip_add(ip + "/24", fqdn, desc_base + " · red interna, sin IP pública · alta vps-engine")
+        if nb_priv:
+            with DB_LOCK, db() as c:
+                c.execute("UPDATE vms SET nb_priv_id=? WHERE nombre=?", (nb_priv, nombre))
+        job.detalle("uso personal: sin IP pública ni NAT (red interna %s) · NetBox: %s"
+                    % (red["subred"], "IP privada registrada" if nb_priv else "no disponible — registrar a mano"))
+    elif modo == "produccion":
         pub_lista = marca_cfg.get("pub_lista", "Red107-0")
         rango = red.get("publica_rango_prueba")   # [lo, hi] para restringir en pruebas de prod
         # Bajo IP_PUB_LOCK: elegir pública + crear NAT + grabar es atómico entre jobs
@@ -2197,6 +2236,15 @@ def flujo_suspender(job):
     if vm["estado"] == "suspendido":
         job.ok("VPS %s ya estaba suspendido" % job.vm)
         return
+    if (vm.get("uso") or "cliente") == "personal":
+        # USO PERSONAL: no hay IP pública que bloquear → se APAGA la VM (graceful, forzado a los 60 s)
+        h = host_de_vm(job.vm)
+        job.paso("VM %s validada (uso personal de %s) — se apaga" % (job.vm, vm.get("propietario")))
+        apagar_graceful(job, job.vm, host=h)
+        job.paso("VM apagada")
+        set_estado(job.vm, "suspendido")
+        job.ok("VPS %s SUSPENDIDO — VM apagada (datos intactos); 'reanudar' la enciende" % job.vm)
+        return
     if not (vm.get("publica") and vm.get("pub_lista")):
         raise RuntimeError("el VPS no tiene IP pública registrada — no se puede suspender por address-list")
     job.paso("VM %s validada (estado %s) — no se apaga, sigue corriendo" % (job.vm, vm["estado"]))  # → bloquear
@@ -2212,6 +2260,18 @@ def flujo_reanudar(job):
     job.paso()  # "Validar guardarraíles"
     if vm["estado"] != "suspendido":
         job.ok("VPS %s no estaba suspendido (estado %s) — nada que reanudar" % (job.vm, vm["estado"]))
+        return
+    if (vm.get("uso") or "cliente") == "personal":
+        h = host_de_vm(job.vm)
+        job.paso("VM %s validada (uso personal) — se enciende" % job.vm)
+        try:
+            govc("vm.power", "-on", job.vm, host=h)
+        except RuntimeError as e:
+            if "already" not in str(e).lower():
+                raise
+        job.paso("VM encendida")
+        set_estado(job.vm, "activo")
+        job.ok("VPS %s REANUDADO — VM encendida" % job.vm)
         return
     if not (vm.get("publica") and vm.get("pub_lista")):
         raise RuntimeError("el VPS no tiene IP pública registrada")
@@ -2952,10 +3012,11 @@ def health():
     # marcas: solo las ACTIVAS (las que el dashboard ofrece para crear); el detalle lleva lo
     # que el operador necesita ver al elegir (redes, VLAN, lista pública, prefijo, nº de planes)
     marcas_det = []
-    for mid in marcas_activas():
+    for mid in marcas_activas() + ([MARCA_INTERNA] if MARCA_INTERNA else []):
         m = MARCAS[mid]
         rd, rp = m["red_default"], m["red_pruebas"]
         marcas_det.append({"marca": mid, "nombre": m["nombre"], "prefijo_vm": m["prefijo_vm"],
+                           "uso": m.get("uso", "cliente"),
                            "dominio": m["dominio_hostname"], "pub_lista": m.get("pub_lista"),
                            "sabores_de": m.get("sabores_de"),
                            "pub_red": PUB_REDES.get(m.get("pub_lista")),
@@ -2999,6 +3060,26 @@ def crear():
         modo = WHMCS_MODO
     if modo not in ("pruebas", "produccion"):
         return jsonify({"error": "modo inválido (pruebas | produccion)"}), 400
+    # USO PERSONAL vs CLIENTE (Alcadio 2026-10-23). Personal = VPS interno de un usuario del NOC:
+    # solo desde el dashboard (rol admin) con usuario identificado; va SIEMPRE a la red interna
+    # (MARCA_INTERNA), sin IP pública ni NAT ni WHMCS; solo su dueño lo ve y lo opera.
+    uso = d.get("uso", "cliente")
+    if uso not in ("cliente", "personal"):
+        return jsonify({"error": "uso inválido (cliente | personal)"}), 400
+    propietario = None
+    if uso == "personal":
+        if rol != "admin":
+            return jsonify({"error": "el uso personal es solo para el NOC (dashboard)"}), 403
+        if not MARCA_INTERNA:
+            return jsonify({"error": "no hay red interna configurada (marcas/*.json con uso=interno)"}), 409
+        if actor in ("dashboard", "api") or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._@-]{1,40}", actor):
+            return jsonify({"error": "el uso personal requiere un usuario del dashboard identificado"}), 400
+        if d.get("whmcs_serviceid"):
+            return jsonify({"error": "un VPS de uso personal no se asocia a un servicio de WHMCS"}), 400
+        marca, propietario = MARCA_INTERNA, actor
+        cliente = (cliente or actor)[:40]
+    elif MARCA_INTERNA and marca == MARCA_INTERNA:
+        return jsonify({"error": "la red interna (%s) es solo para VPS de uso personal" % marca}), 400
     if marca not in MARCAS:
         return jsonify({"error": "marca desconocida: %s" % marca}), 400
     if not MARCAS[marca].get("activo", True):
@@ -3135,12 +3216,14 @@ def crear():
         # y pasaría el gate, lanzando un eliminar sobre una VM a medio nacer
         with JOB_GATE_LOCK:
             nombre = reservar_vm(marca, MARCAS[marca], sabor, sabor_def,
-                                 cliente, hostname, whmcs_serviceid, host=host_sel)
-            job = Job("crear", nombre, actor, PASOS_CREAR, motor=motor_job)
+                                 cliente, hostname, whmcs_serviceid, host=host_sel,
+                                 uso=uso, propietario=propietario)
+            job = Job("crear", nombre, actor, PASOS_CREAR, motor=motor_job,
+                      uso=uso, propietario=propietario)
         run_job(job, lambda j: flujo_crear(j, marca, sabor, cliente, hostname, cpanel, modo,
                                            pubkey_cliente or None, root_password, whmcs_serviceid,
                                            sabor_def=sabor_def, host=host_sel, so=so_efectivo,
-                                           root_password_auto=root_password_auto))
+                                           root_password_auto=root_password_auto, uso=uso))
     except Exception as e:
         # cupo excedido: rechazo LIMPIO con el motivo (no es un error interno)
         if "cupo del" in str(e) and "excedido" in str(e):
@@ -3158,6 +3241,19 @@ def crear():
     return jsonify({"ok": True, "job_id": job.id, "vm": nombre, "modo": modo,
                     "byo": bool(pubkey_cliente)})
 
+def _visible_para(row, usuario, total):
+    """Un VPS/job de uso PERSONAL solo lo ve su dueño (o quien ve TODO: superadmin del
+    dashboard, total=1). Todo lo demás lo ve cualquiera con acceso a la sección."""
+    if (row.get("uso") or "cliente") != "personal" or total:
+        return True
+    return bool(usuario) and row.get("propietario") == usuario
+
+def _vista_args():
+    """Quién mira (usuario del dashboard, lo manda el proxy) y si ve todo."""
+    usuario = (request.args.get("usuario") or "").strip()[:60]
+    total = request.args.get("total") in ("1", "true")
+    return usuario, total
+
 @app.route("/job/<jid>")
 def job_get(jid):
     rol = auth()
@@ -3168,6 +3264,9 @@ def job_get(jid):
     if not row:
         return jsonify({"error": "job no existe"}), 404
     d = dict(row)
+    usuario, total = _vista_args()
+    if not _visible_para(d, usuario, total):
+        return jsonify({"error": "job de un VPS de uso personal de otro usuario"}), 403
     d["pasos"] = json.loads(d["pasos"])
     if rol != "admin":
         # el resultado puede traer credenciales de entrega (link+clave del Send) —
@@ -3199,12 +3298,15 @@ def jobs_list():
     if rol != "admin":
         return jsonify({"error": ERR_SOLO_ADMIN}), 403
     with DB_LOCK, db() as c:
-        rows = c.execute("SELECT id,tipo,vm,estado,error,motor,created_at,updated_at "
+        rows = c.execute("SELECT id,tipo,vm,estado,error,motor,created_at,updated_at,uso,propietario "
                          "FROM jobs ORDER BY created_at DESC LIMIT 60").fetchall()
+    usuario, total = _vista_args()
     # motor NULL (jobs previos a la separación) → se infiere por tipo para el agrupado
     out = []
     for r in rows:
         d = dict(r)
+        if not _visible_para(d, usuario, total):
+            continue
         d["motor"] = d.get("motor") or _motor_por_defecto(d["tipo"])
         out.append(d)
     return jsonify({"jobs": out})
@@ -3220,7 +3322,10 @@ def vms_list():
         rows = [dict(r) for r in c.execute(
             "SELECT * FROM vms WHERE estado != 'papelera' ORDER BY nombre").fetchall()]
         papelera = [dict(r) for r in c.execute(
-            "SELECT nombre,papelera_entrada,updated_at FROM vms WHERE estado='papelera'").fetchall()]
+            "SELECT nombre,papelera_entrada,updated_at,uso,propietario FROM vms WHERE estado='papelera'").fetchall()]
+    usuario, total = _vista_args()
+    rows = [r for r in rows if _visible_para(r, usuario, total)]
+    papelera = [r for r in papelera if _visible_para(r, usuario, total)]
     hcache = {h["id"]: h for h in hosts_lista()}
     for r in rows:
         _h = hcache.get(r.get("host"))
@@ -3228,6 +3333,21 @@ def vms_list():
         # power del host equivocado); se marca "?" (solo lectura, no destructivo)
         r["power"] = power_state(r["nombre"], host=_h) if _h else "?"
     return jsonify({"vms": rows, "papelera": papelera})
+
+# VPS de uso PERSONAL (sin IP pública): suspender = apagar, reanudar = encender
+ACCIONES_PERSONAL_PASOS = {
+    "suspender": ["Validar guardarraíles", "Apagar la VM (uso personal, sin IP pública)", "Marcar suspendido"],
+    "reanudar": ["Validar guardarraíles", "Encender la VM", "Marcar activo"]}
+
+def _solo_dueno(reg, rol, actor, admin_total):
+    """Un VPS de uso personal solo lo opera su dueño, o un superadmin (admin_total, lo
+    afirma el proxy del dashboard). Devuelve el error JSON o None."""
+    if (reg.get("uso") or "cliente") != "personal":
+        return None
+    if rol == "admin" and (bool(admin_total) or reg.get("propietario") == actor):
+        return None
+    return jsonify({"error": "VPS de uso personal de %s — solo su dueño (o un superadmin) puede operarlo"
+                    % reg.get("propietario")}), 403
 
 ACCIONES = {"suspender": (flujo_suspender, ["Validar guardarraíles", "Bloquear IP pública (address-list)", "Marcar suspendido"]),
             "reanudar": (flujo_reanudar, ["Validar guardarraíles", "Desbloquear IP pública", "Marcar activo"]),
@@ -3310,15 +3430,21 @@ def accion():
         sugerencia = " — reintenta 'eliminar'" if reg.get("estado") == "eliminando" else ""
         return jsonify({"error": "la VM %s está '%s': la acción '%s' no aplica%s"
                         % (vm, reg.get("estado"), acc, sugerencia)}), 409
+    err_dueno = _solo_dueno(reg, rol, actor, d.get("admin_total"))
+    if err_dueno:
+        return err_dueno
     # eliminar exige confirmación = nombre de la VM (o el serviceid si se identificó por él)
     if acc == "eliminar":
         conf = d.get("confirmacion")
         if not (conf == vm or (por_sid and conf == serviceid)):
             return jsonify({"error": "confirmación requerida: reescribe el nombre exacto de la VM"}), 400
     fn, pasos = ACCIONES[acc]
+    if (reg.get("uso") or "cliente") == "personal" and acc in ACCIONES_PERSONAL_PASOS:
+        pasos = ACCIONES_PERSONAL_PASOS[acc]
     # motor del job según el origen (clientes = WHMCS, admin = NOC)
     job, activo = lanzar_job_exclusivo(acc, vm, actor, pasos,
-                                       motor="clientes" if rol == "whmcs" else "admin")
+                                       motor="clientes" if rol == "whmcs" else "admin",
+                                       uso=reg.get("uso"), propietario=reg.get("propietario"))
     if not job:
         return jsonify({"error": "la VM %s tiene un job en curso (%s, id %s) — reintenta cuando termine"
                         % (vm, activo["tipo"], activo["id"])}), 409
@@ -3356,6 +3482,9 @@ def editar():
         reg = guardarraices(vm)
     except RuntimeError as e:
         return jsonify({"error": str(e)}), 400
+    err_dueno = _solo_dueno(reg, rol, actor, d.get("admin_total"))
+    if err_dueno:
+        return err_dueno
     # #17: editar solo sobre VMs operativas, y solo hacia sabores activos del catálogo
     if reg.get("estado") not in ("activo", "suspendido"):
         return jsonify({"error": "la VM %s está '%s': no admite cambio de plan" % (vm, reg.get("estado"))}), 409
@@ -3370,6 +3499,10 @@ def editar():
     if not job:
         return jsonify({"error": "la VM %s tiene un job en curso (%s, id %s) — reintenta cuando termine"
                         % (vm, activo["tipo"], activo["id"])}), 409
+    if (reg.get("uso") or "cliente") == "personal":
+        with DB_LOCK, db() as c:   # el job de edición hereda el dueño (visibilidad en Jobs)
+            c.execute("UPDATE jobs SET uso=?, propietario=? WHERE id=?",
+                      (reg.get("uso"), reg.get("propietario"), job.id))
     err = lanzar_o_fallar(job, lambda j: flujo_editar(j, sabor))
     if err:
         return err

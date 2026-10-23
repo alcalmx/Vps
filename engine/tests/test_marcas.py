@@ -39,7 +39,7 @@ ESPERADAS = {"hosting.cl": ("vps-hcl", "10.100.16.0/24", 81),
              "unohosting.pe": ("vps-uhpe", "10.100.24.0/24", 85),      # red COMPARTIDA (RouterData:
              "hosting.pe": ("vps-hpe", "10.100.24.0/24", 85),          # "Inkahosting.pe unohosting.pe, Hosting.pe")
              "hostingcenter.cl": ("vps-hccl", "10.100.26.0/24", 86)}
-assert set(motor.MARCAS) == set(ESPERADAS), sorted(motor.MARCAS)
+assert set(motor.MARCAS) == set(ESPERADAS) | {"interno"}, sorted(motor.MARCAS)   # 'interno' = red de uso personal
 assert "_pruebas" not in motor.MARCAS and "_pruebas.json" not in motor.MARCAS
 for mid, (pref, subred, vlan) in ESPERADAS.items():
     m = motor.MARCAS[mid]
@@ -167,7 +167,7 @@ print("ok - cada marca numera con su propio prefijo")
 h = cli.get("/health", headers=ADMIN).get_json()
 assert h["marcas"] == sorted(ESPERADAS)
 det = {d["marca"]: d for d in h["marcas_detalle"]}
-assert set(det) == set(ESPERADAS)
+assert set(det) == set(ESPERADAS) | {"interno"}, "la red interna va en el detalle (con uso=interno), no en marcas"
 p = det["planetahosting.cl"]
 assert p["nombre"] == "PlanetaHosting.cl" and p["prefijo_vm"] == "vps-phcl" and p["dominio"] == "planetahosting.cl"
 assert p["red_default"] == {"subred": "10.100.18.0/24", "gateway": "10.100.18.1", "vlan": 82,
