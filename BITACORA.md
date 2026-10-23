@@ -5,6 +5,33 @@
 
 ---
 
+## ⏯️ PARA RETOMAR (estado al cierre del 2026-10-23)
+
+**En producción hoy (todo con Codex y 21 suites verdes):** motor y dashboard creando VPS de **8 marcas** (hosting.cl,
+planetahosting.cl/.pe/.com.co, inkahosting.pe, unohosting.pe, hosting.pe, hostingcenter.cl) con los planes de hosting.cl
+heredados (`sabores_de`); **uso personal vs cliente** (red interna `Sistemas internos` 10.100.36.0/24, dueño, visibilidad solo
+para él y el superadmin); **selector de red pública** (Red57-0, Red104-0 … Red107-0); asignador de IP privada que salta IPs con
+reglas de firewall o address-lists del router; **llaves del equipo** (tildes solo en uso personal; tildar = no se genera llave).
+Primer VPS personal: `vps-int-0001-alcadio` (10.100.36.253 ↔ 38.19.57.102, llave YubiKey).
+
+**Cómo desplegar:** motor = copiar `engine/app.py`, `engine/Containerfile`, `marcas/`, `sabores/`, `equipo/` y
+`noc-monitor/desplegar-motor.sh` a `/tmp/vps-marcas/` de noc-monitor y `bash desplegar-motor.sh <sufijo>`; dashboard =
+`fastnetmon/containers/dashboard/deploy_dashboard.sh <archivo> <sufijo>` (parches `patch_vps_*` en esa carpeta, en orden:
+marcas v1/v2 → uso_personal v1/v2/v3 → pub_lista v1 → llaves_equipo v1/v2). Siempre con OK de Alcadio.
+
+**Pendientes de Alcadio:**
+1. Llave pública de **Jonatan** (no existe en ningún servidor) → agregarla a `equipo/llaves.json` y desplegar el motor.
+2. Confirmar si las **dos llaves de Fabián** (de esxi-20039) siguen vigentes.
+3. Borrar las reglas **45/46** de RouterData (huérfanas para 10.100.36.253; la 46 ya la deshabilitó).
+4. Portgroups de las VLAN **82–86** en esxi-20051 cuando quiera VPS de esas marcas (el troncal de vmnic1 ya las lleva;
+   Claude puede crearlos por SSH como hizo con `Sistemas_Internos`).
+5. **Go-live por marca**: pasar `pub_lista` a la lista real y quitar `publica_rango_prueba` (hoy todas en Red57-0 .100-.102,
+   aunque el selector ya permite elegir otra lista con su pool completo).
+6. Planes propios por marca cuando los tenga (JSON en `sabores/<marca>/` y quitar `sabores_de`).
+
+**Frentes técnicos que siguen abiertos (de antes):** clave de root de WHM en staging con cPanel, dorada Ubuntu en otros hosts,
+multi-datastore Incremento 2, licencia cPanel automática, opción de SO en el módulo WHMCS.
+
 ## 2026-10-23 (viernes, 17:33–17:36) — 🔑 Llaves del equipo SOLO para VPS de uso personal — EN PRODUCCIÓN
 
 Alcadio, viendo el formulario: *"no le escribas eso de modo prueba, solo deja los tildes. Si yo tildo una es porque no
@@ -555,7 +582,7 @@ creación. Nota esperada: `vms.datastore` queda NULL — poblarlo es parte del I
 creación usa siempre el datastore primario del host. Además, la creación en un host **pausado**
 funcionó como estaba diseñado (pausado = solo frena al motor de clientes, no al admin).
 
-## ⏯️ PARA RETOMAR (seguimos el 2026-10-02)
+## ⏯️ (histórico) PARA RETOMAR del 2026-10-01
 
 Todo lo de hoy quedó **desplegado, commiteado y pusheado** (`d87dcfa`). El motor y el dashboard
 en noc-monitor corren la última versión; 18 suites verdes, ahora persistidas en `engine/tests/`.
