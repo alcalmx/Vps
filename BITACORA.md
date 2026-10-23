@@ -5,6 +5,25 @@
 
 ---
 
+## 2026-10-23 (viernes, 16:16–16:30) — 🏁 PRIMER VPS DE USO PERSONAL CREADO: `vps-int-0001-alcadio` (15/15) + lección del asignador de IP
+
+Alcadio lo lanzó desde el dashboard (job `4be7096cb752`, actor alcadio, uso personal, Cyber Black, AlmaLinux 9, sin cPanel,
+llave BYO de su YubiKey, esxi-20051). Pasos 1-10 en verde en ~3 min: IP privada **10.100.36.253**, portgroup
+`Sistemas_Internos` resuelto por nombre, clon, disco 153 GB, cloud-init, encendido, Tools con la IP estática.
+**Se trabó en el paso 11 (SSH):** la VM estaba bien (ping 1 ms desde noc-monitor, Tools con 10.100.36.253, ARP en
+RouterData) pero tcp/22 filtrado. Causa: **RouterData tenía dos reglas de firewall viejas para esa IP** (45: accept tcp
+22,2420 a 10.100.36.253 solo desde `Ip_Autorizadas_Ansible`, comentario "Acceso Autorizado Server Compartidos
+PlanetaHosting"; 46: drop tcp 22,2420 a 10.100.36.253) — restos de un servidor compartido antiguo. El asignador eligió
+.253 porque no estaba en NAT ni en ARP (es la primera "libre" bajando desde .254 = Nextcloud). El motor reinició la VM
+una vez (auto-reinicio del primer boot) sin efecto. **Alcadio deshabilitó la regla 46** → tcp/22 abierto al instante →
+el job siguió: pública **38.19.57.102** ↔ 10.100.36.253 (NAT 1:1 + NetBox), llave BYO instalada
+(SHA256:GEHyGvIX…), **15/15 ok** (~14 min en total por la espera). Acceso: `ssh root@38.19.57.102` con la YubiKey.
+Pendiente de Alcadio: borrar las reglas 45/46 (huérfanas).
+**Lección → cambio en el motor (commit `61c3976`):** `ip_libre_produccion` ahora cuenta como OCUPADA toda IP de la subred
+que aparezca en `/ip firewall filter`, `/ip firewall raw` o en una address-list de RouterData (`_octs_reglas`,
+conservador: src, dst o comentario). Best effort: si una consulta falla, avisa en el paso y sigue con NAT+ARP+registro.
+Pruebas en `test_marcas.py`. 20 suites verdes. Codex: en revisión; DEPLOY pendiente de OK.
+
 ## 2026-10-23 (viernes, ~15:10) — 🔌 Portgroup `Sistemas_Internos` creado en esxi-20051 (red 10.100.36.0/24 verificada)
 
 Alcadio: *"dale créala tú y así no tengo que entrar"*. Con la llave de diagnóstico (`claude_esxi_20051_rsa`):
