@@ -5,7 +5,24 @@
 
 ---
 
-## 2026-10-23 (viernes) — 🏷️ MULTI-MARCA: crear VPS de CUALQUIER marca desde el dashboard — APROBADO por Codex (3 rondas), PENDIENTE DE DEPLOY (esperando OK)
+## 2026-10-23 (viernes) — 🏷️ MULTI-MARCA: crear VPS de CUALQUIER marca desde el dashboard — EN PRODUCCIÓN 12:26 (motor) y 12:30 (dashboard), APROBADO por Codex (4 rondas)
+
+**CIERRE (12:30):** Alcadio respondió: (1) *"Ok despliega"*, (2) prefijos *"estoy conforme"*, (3) *"los planes para todas las
+marcas siguen siendo los mismos que de hosting mientras tanto"*, (4) *"las VLAN yo las creo después"*. Por (3) se agregó
+**`sabores_de`**: cada marca nueva declara `"sabores_de": "hosting.cl"` y `heredar_sabores()` clona sus planes (copias con
+`marca` cambiada y `heredado_de`; reglas fail-fast: origen existente con planes propios, no en cadena, no junto a planes
+propios). Codex ronda 4: APROBADO con una observación menor (doble escape en el texto del dashboard, corregida) y una
+prueba sugerida (copias independientes, agregada). Commits `1436937` y `cd714ae`.
+**Desplegado:** motor con `desplegar_motor_marcas.sh` (respaldo `/opt/vps-engine/build.bak-marcas-20261023-1226.tgz` +
+`app.py.bak-marcas-20261023-1226`; imagen 1a1c7fcdb414; health 200 en 2 s; 0 tracebacks). `/health` en producción: **8 marcas,
+24 planes** (3 por marca, las 7 nuevas "de hosting.cl"), modo pruebas. Dashboard con `deploy_dashboard.sh … vpsmarcas`
+(respaldo `dashboard.py.bak.20261023-vpsmarcas`, md5 df007b0c…, imagen v2 98b5adb9d965, 200 en 2 s, DEPLOY OK); repo
+fastnetmon sincronizado y commiteado. Nota del guion del motor: el paso final de verificación falló al hacer `source` de
+`engine.env` (MGMT_PUBKEY lleva espacios sin comillas) — se verificó a mano leyendo `ENGINE_TOKEN` con grep; para la
+próxima, leer el token así y no con `source`.
+**Queda para Alcadio:** probar el formulario (marca → red y planes), crear los portgroups VLAN 83/84/86 en los hosts
+antes del primer VPS de esas marcas, y el go-live por marca (Red57-0 rango .100-.102 → Red107-0).
+
 
 Pedido de Alcadio: *"Trabajemos solo en el noc monitor y la creación de vps desde el dashboard. Debo
 terminar esta parte y masificarla para poder crear vps de cualquier marca"* → *"en lo inmediato que
@@ -78,7 +95,7 @@ stubs** hasta `vm.register` verificando que el VMX lleva `ethernet0.networkName 
 para planetahosting.cl en producción sobre un host tipo 20039, y asignador real con dos marcas en
 10.100.24.0/24). **19 suites verdes.** Commits `bed4000` y `7b479b7`, pusheados.
 
-**Estado: PENDIENTE DE DEPLOY** (CLAUDE.md: deploys a noc-monitor con OK explícito). Preparado:
+**Estado al momento de escribir esto (antes del OK): PENDIENTE DE DEPLOY.** Preparado:
 `/tmp/vps-marcas/` en noc-monitor (app.py md5 2e1e86a3…, marcas/, sabores/, `desplegar_motor_marcas.sh`:
 respaldo tgz del build + copia + build + restart + /health con las marcas) y `/tmp/dashboard.py.vpsmarcas`
 (md5 2246d278…, igual al repo) para `deploy_dashboard.sh … vpsmarcas`.
