@@ -224,6 +224,13 @@ El mapeo marca → red VPS es el mismo que usa **Alta de Servicios** del dashboa
   Una marca sin `red_pruebas` propia la hereda; así la red de staging se cambia en un solo lugar.
 - **IP pública:** mientras dure el staging todas usan `Red57-0` con `publica_rango_prueba`
   [100,102] (38.19.57.100-102). Go-live de una marca = `pub_lista: "Red107-0"` y quitar el rango.
+- **Selector de red pública (2026-10-23):** en Crear VPS el NOC puede elegir de qué address-list sale
+  la IP pública (`pub_lista` en `/crear`; las opciones las da `/health.redes_publicas` = `PUB_REDES`).
+  Por defecto la de la marca con su rango de prueba; otra lista = pool completo (IP más alta libre).
+  Solo en producción y solo rol admin (WHMCS usa la de la marca).
+- **Asignador de IP privada (2026-10-23):** además de NAT, ARP vivo y registro, cuentan como ocupadas
+  las IP de la subred que aparezcan en reglas de firewall (filter/raw) o address-lists de RouterData
+  (una VM nueva heredaría reglas viejas: pasó con 10.100.36.253). Si esas consultas fallan, avisa y sigue.
 - **Portgroup del host:** cada ESXi rotula sus portgroups a su manera (esxi-245/20051:
   `Vps_Hosting.cl`; esxi-20039: `vps_Hosting.cl`, `vps_PlanetahostingCL`, `vps_inkape`). El
   motor busca primero el nombre de la config y, si no existe, el portgroup del host cuya **VLAN**
