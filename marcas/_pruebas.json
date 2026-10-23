@@ -1,0 +1,15 @@
+{
+  "_comentario": "NO es una marca (los archivos que empiezan con '_' se saltan). Red de PRUEBAS común a todas las marcas para el modo 'pruebas' (sin IP pública ni NAT): la heredan las marcas que no traen 'red_pruebas' propia. Un solo lugar para cambiar la red de staging.",
+  "red_pruebas": {
+    "subred": "192.168.200.0/24",
+    "gateway": "192.168.200.1",
+    "mascara": "255.255.255.0",
+    "dns": [
+      "1.1.1.1",
+      "8.8.8.8"
+    ],
+    "portgroup": "VM Network",
+    "vlan": 0,
+    "nota": "vlan 0 = sin etiqueta: si alguien pusiera 'VM Network' en otra VLAN, el motor se niega a crear (la VM nacería en otra red). Desde 2026-09-29: pruebas en el host esxi-20051 (192.168.200.51), portgroup 'VM Network' de su vSwitch0 (única red del host; el ESXi es .51 y el gw .1 — el barrido ping los detecta ocupados). noc-monitor alcanza esta red (ruta abierta 28-09). Sin IP pública/NAT en pruebas. ANTERIOR (esxi-245, por si se reactiva para pruebas): subred 192.168.122.0/24 gw .1, portgroup 'Switch Interno 1 Data ethr6'."
+  }
+}

@@ -1,6 +1,6 @@
 # Suites de regresión del motor
 
-18 suites de aserciones puras (sin pytest: cada archivo se ejecuta y revienta en el primer
+19 suites de aserciones puras (sin pytest: cada archivo se ejecuta y revienta en el primer
 `assert` que falle). Importan `engine/app.py` con un `DB_PATH` temporal y tokens de prueba,
 así que **no tocan el ESXi ni la base real** — los puntos que saldrían a la red están
 stubbeados en cada suite.

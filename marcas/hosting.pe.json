@@ -1,0 +1,27 @@
+{
+  "marca": "hosting.pe",
+  "nombre": "Hosting.pe",
+  "prefijo_vm": "vps-hpe",
+  "activo": true,
+  "pub_lista": "Red57-0",
+  "_pub_lista_nota": "Igual que hosting.cl mientras dure el staging: la IP pública sale del rango de PRUEBAS 38.19.57.100-102 (publica_rango_prueba). Go-live real de la marca = pub_lista 'Red107-0' (201.148.107, su lista en Alta de Servicios del NOC) y quitar publica_rango_prueba.",
+  "red_default": {
+    "subred": "10.100.24.0/24",
+    "gateway": "10.100.24.1",
+    "mascara": "255.255.255.0",
+    "dns": [
+      "1.1.1.1",
+      "8.8.8.8"
+    ],
+    "portgroup": "Vps_Inkahosting.pe",
+    "vlan": 85,
+    "publica_rango_prueba": [
+      100,
+      102
+    ],
+    "nota": "Red de PRODUCCIÓN de los VPS de Hosting.pe: VLAN 85, 10.100.24.0/24, COMPARTIDA por Inkahosting.pe, unohosting.pe y Hosting.pe (corrección de Alcadio 2026-10-23; interfaz vlan_85_VPS_Inkahosting.pe en RouterData, gateway 10.100.24.1 verificado). La IP libre se elige por red (NAT+ARP de RouterData + registro), así que compartirla no pisa IPs. El motor busca el portgroup del host por nombre y, si no existe con ese nombre, por VLAN (esxi-20039 lo llama 'vps_inkape')."
+  },
+  "_red_pruebas_nota": "Hereda la red de pruebas común de marcas/_pruebas.json.",
+  "dominio_hostname": "hosting.pe",
+  "nota": "Alta 2026-10-23 (multi-marca; comparte la red de Inkahosting.pe). Sabores PENDIENTES de dictar en sabores/hosting.pe/: hasta entonces solo se ofrece el plan Personalizado."
+}

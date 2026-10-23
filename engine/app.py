@@ -171,18 +171,124 @@ def _load_json(path):
     with open(path, encoding="utf-8") as fh:
         return json.load(fh)
 
-MARCAS = {}
+# Prefijo de VM por marca: el wrapper del ESXi solo acepta nombres `vps-[a-z]+-[0-9a-z-]+`
+# (esxi/vps-wrapper.sh) → el prefijo es `vps-` + letras (vps-hcl, vps-phcl, …).
+PREFIJO_VM_RE = re.compile(r"^vps-[a-z]{2,8}$")
+MARCA_ID_RE = re.compile(r"^[a-z0-9][a-z0-9.-]{1,40}$")
+
+def validar_marcas(marcas):
+    """Fail-fast al arrancar (como la guarda de SISTEMAS): una marca mal escrita no se
+    descubre a mitad de una creación. Exige los campos que usa el flujo; que la red de
+    producción sea una /24 IPv4 (ip_libre_produccion y el NAT razonan por último octeto)
+    con el gateway dentro y una VLAN (es lo que identifica la red en cada host); que la
+    lista pública exista en PUB_REDES; y que el prefijo no se repita entre marcas (mismo
+    prefijo = numeración mezclada). Varias marcas SÍ pueden compartir una red (VLAN 85 la usan
+    Inkahosting.pe, unohosting.pe y Hosting.pe): la IP libre se elige por red (NAT+ARP de
+    RouterData + registro), no por marca."""
+    vistos_pref = {}
+    for mid, m in sorted(marcas.items()):
+        def falla(msg, mid=mid):
+            raise RuntimeError("marcas/%s.json inválido: %s" % (mid, msg))
+        if not isinstance(mid, str) or not MARCA_ID_RE.fullmatch(mid) or m.get("marca") != mid:
+            falla("'marca' debe ser el identificador en minúsculas y coincidir con la clave")
+        for campo in ("nombre", "prefijo_vm", "dominio_hostname"):
+            if not isinstance(m.get(campo), str) or not m[campo].strip():
+                falla("falta el campo '%s'" % campo)
+        if not isinstance(m.get("activo", True), bool):
+            falla("'activo' debe ser true/false")
+        pref = m["prefijo_vm"]
+        if not PREFIJO_VM_RE.fullmatch(pref):
+            falla("prefijo_vm %r no cumple 'vps-<letras>' (lo exige el wrapper del ESXi)" % pref)
+        if pref in vistos_pref:
+            falla("prefijo_vm %r repetido con la marca %s" % (pref, vistos_pref[pref]))
+        vistos_pref[pref] = mid
+        for clave, exige_vlan in (("red_default", True), ("red_pruebas", False)):
+            red = m.get(clave)
+            if not isinstance(red, dict):
+                falla("falta '%s' (la de pruebas puede heredarse de marcas/_pruebas.json)" % clave)
+            for campo in ("subred", "gateway", "portgroup"):
+                if not isinstance(red.get(campo), str) or not red[campo].strip():
+                    falla("%s: falta '%s'" % (clave, campo))
+            try:
+                net = ipaddress.ip_network(red["subred"], strict=True)
+                gw = ipaddress.ip_address(red["gateway"])
+            except ValueError as e:
+                falla("%s: subred/gateway inválidos (%s)" % (clave, e))
+            if net.version != 4 or net.prefixlen != 24:
+                falla("%s: la subred debe ser una /24 IPv4 (%s)" % (clave, red["subred"]))
+            if gw not in net:
+                falla("%s: el gateway %s no pertenece a %s" % (clave, gw, net))
+            if gw in (net.network_address, net.broadcast_address):
+                falla("%s: el gateway %s es la dirección de red o de broadcast de %s" % (clave, gw, net))
+            dns = red.get("dns")
+            if not isinstance(dns, list) or not dns or not all(isinstance(x, str) for x in dns):
+                falla("%s: 'dns' debe ser una lista de IPs" % clave)
+            for x in dns:
+                try:
+                    if ipaddress.ip_address(x).version != 4:
+                        raise ValueError("no es IPv4")
+                except ValueError:
+                    falla("%s: dns %r no es una IPv4 válida" % (clave, x))
+            # vlan: None = no declarada (solo se valida el nombre del portgroup); 0 = sin etiqueta
+            # (el portgroup del host debe estar en VLAN 0); 1-4094 = etiquetada. La red de
+            # producción EXIGE etiqueta (es lo que identifica la red en cada host).
+            vlan = red.get("vlan")
+            minimo = 1 if exige_vlan else 0
+            if vlan is not None or exige_vlan:
+                if isinstance(vlan, bool) or not isinstance(vlan, int) or not minimo <= vlan <= 4094:
+                    falla("%s: 'vlan' debe ser un entero %d-4094 (identifica la red en el host; "
+                          "0 = sin etiqueta)" % (clave, minimo))
+            rango = red.get("publica_rango_prueba")
+            if rango is not None and not (isinstance(rango, list) and len(rango) == 2
+                                          and all(isinstance(x, int) and not isinstance(x, bool)
+                                                  and 1 <= x <= 254 for x in rango)
+                                          and rango[0] <= rango[1]):
+                falla("%s: 'publica_rango_prueba' debe ser [desde, hasta] entre 1 y 254" % clave)
+        lista = m.get("pub_lista")
+        if lista is not None and lista not in PUB_REDES:
+            falla("pub_lista %r desconocida (opciones: %s)" % (lista, ", ".join(sorted(PUB_REDES))))
+    return marcas
+
+def cargar_marcas(config_dir):
+    """marcas/<marca>.json → {marca: cfg}. Los archivos que empiezan con '_' NO son marcas:
+    `_pruebas.json` trae la red de PRUEBAS común (un solo lugar para la red de staging) que
+    heredan las marcas sin `red_pruebas` propia. Cada archivo se llama como su marca."""
+    base = os.path.join(config_dir, "marcas")
+    comun = {}
+    p_comun = os.path.join(base, "_pruebas.json")
+    if os.path.exists(p_comun):
+        comun = _load_json(p_comun).get("red_pruebas") or {}
+    marcas = {}
+    for f in sorted(os.listdir(base)):
+        if not f.endswith(".json") or f.startswith("_"):
+            continue
+        m = _load_json(os.path.join(base, f))
+        if not isinstance(m, dict) or not isinstance(m.get("marca"), str):
+            raise RuntimeError("marcas/%s: no es una marca válida (falta 'marca')" % f)
+        if f != m["marca"] + ".json":
+            raise RuntimeError("marcas/%s: el archivo debe llamarse como la marca (%s.json)"
+                               % (f, m["marca"]))
+        if not m.get("red_pruebas") and comun:
+            m["red_pruebas"] = dict(comun)
+        marcas[m["marca"]] = m
+    return validar_marcas(marcas)
+
+def marcas_activas():
+    """Marcas que se OFRECEN para crear (activo != false). Las inactivas siguen cargadas
+    para operar las VMs que ya existen (editar/suspender/eliminar)."""
+    return sorted(k for k, v in MARCAS.items() if v.get("activo", True))
+
+MARCAS = cargar_marcas(CONFIG_DIR)
 SABORES = {}
-for f in os.listdir(os.path.join(CONFIG_DIR, "marcas")):
-    if f.endswith(".json"):
-        m = _load_json(os.path.join(CONFIG_DIR, "marcas", f))
-        MARCAS[m["marca"]] = m
 for marca_dir in os.listdir(os.path.join(CONFIG_DIR, "sabores")):
     d = os.path.join(CONFIG_DIR, "sabores", marca_dir)
     if os.path.isdir(d):
         for f in os.listdir(d):
             if f.endswith(".json"):
                 s = _load_json(os.path.join(d, f))
+                if s.get("marca") not in MARCAS:
+                    raise RuntimeError("sabores/%s/%s: la marca %r no existe en marcas/"
+                                       % (marca_dir, f, s.get("marca")))
                 SABORES[(s["marca"], s["slug"])] = s
 
 # ── Registro (SQLite) ────────────────────────────────────────────────────────
@@ -1420,6 +1526,89 @@ def reservar_vm(marca, marca_cfg, sabor_slug, sabor, cliente, hostname, whmcs_se
 def red_activa(marca_cfg, modo):
     return marca_cfg["red_pruebas"] if modo == "pruebas" else marca_cfg["red_default"]
 
+def portgroups_host(h):
+    """[(nombre, vlan)] de los portgroups estándar del host — `govc host.portgroup.info -json`
+    (svc-vps puede leerlo: verificado 2026-10-23 en ESXi 7 y 8). Lanza si govc falla."""
+    data = json.loads(govc("host.portgroup.info", "-json", host=h) or "{}")
+    res = []
+    for pg in (data.get("portgroup") or []) if isinstance(data, dict) else []:
+        spec = (pg.get("spec") or {}) if isinstance(pg, dict) else {}
+        nombre = spec.get("name")
+        if not isinstance(nombre, str) or not nombre:
+            continue
+        vlan = spec.get("vlanId")
+        res.append((nombre, vlan if isinstance(vlan, int) and not isinstance(vlan, bool) else 0))
+    return res
+
+def resolver_portgroup(h, red, modo, job=None):
+    """Nombre del portgroup de ESTE host para la red de la marca. 1º el nombre exacto de la
+    config (red['portgroup']); si el host no lo tiene, el portgroup cuya VLAN sea la de la
+    marca (red['vlan']): esxi-245/esxi-20051 lo llaman 'Vps_Hosting.cl' y esxi-20039
+    'vps_Hosting.cl' / 'vps_PlanetahostingCL' — el rótulo es libre, la VLAN no. Si el nombre
+    existe pero está en OTRA VLAN se rechaza (la VM nacería en la red equivocada); eso incluye
+    la red de pruebas declarada con vlan 0 (sin etiqueta). Sin candidato, o con varios en la
+    misma VLAN sin uno solo que diga 'vps', falla con el inventario del host. Si el host no
+    deja leer las VLAN, cae al chequeo por nombre de siempre y lo deja anotado en el paso.
+    Devuelve (nombre_del_portgroup, nota): la nota ("" si el nombre coincidió tal cual) la
+    escribe el flujo en el CIERRE del paso, porque job.detalle() se sobreescribe."""
+    deseado = red["portgroup"]
+    # vlan: None = no declarada (solo nombre) · 0 = sin etiqueta (el nombre debe estar en VLAN 0,
+    # y con VLAN 0 no se adivina: hay muchos portgroups sin etiqueta) · >0 = por nombre o por VLAN
+    vlan = red.get("vlan")
+    etiqueta = "?" if vlan is None else ("sin etiqueta" if vlan == 0 else str(vlan))
+    motivo = ""
+    try:
+        pgs = portgroups_host(h)
+        if not pgs:
+            motivo = "el inventario de portgroups del host vino vacío"
+    except Exception as e:  # noqa: BLE001 — causa CONTROLADA: el error crudo no va al paso a paso
+        pgs = []
+        motivo = ("govc host.portgroup.info falló" if isinstance(e, RuntimeError)
+                  else "respuesta de host.portgroup.info no legible (%s)" % type(e).__name__)
+    if not pgs:
+        # sin VLAN visibles: chequeo por nombre de siempre (ls network), dejando constancia de
+        # que la VLAN NO se pudo verificar
+        redes = [ln.rsplit("/", 1)[-1] for ln in govc("ls", "network", host=h).splitlines()
+                 if ln.strip()]
+        if deseado in redes:
+            nota = "validado solo por nombre — %s; VLAN no verificada" % motivo
+            if job:
+                job.detalle("portgroup '%s' %s" % (deseado, nota))
+            return deseado, nota
+        raise RuntimeError("el host %s NO tiene el portgroup '%s' que usa el modo %s "
+                           "(redes del host: %s) — crearlo en el ESXi (Networking → "
+                           "Port groups, VLAN %s) antes de crear aquí"
+                           % (h["id"], deseado, modo, ", ".join(redes) or "ninguna", etiqueta))
+    por_nombre = dict(pgs)
+    if deseado in por_nombre:
+        if vlan is not None and por_nombre[deseado] != vlan:
+            raise RuntimeError("el portgroup '%s' del host %s está en la VLAN %s pero la red %s "
+                               "de la marca es la VLAN %s — corregir el portgroup en el ESXi "
+                               "antes de crear" % (deseado, h["id"], por_nombre[deseado],
+                                                   red["subred"], etiqueta))
+        return deseado, ""
+    inventario = ", ".join("%s (VLAN %s)" % (n, v) for n, v in pgs)
+    if vlan:
+        cand = [n for n, v in pgs if v == vlan]
+        if len(cand) > 1:
+            con_vps = [n for n in cand if "vps" in n.lower()]
+            if len(con_vps) == 1:
+                cand = con_vps
+        if len(cand) == 1:
+            nota = "resuelto por VLAN %d (el host no tiene uno llamado '%s')" % (vlan, deseado)
+            if job:
+                job.detalle("portgroup '%s' %s" % (cand[0], nota))
+            return cand[0], nota
+        if len(cand) > 1:
+            raise RuntimeError("el host %s tiene %d portgroups en la VLAN %d (%s) — dejar uno "
+                               "solo o llamarlo '%s'"
+                               % (h["id"], len(cand), vlan, ", ".join(cand), deseado))
+    raise RuntimeError("el host %s NO tiene el portgroup '%s'%s para la red %s (modo %s; "
+                       "portgroups del host: %s) — crearlo en el ESXi (Networking → Port groups, "
+                       "VLAN %s) antes de crear aquí"
+                       % (h["id"], deseado, (" ni otro en la VLAN %d" % vlan) if vlan else "",
+                          red["subred"], modo, inventario or "ninguno", etiqueta))
+
 def power_state(nombre, host=None):
     try:
         out = govc("vm.info", "-json", nombre, host=host)
@@ -1614,9 +1803,10 @@ def flujo_crear(job, marca, sabor_slug, cliente, hostname, instalar_cpanel, modo
         if not reg or reg.get("estado") != "creando":
             raise RuntimeError("reserva de %s no encontrada o en estado inesperado" % nombre)
         set_estado(nombre, "creando", so=so)   # deja registrado el SO desde el inicio
-        job.detalle("%s · %s (%d vCPU / %d MB / %d GB) · %s · modo %s · host %s"
+        job.detalle("%s · %s (%d vCPU / %d MB / %d GB) · %s · modo %s · host %s · %s: red %s%s"
                     % (nombre, sabor["nombre_web"], sabor["vcpu"], sabor["ram_mb"],
-                       sabor["disco_gb"], so_info["nombre"], modo, h["id"]))
+                       sabor["disco_gb"], so_info["nombre"], modo, h["id"], marca_cfg["nombre"],
+                       red["subred"], (" (VLAN %s)" % red["vlan"]) if red.get("vlan") else ""))
 
         # 2. IP privada libre — RouterData en producción, barrido local en pruebas.
         #    Bajo IP_PRIV_LOCK: elegir y GRABAR es atómico entre jobs (ambos flujos
@@ -1644,13 +1834,9 @@ def flujo_crear(job, marca, sabor_slug, cliente, hostname, instalar_cpanel, modo
         # registra y enciende la VM igual pero con la NIC muerta, y la creación muere
         # ~9 min después esperando SSH (aprendido el 2026-09-29: primera creación en
         # esxi-20051 en modo produccion sin el portgroup Vps_Hosting.cl). Fail-fast.
-        redes = [ln.rsplit("/", 1)[-1] for ln in govc("ls", "network", host=h).splitlines()
-                 if ln.strip()]
-        if red["portgroup"] not in redes:
-            raise RuntimeError("el host %s NO tiene el portgroup '%s' que usa el modo %s "
-                               "(redes del host: %s) — crearlo en el ESXi (Networking → "
-                               "Port groups, con su VLAN) antes de crear aquí"
-                               % (h["id"], red["portgroup"], modo, ", ".join(redes) or "ninguna"))
+        # Multi-marca (2026-10-23): cada host rotula sus portgroups a su manera; lo que
+        # identifica la red de la marca es la VLAN → por nombre y, si no existe, por VLAN.
+        portgroup_vm, portgroup_nota = resolver_portgroup(h, red, modo, job)
         # 3c. la dorada del SO elegido debe existir en ESTE host (si no, el clon moriría a
         # mitad de camino dejando la carpeta creada). listar_wrapper valida el sentinel OK.
         plantillas = listar_wrapper("list-plantillas", host=h)
@@ -1670,7 +1856,10 @@ def flujo_crear(job, marca, sabor_slug, cliente, hostname, instalar_cpanel, modo
         raise
 
     # 4. clonar (desde aquí el ESXi SÍ se toca)
-    job.paso("IP %s reservada" % ip)
+    # el cierre del paso 3 deja constancia del portgroup elegido y de cómo se resolvió (el
+    # detalle de un paso se sobreescribe con cada aviso; lo que importa va en el cierre)
+    job.paso("IP %s reservada · portgroup '%s'%s"
+             % (ip, portgroup_vm, (" — " + portgroup_nota) if portgroup_nota else ""))
     esxi_ssh("mkdir-vm %s" % nombre, host=h)
     # catálogo de doradas: 2 por SO — base y '-cpanel' (preinstalado). Si el plan
     # lleva cPanel se clona la variante (entrega ~7 min); si aún no existe, se cae
@@ -1698,7 +1887,7 @@ def flujo_crear(job, marca, sabor_slug, cliente, hostname, instalar_cpanel, modo
     # 6. vmx
     job.paso()
     vmx = VMX_TEMPLATE.format(name=nombre, ram_mb=sabor["ram_mb"], vcpu=sabor["vcpu"],
-                              portgroup=red["portgroup"])
+                              portgroup=portgroup_vm)
     with open("/tmp/%s.vmx" % nombre, "w") as fh:
         fh.write(vmx)
     govc("datastore.upload", "-ds", h["datastore"], "/tmp/%s.vmx" % nombre,
@@ -2722,9 +2911,26 @@ def health():
     detalle.sort(key=lambda s: (s["marca"], s["slug"]))
     sistemas = [{"so": k, "nombre": v["nombre"], "cpanel": bool(v.get("cpanel"))}
                 for k, v in sorted(SISTEMAS.items())]
+    # marcas: solo las ACTIVAS (las que el dashboard ofrece para crear); el detalle lleva lo
+    # que el operador necesita ver al elegir (redes, VLAN, lista pública, prefijo, nº de planes)
+    marcas_det = []
+    for mid in marcas_activas():
+        m = MARCAS[mid]
+        rd, rp = m["red_default"], m["red_pruebas"]
+        marcas_det.append({"marca": mid, "nombre": m["nombre"], "prefijo_vm": m["prefijo_vm"],
+                           "dominio": m["dominio_hostname"], "pub_lista": m.get("pub_lista"),
+                           "pub_red": PUB_REDES.get(m.get("pub_lista")),
+                           "publica_rango_prueba": rd.get("publica_rango_prueba"),
+                           "red_default": {"subred": rd["subred"], "gateway": rd["gateway"],
+                                           "vlan": rd.get("vlan"), "portgroup": rd["portgroup"]},
+                           "red_pruebas": {"subred": rp["subred"], "gateway": rp["gateway"],
+                                           "vlan": rp.get("vlan"), "portgroup": rp["portgroup"]},
+                           "sabores": sum(1 for k, v in SABORES.items()
+                                          if k[0] == mid and v.get("activo", True))})
     return jsonify({"ok": True, "modo": MODO,
-                    "marcas": sorted(MARCAS), "sabores": sorted("%s/%s" % k for k in SABORES),
-                    "sabores_detalle": detalle, "sistemas": sistemas, "so_default": SO_DEFAULT})
+                    "marcas": marcas_activas(), "sabores": sorted("%s/%s" % k for k in SABORES),
+                    "sabores_detalle": detalle, "marcas_detalle": marcas_det,
+                    "sistemas": sistemas, "so_default": SO_DEFAULT})
 
 @app.route("/crear", methods=["POST"])
 def crear():
@@ -2756,6 +2962,8 @@ def crear():
         return jsonify({"error": "modo inválido (pruebas | produccion)"}), 400
     if marca not in MARCAS:
         return jsonify({"error": "marca desconocida: %s" % marca}), 400
+    if not MARCAS[marca].get("activo", True):
+        return jsonify({"error": "la marca %s no está activa (activo=false en marcas/)" % marca}), 400
     # Sabor PERSONALIZADO (pedido Alcadio 2026-09-17): specs explícitas desde el
     # dashboard. SOLO rol admin — WHMCS vende el catálogo fijo. Pasa por el MISMO
     # cupo del host (#8) y chequeo de datastore que cualquier sabor.

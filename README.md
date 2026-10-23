@@ -197,6 +197,51 @@ En **pruebas** este paso de IP pública se omite: la VM queda solo con su IP pri
 
 ---
 
+## Marcas (multi-marca, desde 2026-10-23)
+
+El motor crea VPS de **cualquier marca** que tenga un archivo en `marcas/<marca>.json`.
+El mapeo marca → red VPS es el mismo que usa **Alta de Servicios** del dashboard NOC
+(`ALTA_MARCAS`, tipo VPS): VLAN 8x en RouterData, gateway `.1` (verificados el 2026-10-23).
+
+| Marca | Prefijo VM | Red VPS (producción) | VLAN | Planes |
+|---|---|---|---|---|
+| hosting.cl | `vps-hcl` | 10.100.16.0/24 | 81 | 4 (web) |
+| planetahosting.cl | `vps-phcl` | 10.100.18.0/24 | 82 | pendientes |
+| planetahosting.pe | `vps-phpe` | 10.100.20.0/24 | 83 | pendientes |
+| planetahosting.com.co | `vps-phco` | 10.100.22.0/24 | 84 | pendientes |
+| inkahosting.pe | `vps-ihpe` | 10.100.24.0/24 | 85 | pendientes |
+| unohosting.pe | `vps-uhpe` | 10.100.24.0/24 (compartida) | 85 | pendientes |
+| hosting.pe | `vps-hpe` | 10.100.24.0/24 (compartida) | 85 | pendientes |
+| hostingcenter.cl | `vps-hccl` | 10.100.26.0/24 | 86 | pendientes |
+
+- **Redes compartidas:** la VLAN 85 / 10.100.24.0/24 la usan Inkahosting.pe, unohosting.pe y
+  Hosting.pe (así está en RouterData). Es seguro: la IP libre se elige por red (NAT + ARP + registro),
+  no por marca; lo único que debe ser único por marca es el prefijo de VM.
+- **Red de pruebas común:** `marcas/_pruebas.json` (los archivos `_*.json` no son marcas).
+  Una marca sin `red_pruebas` propia la hereda; así la red de staging se cambia en un solo lugar.
+- **IP pública:** mientras dure el staging todas usan `Red57-0` con `publica_rango_prueba`
+  [100,102] (38.19.57.100-102). Go-live de una marca = `pub_lista: "Red107-0"` y quitar el rango.
+- **Portgroup del host:** cada ESXi rotula sus portgroups a su manera (esxi-245/20051:
+  `Vps_Hosting.cl`; esxi-20039: `vps_Hosting.cl`, `vps_PlanetahostingCL`, `vps_inkape`). El
+  motor busca primero el nombre de la config y, si no existe, el portgroup del host cuya **VLAN**
+  sea la de la marca (`govc host.portgroup.info`). Un nombre que exista en otra VLAN se rechaza.
+  Si ningún portgroup del host tiene esa VLAN, la creación falla antes de tocar el ESXi con el
+  inventario del host (hay que crear el portgroup con su VLAN en el ESXi).
+- **Validación al arrancar:** campos obligatorios, red /24 con gateway dentro y VLAN, lista
+  pública conocida, prefijo `vps-<letras>` (lo exige el wrapper) y sin prefijos ni subredes
+  repetidos. Una marca mal escrita impide que el motor arranque (como la guarda de SISTEMAS).
+- **Dashboard:** el selector muestra el nombre de la marca, debajo su red (subred · VLAN ·
+  lista pública · nº de planes) y las opciones de *Entorno* dicen la red de esa marca.
+- **`activo: false`** saca la marca del selector y `/crear` la rechaza; sus VMs existentes se
+  siguen operando.
+
+**Agregar una marca:** crear `marcas/<marca>.json` (copiar uno existente: `marca`, `nombre`,
+`prefijo_vm`, `pub_lista`, `red_default` con subred/gateway/dns/portgroup/vlan, `dominio_hostname`),
+sus planes en `sabores/<marca>/*.json` (según `sabores/SCHEMA.md`; sin planes solo se ofrece
+*Personalizado*), correr `engine/tests/test_marcas.py`, y en noc-monitor copiar `marcas/` y
+`sabores/` al build, reconstruir la imagen y reiniciar `vps-engine` (las marcas van horneadas en
+la imagen). En cada host donde se vaya a crear debe existir un portgroup con la VLAN de la marca.
+
 ## Decisiones de diseño
 
 | Decisión | Elección | Por qué |
@@ -266,4 +311,5 @@ Vps/
 - [ ] engine: eliminar (papelera) / suspender / editar
 - [ ] Sección "VPS" en dashboard NOC + notificaciones
 - [ ] Encadenar con vps-provision (llave del cliente a la bóveda)
-- [ ] Futuro: WHMCS → creación automática; NetBox IPAM; más marcas
+- [x] Multi-marca: 8 marcas con VPS cargadas desde `marcas/` (2026-10-23); faltan los planes de las 7 nuevas
+- [ ] Futuro: WHMCS → creación automática; NetBox IPAM

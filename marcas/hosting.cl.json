@@ -4,7 +4,7 @@
   "prefijo_vm": "vps-hcl",
   "activo": true,
   "pub_lista": "Red57-0",
-  "_pub_lista_nota": "Address-list del MikroTik para la IP pública. Red57-0 = 38.19.57.0/24 (rango de PRUEBAS 2026-09-11). En producción real de hosting.cl sería Red107-0 (201.148.107).",
+  "_pub_lista_nota": "Address-list del MikroTik para la IP pública. Red57-0 = 38.19.57.0/24 (rango de PRUEBAS 2026-09-11, acotado por publica_rango_prueba). En producción real de hosting.cl sería Red107-0 (201.148.107), la lista de la marca en Alta de Servicios del NOC.",
   "red_default": {
     "subred": "10.100.16.0/24",
     "gateway": "10.100.16.1",
@@ -14,27 +14,20 @@
     "vlan": 81,
     "vswitch": "vSwitch4",
     "publica_rango_prueba": [100, 102],
-    "nota": "Red de PRODUCCIÓN 'Vps Hosting' (usuario 2026-09-11): portgroup 'Vps_Hosting.cl' en vSwitch4, VLAN 81, uplink vmnic0 por cable directo al switch del rack1. La VM se crea en este portgroup y toma la IP del patrón de búsqueda (ver ip_libre). 'publica_rango_prueba' [100,102] restringe la IP pública a 38.19.57.100-102 SOLO para pruebas (quitar para producción real → toma la más alta libre). Confirmar gateway .1."
+    "nota": "Red de PRODUCCIÓN 'Vps Hosting' (usuario 2026-09-11): VLAN 81 (vlan_81_VPS_Hosting.cl en RouterData, gateway 10.100.16.1 verificado 2026-10-23). En esxi-245 y esxi-20051 el portgroup se llama 'Vps_Hosting.cl'; en esxi-20039 'vps_Hosting.cl' — el motor lo resuelve por nombre y, si no existe con ese nombre, por VLAN. 'publica_rango_prueba' [100,102] restringe la IP pública a 38.19.57.100-102 SOLO para pruebas (quitar para producción real → toma la más alta libre)."
   },
-  "red_pruebas": {
-    "subred": "192.168.200.0/24",
-    "gateway": "192.168.200.1",
-    "mascara": "255.255.255.0",
-    "dns": ["1.1.1.1", "8.8.8.8"],
-    "portgroup": "VM Network",
-    "nota": "Desde 2026-09-29: pruebas en el host NUEVO esxi-20051 (192.168.200.51), portgroup 'VM Network' de su vSwitch0 (única red del host; el ESXi es .51 y el gw .1 — el barrido ping los detecta ocupados). noc-monitor alcanza esta red (ruta abierta 28-09). Sin IP pública/NAT en pruebas. ANTERIOR (esxi-245, por si se reactiva para pruebas): subred 192.168.122.0/24 gw .1, portgroup 'Switch Interno 1 Data ethr6'."
-  },
+  "_red_pruebas_nota": "Sin 'red_pruebas' propia: hereda la red de pruebas común de marcas/_pruebas.json (desde 2026-10-23).",
   "ip_libre": {
     "metodo": "copiar del dashboard NOC /api/alta/privada (dashboard.py ~9336)",
     "detalle": "SSH al MikroTik RouterData 172.16.1.90: '/ip firewall nat print terse' + '/ip arp print terse'; en_nat = octetos con regla src-address=10.100.16.X; en_arp = octetos VIVOS en ARP (los 'failed' se consideran libres); ocupadas = en_nat ∪ en_arp ∪ {.1 gateway}; se asigna el octeto libre más ALTO desde .254 hacia abajo. Es el mismo criterio de 'Alta de Servicios' del NOC.",
     "red": "10.100.16",
     "donde_corre": "El motor vive en noc-monitor. Verificado 2026-09-11: noc-monitor ALCANZA RouterData (172.16.1.90), la red de VPS producción (10.100.16.1 responde, ruta vía su gateway) y el ESXi. Es el 'control plane' y llega a todo lo necesario.",
-    "PENDIENTE_ENGINE": "El motor hoy usa ip_libre_pruebas (barrido ping local, para 192.168.122.x). Para PRODUCCIÓN hay que implementar ip_libre_produccion con el método MikroTik (consultar NAT+ARP a RouterData). Se prefiere sobre ping NO por alcance (noc-monitor sí llega) sino por CORRECCIÓN: la tabla NAT detecta IPs reservadas-pero-apagadas que un ping se saltaría. Parte del switch a modo producción."
+    "estado_engine": "HECHO (2026-09-11): ip_libre_produccion consulta NAT+ARP de RouterData sobre la subred de la marca; en pruebas, barrido ping local."
   },
   "ip_publica_nat": {
     "metodo": "copiar del dashboard NOC /api/alta/publica (~9365) y /api/alta/crear (~9414)",
     "detalle": "Elegir pública de la address-list de la marca (entrada habilitada, sin comentario, sin NAT incl. deshabilitados, sin ARP vivo, sin otras address-lists, muda al ping desde el CCR de borde 172.16.1.69) → crear srcnat+dstnat en RouterData con comment '[NOC] ...', deshabilitar+comentar la entrada de la address-list, registrar privada y pública en NetBox, pausar Monitoreo Externo. Solo producción — en pruebas se omite."
   },
   "dominio_hostname": "hosting.cl",
-  "nota": "Sabores en sabores/hosting.cl/ (dictados de la web 2026-09-10: vps-estandar, vps-empresas, vps-cyber-black)."
+  "nota": "Sabores en sabores/hosting.cl/ (dictados de la web 2026-09-10: vps-estandar, vps-empresas, vps-cyber-black; vps-estandar-ubuntu 2026-10-01)."
 }

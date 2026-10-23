@@ -14,7 +14,7 @@
 | `/api/vpseng/vms` | GET | `/vms` | `vps_engine` |
 | `/api/vpseng/accion` | POST | `/accion` | `vps_engine` |
 | `/api/vpseng/editar` | POST | `/editar` | `vps_engine` |
-| `/api/vpseng/salud` | GET | `/health` (para poblar selects de marca/sabor) | `vps_engine` |
+| `/api/vpseng/salud` | GET | `/health` (para poblar selects de marca/sabor; desde 2026-10-23 trae `marcas_detalle`: nombre, prefijo, redes, VLAN, lista pública y nº de planes por marca, y `marcas` lista solo las activas) | `vps_engine` |
 
 - Permiso nuevo **`vps_engine`** en `_ALL_PAGES`, `PROTECTED_PAGES`, `permPages`
   y al rol `noc` (mismo procedimiento que `vps_clientes`, BITACORA VpsClientes 03-08).
@@ -23,7 +23,7 @@
 ## Página "VPS" (nav en Infraestructura Lógica) — 3 tabs
 
 ### Tab 1 — Crear
-Formulario: marca (select), sabor (select con vCPU/RAM/disco visibles), cliente,
+Formulario: marca (select con el NOMBRE de la marca; debajo su red VPS: subred · VLAN · lista pública · nº de planes; las opciones de Entorno dicen la red de esa marca y el ejemplo de nombre usa su prefijo), sabor (select con vCPU/RAM/disco visibles), cliente,
 hostname, checkbox "instalar cPanel" (marcado). Botón **Crear VPS**.
 
 Al enviar → guarda `job_id` → muestra el **panel de progreso en vivo**:
