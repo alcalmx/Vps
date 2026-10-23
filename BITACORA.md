@@ -5,6 +5,20 @@
 
 ---
 
+## 2026-10-23 (viernes, ~15:10) — 🔌 Portgroup `Sistemas_Internos` creado en esxi-20051 (red 10.100.36.0/24 verificada)
+
+Alcadio: *"dale créala tú y así no tengo que entrar"*. Con la llave de diagnóstico (`claude_esxi_20051_rsa`):
+- **Pistas de red del host** (`vim-cmd hostsvc/net/query_networkhint`): `vmnic0` va al "Switch Admin Vmware 3" (puerto
+  qsfpplus1-1) con 172.16.1.0/25 sin etiqueta (red de administración del DC); **`vmnic1` (VSwitch1) va a
+  `Switch-Rack13` puerto `bridge1/sfp-sfpplus1 Troncal`** y ve las VLAN 60-68, 71-76, **81-86**, 91-95, 97, 98, 102, 105 y
+  tráfico sin etiqueta. Es decir: ese troncal YA lleva las VLAN de VPS de todas las marcas (82 planetahosting.cl, 83 .pe,
+  84 .com.co, 85 inkahosting/uno/hosting.pe, 86 hostingcenter) → los portgroups de esas marcas se pueden crear en VSwitch1
+  sin cablear nada (pendiente de que Alcadio lo pida).
+- **Creado:** `esxcli network vswitch standard portgroup add --portgroup-name=Sistemas_Internos --vswitch-name=VSwitch1`
+  (VLAN 0 = nativa). **Verificado** con un vmkernel temporal `vmk9` 10.100.36.242/24 (IP libre: no en NAT ni ARP de
+  RouterData) → `vmkping 10.100.36.1`: 3/3, 0,5 ms → la red nativa del troncal ES la de sistemas internos. `vmk9`
+  retirada al terminar (0 restantes). El motor ya puede crear VPS de uso personal en esxi-20051.
+
 ## 2026-10-23 (viernes, tarde) — 👤 USO PERSONAL vs CLIENTE: VPS internos con dueño, red 10.100.36.0/24 — EN PRODUCCIÓN 14:46 (motor) y 14:49 (dashboard), APROBADO por Codex (3 rondas)
 
 **DESPLEGADO con OK de Alcadio ("ok despliega"):** motor con `desplegar_motor_marcas.sh` (respaldo
