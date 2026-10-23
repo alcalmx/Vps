@@ -1858,7 +1858,8 @@ def entregar_root_password(res, root_password, auto, aplicada):
 
 def flujo_crear(job, marca, sabor_slug, cliente, hostname, instalar_cpanel, modo,
                 pubkey_cliente=None, root_password=None, whmcs_serviceid=None,
-                sabor_def=None, host=None, so=None, root_password_auto=False, uso="cliente"):
+                sabor_def=None, host=None, so=None, root_password_auto=False, uso="cliente",
+                pub_lista_req=None):
     nombre = job.vm
 
     # TODO lo previo a tocar el ESXi va dentro del bloque que COMPENSA: si algo falla aquí la
@@ -2088,8 +2089,11 @@ def flujo_crear(job, marca, sabor_slug, cliente, hostname, instalar_cpanel, modo
     publica = pub_lista = None
     # (uso personal: también lleva pública + NAT 1:1, igual que un cliente — Alcadio 2026-10-23)
     if modo == "produccion":
-        pub_lista = marca_cfg.get("pub_lista") or "Red107-0"
-        rango = red.get("publica_rango_prueba")   # [lo, hi] para restringir en pruebas de prod
+        # lista de la marca, salvo que el NOC haya elegido otra (selector "Red pública"); el rango
+        # de prueba de la marca solo acota SU lista por defecto — otra lista = pool completo
+        lista_marca = marca_cfg.get("pub_lista") or "Red107-0"
+        pub_lista = pub_lista_req or lista_marca
+        rango = red.get("publica_rango_prueba") if pub_lista == lista_marca else None
         # Bajo IP_PUB_LOCK: elegir pública + crear NAT + grabar es atómico entre jobs
         # (tras crear_nat la IP queda visiblemente tomada en RouterData: NAT + entrada
         # deshabilitada). El re-chequeo interno de crear_nat sigue cubriendo actores
@@ -2106,8 +2110,8 @@ def flujo_crear(job, marca, sabor_slug, cliente, hostname, instalar_cpanel, modo
             with DB_LOCK, db() as c:
                 c.execute("UPDATE vms SET nb_priv_id=?, nb_pub_id=? WHERE nombre=?",
                           (nb_priv, nb_pub, nombre))
-        job.detalle("pública %s ↔ privada %s (NAT 1:1 activo) · NetBox: %s"
-                    % (publica, ip,
+        job.detalle("pública %s ↔ privada %s (NAT 1:1 activo, lista %s%s) · NetBox: %s"
+                    % (publica, ip, pub_lista, " elegida por el NOC" if pub_lista_req else "",
                        "ambas IPs registradas" if (nb_priv and nb_pub) else
                        "registro parcial/omitido (revisar IPAM)" if (nb_priv or nb_pub) else
                        "no disponible — registrar a mano"))
@@ -3048,6 +3052,7 @@ def health():
     return jsonify({"ok": True, "modo": MODO,
                     "marcas": marcas_activas(), "sabores": sorted("%s/%s" % k for k in SABORES),
                     "sabores_detalle": detalle, "marcas_detalle": marcas_det,
+                    "redes_publicas": [{"lista": k, "red": v} for k, v in sorted(PUB_REDES.items())],
                     "sistemas": sistemas, "so_default": SO_DEFAULT})
 
 @app.route("/crear", methods=["POST"])
@@ -3146,6 +3151,20 @@ def crear():
         cpanel = bool(d["instalar_cpanel"])
     else:
         cpanel = (sabor_def.get("extras", {}).get("cpanel_licencia_cuentas", 0) or 0) > 0
+    # RED PÚBLICA (Alcadio 2026-10-23): el NOC puede elegir de qué address-list sale la IP pública
+    # (Red57-0, Red104-0 … Red107-0); por defecto la de la marca. Solo rol admin y solo en producción.
+    _pl = d.get("pub_lista")
+    if _pl is not None and not isinstance(_pl, str):
+        return jsonify({"error": "pub_lista debe ser texto"}), 400
+    pub_lista_req = (_pl or "").strip() or None
+    if pub_lista_req:
+        if rol != "admin":
+            return jsonify({"error": "solo el NOC puede elegir la red pública"}), 403
+        if pub_lista_req not in PUB_REDES:
+            return jsonify({"error": "red pública desconocida: %s (opciones: %s)"
+                                     % (pub_lista_req, ", ".join(sorted(PUB_REDES)))}), 400
+        if modo != "produccion":
+            return jsonify({"error": "la red pública solo aplica en modo producción"}), 400
     # SISTEMA OPERATIVO: por defecto el `so_default` del plan; el NOC puede forzar otro
     # (WHMCS vende el catálogo: su SO lo define el plan, igual que las specs).
     _so = d.get("so")
@@ -3245,7 +3264,8 @@ def crear():
         run_job(job, lambda j: flujo_crear(j, marca, sabor, cliente, hostname, cpanel, modo,
                                            pubkey_cliente or None, root_password, whmcs_serviceid,
                                            sabor_def=sabor_def, host=host_sel, so=so_efectivo,
-                                           root_password_auto=root_password_auto, uso=uso))
+                                           root_password_auto=root_password_auto, uso=uso,
+                                           pub_lista_req=pub_lista_req))
     except Exception as e:
         # cupo excedido: rechazo LIMPIO con el motivo (no es un error interno)
         if "cupo del" in str(e) and "excedido" in str(e):

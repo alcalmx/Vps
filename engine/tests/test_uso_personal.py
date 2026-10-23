@@ -130,7 +130,8 @@ capt = {}
 def govc_flujo(*a, timeout=120, host=None):
     if a[0] == "host.portgroup.info":
         return json.dumps({"portgroup": [{"spec": {"name": "VM Network", "vlanId": 0}},
-                                         {"spec": {"name": "Sistemas_Internos", "vlanId": 0}}]})
+                                         {"spec": {"name": "Sistemas_Internos", "vlanId": 0}},
+                                         {"spec": {"name": "Vps_Hosting.cl", "vlanId": 81}}]})
     if a[0] == "datastore.upload":
         with open(a[3], encoding="utf-8") as fh:
             capt["vmx"] = fh.read()
@@ -179,7 +180,7 @@ try:
     nombre = j["vm"]
     assert nombre == "vps-int-0001-gerardo", nombre
     assert "USO PERSONAL de gerardo" in pasos and "Sistemas internos: red 10.100.36.0/24" in pasos, pasos
-    assert "pública 38.19.57.101 ↔ privada 10.100.36.250 (NAT 1:1 activo)" in pasos, pasos
+    assert "pública 38.19.57.101 ↔ privada 10.100.36.250 (NAT 1:1 activo, lista Red57-0)" in pasos, pasos
     assert 'ethernet0.networkName = "Sistemas_Internos"' in capt["vmx"]
     assert capt["pub_lista"] == ("Red57-0", [100, 102]), "lista pública de la red interna con su rango de prueba"
     assert capt["nat"] == [("10.100.36.250", "38.19.57.101", "Red57-0", "lab-gerardo.hosting.cl", "Sistemas internos")], capt.get("nat")
@@ -301,6 +302,34 @@ try:
         av = c.execute("SELECT detalle FROM operaciones WHERE actor='fabian' AND resultado='aviso'").fetchall()
     assert any("modo 'pruebas' ignorado" in a["detalle"] for a in av), [dict(a) for a in av]
     print("ok - uso personal con modo pruebas → producción forzada (solo la red interna), con aviso en la auditoría")
+
+    # ── selector de RED PÚBLICA (Alcadio 2026-10-23): el NOC elige la lista; otra lista = pool completo ──
+    h2 = cli.get("/health", headers=ADMIN).get_json()
+    assert {x["lista"] for x in h2["redes_publicas"]} == set(motor.PUB_REDES) and all(x["red"] == motor.PUB_REDES[x["lista"]] for x in h2["redes_publicas"])
+    basec = {"marca": "hosting.cl", "sabor": "personalizado", "cliente": "acme", "hostname": "srv9", "vcpu": 2, "ram_mb": 2048,
+             "disco_gb": 30, "instalar_cpanel": False, "actor": "gerardo"}
+    r = cli.post("/crear", headers=ADMIN, json=dict(basec, modo="produccion", pub_lista="Red999-0"))
+    assert r.status_code == 400 and "red pública desconocida" in r.get_json()["error"], r.get_json()
+    r = cli.post("/crear", headers=ADMIN, json=dict(basec, modo="pruebas", pub_lista="Red107-0"))
+    assert r.status_code == 400 and "solo aplica en modo producción" in r.get_json()["error"], r.get_json()
+    r = cli.post("/crear", headers=ADMIN, json=dict(basec, modo="produccion", pub_lista=7))
+    assert r.status_code == 400 and "debe ser texto" in r.get_json()["error"]
+    r = cli.post("/crear", headers=WHMCS, json=dict(basec, sabor="vps-estandar", whmcs_serviceid="77", pub_lista="Red107-0"))
+    assert r.status_code == 403 and "solo el NOC puede elegir la red pública" in r.get_json()["error"], r.get_json()
+    capt.pop("pub_lista", None); capt["nat"] = []
+    r = cli.post("/crear", headers=ADMIN, json=dict(basec, modo="produccion", pub_lista="Red107-0"))
+    assert r.status_code == 200, r.get_json()
+    jp = esperar(r.get_json()["job_id"])
+    assert jp["estado"] == "ok", json.dumps(jp, ensure_ascii=False)[:1200]
+    assert capt["pub_lista"] == ("Red107-0", None), "lista elegida por el NOC: pool completo, sin el rango de prueba de la marca"
+    assert capt["nat"][0][2] == "Red107-0" and motor.vm_registrada(jp["vm"])["pub_lista"] == "Red107-0"
+    assert "lista Red107-0 elegida por el NOC" in "\n".join(p["detalle"] for p in jp["pasos"])
+    # sin elegir: la lista de la marca con su rango de prueba
+    capt.pop("pub_lista", None)
+    r = cli.post("/crear", headers=ADMIN, json=dict(basec, hostname="srv10", modo="produccion"))
+    jq = esperar(r.get_json()["job_id"])
+    assert jq["estado"] == "ok" and capt["pub_lista"] == ("Red57-0", [100, 102]), capt.get("pub_lista")
+    print("ok - red pública: el NOC puede elegir la lista (validada, solo producción, no WHMCS); por defecto la de la marca con su rango")
 
     # ── un VPS de CLIENTE sigue siendo visible para todos y no lleva dueño ──
     r = cli.post("/crear", headers=ADMIN, json={"marca": "planetahosting.cl", "sabor": "personalizado", "cliente": "acme",
