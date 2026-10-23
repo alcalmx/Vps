@@ -5,6 +5,48 @@
 
 ---
 
+## 2026-10-23 (viernes, ~17:00) — 🔑 LLAVES DEL EQUIPO: tildes en Crear VPS (Alcadio, Fabián, Jonatan) — APROBADO por Codex (2 rondas), PENDIENTE DE DEPLOY (esperando OK)
+
+Pedido de Alcadio: *"agreguemos debajo de la caja de la llave SSH unos tildes con mi llave pública donde, si la
+selecciono, automáticamente meta mi key en ese VPS; también Fabián y Jonathan"*.
+
+**Llaves encontradas:** Alcadio = su YubiKey PIV (RSA 2048, `alcadio-yubikey-20261005`, SHA256:GEHyGvIX…, la
+autorizada en noc-monitor el 05-10). Fabián = **dos** RSA autorizadas en el root de esxi-20039
+(`fabian@fabian-Linux` SHA256:ZgEM99jM… y `fabian@localhost` SHA256:pbS1yUWh…). **Jonatan: ninguna llave SSH
+registrada en ningún servidor** (pfsense.md ya decía "Fabián/Jonathan: sin SSH") → su tilde queda deshabilitado
+"(falta su llave)" hasta que Alcadio la entregue.
+
+**Diseño (motor, commits `7158806`, `6d3257f`):**
+- Catálogo **`equipo/llaves.json`** en el repo, horneado en la imagen (Containerfile copia `equipo/`; el guion
+  `noc-monitor/desplegar-motor.sh` ahora copia también `engine/Containerfile` y `equipo/`). El dashboard manda
+  SOLO ids (`llaves_equipo`), nunca llaves crudas. `cargar_llaves_equipo` valida al arrancar: ids únicos
+  `[a-z0-9][a-z0-9._-]{0,39}`, nombre, llaves públicas de una línea sin opciones (`PUBKEY_RE.fullmatch`) y con
+  huella real (`ssh-keygen -lf`). Entrada sin llaves = válida (deshabilitada en la UI, rechazada en /crear).
+- `/health` (admin) expone id, nombre, huellas y `disponible` (no las llaves). `/crear`: lista ≤20, dedup, solo
+  rol admin (WHMCS 403), ids conocidos con llave cargada.
+- Paso 14: en producción, BYO → se instala; **uso personal con llaves del equipo y sin BYO → NO se genera llave de
+  entrega**; si no, se genera como siempre. Luego (pruebas y producción) `instalar_llaves_equipo` instala cada
+  llave con `instalar_pubkey_en_vm`; un fallo NO aborta (la VM ya está lista): aviso en el paso, en
+  `resultado.llaves_equipo_fallidas` y en la auditoría; `vms.llaves_equipo` = {instaladas, fallidas}.
+- `ssh_cmd`: BYO → `-i TU_LLAVE_PRIVADA`; entrega → `-i id_ed25519`; solo equipo → `ssh root@IP`; **sin ninguna llave
+  de usuario → `None` + `sin_llave_usuario` + `modo`** y el job cierra con aviso (antes, en pruebas, se mostraba
+  `ssh -i id_ed25519` sin haber generado nada).
+- **Dashboard** (`patch_vps_llaves_equipo_v1.py`): caja "Llaves del equipo" bajo la llave SSH con tildes desde
+  `/health` (huellas en el tooltip), ayuda según uso y entorno (en pruebas solo se instalan estas llaves), reset
+  desmarca; panel de acceso con llaves instaladas/fallidas y textos de inicio de sesión ("con tu llave del
+  equipo, p. ej. la YubiKey"); si no quedó llave de usuario, aviso con la IP en vez de instrucciones falsas.
+
+**Codex (2 rondas):** R1 — 1 medio (instrucciones de acceso con una llave inexistente si fallan todas) → corregido
+en general. R2 — cerrado + 1 medio (el aviso de pruebas sugería pegar una pública, que en pruebas no se instala)
+→ texto corregido (sin nueva pasada: es solo el texto que pidió). **Pruebas:** `test_llaves_equipo.py` (catálogo,
+validación, /health, /crear, flujo personal sin entrega, cliente con entrega + Fabián, pruebas, fallo parcial y
+total, BYO + equipo). **21 suites verdes.** Un tropiezo propio: el primer parche del dashboard se comió el
+inicio de un comentario existente (ancla con texto de más); se restauró desde git y `node --check` lo detectó
+antes de subir nada.
+
+**PENDIENTE de Alcadio:** OK de despliegue (archivos en `/tmp/vps-marcas` y `/tmp/dashboard.py.vpseq`); llave
+pública de Jonatan; confirmar si las dos llaves de Fabián siguen vigentes.
+
 ## 2026-10-23 (viernes, 16:37–16:41) — 🌐 SELECTOR DE RED PÚBLICA + asignador con reglas de firewall — EN PRODUCCIÓN (motor 16:37, dashboard 16:41), APROBADO por Codex
 
 Pedido de Alcadio: *"ahora hay que hacer lo de seleccionar la red pública en la que quiero que asigne"*.
