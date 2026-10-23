@@ -2293,9 +2293,11 @@ def flujo_crear(job, marca, sabor_slug, cliente, hostname, instalar_cpanel, modo
     acceso_ip = publica or ip
     res = {"vm": nombre, "sabor": sabor_slug, "privada": ip, "usuario": "root",
            "acceso_ip": acceso_ip,
-           "ssh_cmd": ("ssh -i TU_LLAVE_PRIVADA root@%s" if byo_fp else
-                       "ssh -i id_ed25519 root@%s" if entrega else
-                       "ssh root@%s" if equipo_ok else "ssh -i id_ed25519 root@%s") % acceso_ip,
+           # sin ninguna llave de usuario instalada NO se ofrece un comando con una llave inexistente
+           "ssh_cmd": (("ssh -i TU_LLAVE_PRIVADA root@%s" % acceso_ip) if byo_fp else
+                       ("ssh -i id_ed25519 root@%s" % acceso_ip) if entrega else
+                       ("ssh root@%s" % acceso_ip) if equipo_ok else None),
+           "sin_llave_usuario": not (byo_fp or entrega or equipo_ok), "modo": modo,
            "llaves_equipo": equipo_ok, "llaves_equipo_fallidas": equipo_mal,
            "publica": publica, "cpanel": bool(instalar_cpanel),
            "byo": bool(byo_fp), "byo_fp": byo_fp,
@@ -2307,8 +2309,10 @@ def flujo_crear(job, marca, sabor_slug, cliente, hostname, instalar_cpanel, modo
         with DB_LOCK, db() as c:
             c.execute("UPDATE vms SET send_id=? WHERE nombre=?", (entrega.get("id"), nombre))
     job.set_resultado(res)
-    job.ok("VPS %s activo (%s) — %s/%s%s" % (nombre, destino, marca, sabor_slug,
-                                             " · llave BYO del cliente" if byo_fp else ""))
+    job.ok("VPS %s activo (%s) — %s/%s%s%s" % (nombre, destino, marca, sabor_slug,
+                                               " · llave BYO del cliente" if byo_fp else "",
+                                               " · ⚠ sin llave de acceso de usuario (solo la de gestión del NOC)"
+                                               if res["sin_llave_usuario"] else ""))
 
 # ── FLUJOS: suspender / reanudar / eliminar / editar / purga ─────────────────
 def set_bloqueo_publica(lista, publica, bloquear, job=None):

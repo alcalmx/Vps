@@ -181,6 +181,22 @@ try:
     FALLA_EN.clear()
     print("ok - si una llave falla, el VPS se crea igual y queda el aviso (paso, resultado y auditoría)")
 
+    # d2) Codex: producción + uso personal + sin BYO + TODAS las llaves fallan → no se ofrece una credencial
+    #     inexistente: ssh_cmd None, sin_llave_usuario True, sin Send, aviso en el cierre del job
+    FALLA_EN.add("alcadio")
+    j = crear(uso="personal", hostname="lab3", modo="produccion", llaves_equipo=["alcadio"])
+    r = j["resultado"]
+    assert r["ssh_cmd"] is None and r["sin_llave_usuario"] is True and r["modo"] == "produccion", r
+    assert not r.get("send_url") and capt["secv"] == 0 and r["llaves_equipo_fallidas"] == ["Alcadio (YubiKey)"]
+    assert "sin llave de acceso de usuario" in j["pasos"][-1]["detalle"], j["pasos"][-1]["detalle"]
+    FALLA_EN.clear()
+    # pruebas sin ninguna llave: tampoco se inventa 'ssh -i id_ed25519' (antes sí)
+    j = crear(hostname="srv4", modo="pruebas")
+    assert j["resultado"]["ssh_cmd"] is None and j["resultado"]["sin_llave_usuario"] is True and j["resultado"]["modo"] == "pruebas"
+    # con llave real instalada, sin_llave_usuario es False
+    assert crear(hostname="srv5", modo="pruebas", llaves_equipo=["alcadio"])["resultado"]["sin_llave_usuario"] is False
+    print("ok - sin ninguna llave de usuario instalada: sin comando SSH falso, con aviso (producción y pruebas)")
+
     # e) BYO pegada + llave del equipo en uso personal: la BYO se instala y la del equipo también
     j = crear(uso="personal", hostname="lab2", modo="produccion", llaves_equipo=["alcadio"],
               pubkey_cliente=LE["fabian"]["llaves"][0])
