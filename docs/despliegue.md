@@ -80,6 +80,7 @@ de VPS y al MikroTik.
 | Llaves SSH | `/opt/vps-engine/keys/` | `vps_engine_esxi` (wrapper) · `vps_engine_mgmt` (gestión) · volumen `:/keys` ro |
 | API | `127.0.0.1:8224` | header `X-Auth-Token` |
 | Mantención diaria | `vps-mantencion.timer` (04:30) → purga + reconciliación | unidades en `/etc/systemd/system/`, script en `/usr/local/bin/` (repo: `noc-monitor/`) |
+| **Guion de despliegue del motor** | `noc-monitor/desplegar-motor.sh` (repo) → copiar a `/tmp/vps-marcas/` junto con `engine/app.py`, `marcas/`, `sabores/` y correr `bash desplegar-motor.sh <sufijo>` | respaldo tgz del build + app.py.bak, build, restart, /health con las marcas (lee ENGINE_TOKEN con grep, no con source) |
 
 **Secretos — nunca en el repo.** Solo en `engine.env` (600, root) y las llaves privadas
 en `keys/` (600). El repo solo lleva código, sabores y llaves públicas.

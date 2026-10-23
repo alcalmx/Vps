@@ -5,6 +5,31 @@
 
 ---
 
+## 2026-10-23 (viernes, 16:37–16:41) — 🌐 SELECTOR DE RED PÚBLICA + asignador con reglas de firewall — EN PRODUCCIÓN (motor 16:37, dashboard 16:41), APROBADO por Codex
+
+Pedido de Alcadio: *"ahora hay que hacer lo de seleccionar la red pública en la que quiero que asigne"*.
+- **Motor:** `/crear` acepta `pub_lista` (solo rol admin → 403 para WHMCS; debe existir en `PUB_REDES` → 400; solo en
+  producción → 400). Paso 12: `pub_lista = pub_lista_req or lista_marca`; el `publica_rango_prueba` de la marca solo
+  acota SU lista por defecto — otra lista = pool completo (IP más alta libre, validada 5 veces). El detalle del paso
+  dice "lista X elegida por el NOC". `/health` (admin) expone `redes_publicas` = [{lista, red}] (Red57-0, Red104-0…
+  Red107-0). Va junto el **asignador de IP privada** con reglas/listas de firewall (entrada anterior; Codex pidió
+  capturar el timeout → hecho, commit `806f2e1`).
+- **Dashboard** (`patch_vps_pub_lista_v1.py`): tercera columna "Red pública" en DÓNDE SE CREA (las tres a `col-md-4`,
+  ajuste de Codex), preseleccionada la lista de la marca con su rango de prueba y re-preseleccionada al cambiar de
+  marca/uso; deshabilitada en Pruebas; el aviso amarillo refleja la lista elegida ("pool completo" si no es la de la
+  marca); el body solo lleva `pub_lista` en producción.
+- **Codex:** asignador — 1 hallazgo (timeout de `mikrotik()` rompía el best effort) → corregido con prueba; selector —
+  APROBADO (solo el ajuste visual). **Pruebas:** `test_uso_personal.py` (400/403/texto, creación con Red107-0 → lista
+  elegida sin rango + NAT con esa lista + `vms.pub_lista`; sin elegir → Red57-0 [100,102]) y `test_marcas.py`
+  (reglas filter/raw/lista → IP ocupada; consultas fallidas o con timeout → aviso y sigue). 20 suites verdes.
+  Commits `61c3976`, `806f2e1`, `79ea19c`, `68cbbb9`.
+- **Desplegado con OK de Alcadio ("si"):** motor con el guion corregido (respaldo `build.bak-pub-20261023-1637.tgz`
+  + `app.py.bak-pub-20261023-1637`, imagen c78f7f91109c, 200 en 2 s, `/health` con 8 marcas + interna, DEPLOY MOTOR
+  OK); dashboard con `deploy_dashboard.sh … vpspub` (respaldo `dashboard.py.bak.20261023-vpspub`, md5 80e4e6a1…,
+  imagen v2 f8566879bb4b, 200 en 2 s, DEPLOY OK). **El guion del motor queda en el repo:**
+  `noc-monitor/desplegar-motor.sh` (sufijo del respaldo como argumento; lee ENGINE_TOKEN con grep), documentado en
+  `docs/despliegue.md`.
+
 ## 2026-10-23 (viernes, 16:16–16:30) — 🏁 PRIMER VPS DE USO PERSONAL CREADO: `vps-int-0001-alcadio` (15/15) + lección del asignador de IP
 
 Alcadio lo lanzó desde el dashboard (job `4be7096cb752`, actor alcadio, uso personal, Cyber Black, AlmaLinux 9, sin cPanel,
