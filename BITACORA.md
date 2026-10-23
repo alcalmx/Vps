@@ -5,6 +5,68 @@
 
 ---
 
+## 2026-10-23 (viernes, tarde) — 👤 USO PERSONAL vs CLIENTE: VPS internos con dueño, red 10.100.36.0/24 — APROBADO por Codex (2 rondas), PENDIENTE DE DEPLOY (esperando OK)
+
+Pedido de Alcadio (tras validar quién puede crear VPS: superadmin alcadio + rol NOC jonatan, fabian,
+cristian, gerardo, roni; operaciones y soporte no): *"Hay 2 tipos de creaciones: 1) uso personal, un
+usuario crea una máquina para usarla él en cosas internas (ej. Gerardo); 2) para un cliente. El VPS
+del punto 1 lo gestiona solo ese usuario en VPS gestionados; el de cliente lo vemos todos. Agregar un
+check uso personal / cliente. Cuando es personal la red es la 10.100.36.0/24 (sistemas internos
+nuestros): si tildan esa opción solo debería poder asignar esa red."*
+
+**Datos levantados:** la 10.100.36.0/24 es "Sistemas Internos Hosting.cl" en RouterData: 10.100.36.1/24
+en `sfp28-2 Switch A Rack 1- Rack12`, **sin etiqueta VLAN** (nativa), 31 reglas NAT a mano (WHMCS, PBX,
+Nextcloud, Agentes Claude 1-4 con srcnat compartido a 201.148.106.2, "ubuntu Gerardo" con pública
+propia…), 32 ARP vivas. Ningún host enrolado tiene hoy un portgroup para esa red.
+
+**Diseño (motor `engine/app.py`, commits `c011efe`, `95df931`, `cd13210`, `cbe19d8`):**
+- La red interna es una entrada más de `marcas/`: **`marcas/interno.json`** con `"uso": "interno"`
+  (prefijo `vps-int`, `pub_lista` null, hereda planes de hosting.cl, `vlan: 0`, portgroup
+  `Sistemas_Internos` con alias `portgroups: ["Sistemas Internos"]`). No es comercial: fuera de
+  `/health.marcas` (selector) pero en `marcas_detalle` con `uso`. `MARCA_INTERNA` = su id. El validador
+  no exige VLAN a una marca interna; `portgroups` (alias por host) se valida; `resolver_portgroup`
+  acepta el principal o cualquier alias (la red sin VLAN solo se encuentra por nombre).
+- **`/crear` con `uso` ∈ {cliente, personal}.** Personal: solo rol admin con `actor` identificado (el
+  proxy pone el usuario de sesión), fuerza `marca=interno`, `propietario=actor`, `cliente = cliente or
+  actor` (el dueño va en el nombre: `vps-int-0001-gerardo`), rechaza `whmcs_serviceid`, y **fuerza modo
+  producción** (la red interna es la única posible; si pedían pruebas queda aviso en la auditoría).
+  Usar la marca interna con uso=cliente → 400.
+- **Flujo personal:** IP privada por `ip_libre_produccion` sobre 10.100.36.0/24 (NAT+ARP de RouterData +
+  registro); **sin IP pública, sin NAT, sin WHMCS**; NetBox registra solo la privada; cPanel según plan;
+  securización y Send igual que siempre (el dueño recibe la llave por la bóveda). Paso 1 dice "USO
+  PERSONAL de <usuario> (sin IP pública)".
+- **Visibilidad por dueño:** columnas `vms.uso/propietario` y `jobs.uso/propietario` (ALTER idempotente,
+  NULL = cliente). `/vms`, `/jobs`, `/job/<id>` reciben `?usuario=&total=` del proxy (`total=1` solo si el
+  usuario es superadmin del dashboard) — **solo con rol admin**: con token WHMCS los parámetros se
+  ignoran y lo personal queda oculto. El filtro de `/jobs` va en el SQL antes del `LIMIT 60`. `/accion` y
+  `/editar` exigen dueño o `admin_total` (lo pone el proxy); los jobs de acción/edición nacen con el dueño.
+- **Suspender un VPS personal = apagar** (graceful + forzado a los 60 s); **reanudar = encender**
+  (`ACCIONES_PERSONAL_PASOS`). Eliminar: igual (no hay NAT que liberar).
+- **Dashboard** (`patch_vps_uso_personal_v1.py` + `v2.py` en fastnetmon/containers/dashboard): radio
+  **Uso** en PARA QUIÉN; con personal la marca queda fija en "Uso interno (sistemas internos)" (option al
+  vuelo + select deshabilitado), Cliente = usuario de sesión (readOnly), **Entorno fijo en Producción**,
+  textos de red/aviso adaptados; en VPS gestionados una caja "Mis VPS de uso personal (solo los ves tú)"
+  (solo si hay) + etiqueta `personal · <dueño>`; proxy agrega `usuario`/`total`/`admin_total`. Al limpiar
+  vuelve a "Para un cliente".
+- **Decisión de Claude (confirmar con Alcadio):** el superadmin (alcadio) SÍ ve y opera los VPS personales
+  de todos (para poder limpiar si alguien se va). `/reconciliar` (job de sistema) puede nombrar VMs
+  personales en sus avisos de deriva — aceptado.
+
+**Codex (2 rondas):** R1 — 2 bloqueantes (WHMCS podía leer jobs personales con `?total=1`; uso personal
+admitía la red de pruebas) + 2 medios (job de edición sin dueño por un instante; `LIMIT 60` antes del
+filtro) → todos corregidos. R2 — **APROBADO**, con una menor de cobertura (exigir que editar un VPS
+personal termine bien) → hecha. **Pruebas:** `engine/tests/test_uso_personal.py` (catálogo interno, alias
+de portgroup, validaciones de /crear, creación personal COMPLETA con stubs hasta "activo" sin tocar
+RouterData para la pública, visibilidad en /vms (y papelera)/jobs/job incl. WHMCS y 61 jobs ajenos,
+403 para otros, suspender apaga / reanudar enciende, superadmin opera, edición con dueño y exitosa,
+modo pruebas forzado a producción con aviso, VPS de cliente visible para todos). **20 suites verdes.**
+
+**PENDIENTE de Alcadio:** (1) OK de despliegue (archivos en `/tmp/vps-marcas` y
+`/tmp/dashboard.py.vpsuso` de noc-monitor); (2) **salida a internet de los VPS personales**: el motor no
+crea NAT para ellos (¿a mano, o srcnat automático por la 201.148.106.2 compartida?); (3) **portgroup de la
+red interna** en cada host (`Sistemas_Internos` / `Sistemas Internos`, VLAN 0, sobre el uplink que lleve
+la red nativa) — hoy ninguno lo tiene; (4) confirmar que el superadmin vea los VPS personales de todos.
+
 ## 2026-10-23 (viernes) — 🏷️ MULTI-MARCA: crear VPS de CUALQUIER marca desde el dashboard — EN PRODUCCIÓN 12:26 (motor) y 12:30 (dashboard), APROBADO por Codex (4 rondas)
 
 **CIERRE (12:30):** Alcadio respondió: (1) *"Ok despliega"*, (2) prefijos *"estoy conforme"*, (3) *"los planes para todas las
