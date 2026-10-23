@@ -5,6 +5,23 @@
 
 ---
 
+## 2026-10-23 (viernes, 17:33–17:36) — 🔑 Llaves del equipo SOLO para VPS de uso personal — EN PRODUCCIÓN
+
+Alcadio, viendo el formulario: *"no le escribas eso de modo prueba, solo deja los tildes. Si yo tildo una es porque no
+quiero que el sistema genere una key. Si es un VPS para cliente no debería permitirme colocar mis keys."*
+- **Motor** (commit `42d60b8`): `/crear` rechaza `llaves_equipo` si `uso != personal` (400 "las llaves del equipo son
+  solo para VPS de uso personal"; el chequeo de rol admin va antes → WHMCS sigue en 403). Uso personal + tilde ya no
+  generaba llave de entrega.
+- **Dashboard** (`patch_vps_llaves_equipo_v2.py`): la caja solo se ve con «Uso personal» (con «Para un cliente» se oculta y
+  se desmarca); sin texto de ayuda, título «Llaves del equipo» y los tildes; el aviso de VPS sin llave en pruebas ya no
+  sugiere tildes.
+- Codex (pasada corta): la regla del motor y el dashboard OK; marcó como rota una prueba que en realidad pasaba (el
+  motor fuerza producción en uso personal, regla que él aprobó en otro hilo) → igual se dejó `modo=produccion`
+  explícito en la base de la suite (commit `f18b234`). 21 suites verdes.
+- **Desplegado con OK ("si despliega"):** motor `desplegar-motor.sh equipo2` (respaldo `build.bak-equipo2-20261023-1733.tgz`,
+  imagen 85651054d960, 200 en 2 s); dashboard `deploy_dashboard.sh … vpseq2` (respaldo `dashboard.py.bak.20261023-vpseq2`,
+  md5 6f906512…, imagen v2 785c031540f1, 200 en 2 s).
+
 ## 2026-10-23 (viernes, 17:01–17:04) — 🔑 LLAVES DEL EQUIPO: tildes en Crear VPS (Alcadio, Fabián, Jonatan) — EN PRODUCCIÓN, APROBADO por Codex (2 rondas)
 
 **DESPLEGADO con OK de Alcadio ("ok despliega"):** motor con `noc-monitor/desplegar-motor.sh equipo` (primer uso del guion
