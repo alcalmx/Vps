@@ -1,0 +1,28 @@
+{
+  "_comentario": "Llaves PÚBLICAS del equipo que el NOC puede agregar a un VPS con un tilde en Crear VPS (pedido de Alcadio 2026-10-23). Solo públicas: la privada nunca pasa por aquí. Cada entrada: id (usuario del dashboard), nombre visible, llaves (una o más líneas authorized_keys sin opciones). Una entrada sin llaves aparece deshabilitada en el formulario. Para agregar o rotar: editar este archivo, correr engine/tests y desplegar el motor.",
+  "llaves_equipo": [
+    {
+      "id": "alcadio",
+      "nombre": "Alcadio (YubiKey)",
+      "llaves": [
+        "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQDlev2myYCxQqLPTJxWLmOWmnu1FFhjs9bExg/WdHdT2NcJuUTdvWmm6TLY/A7FZ/WoMlYj12kQgDcqJ+d3GYcJn+OtWaJGs/KnA5FFEAXGTuhul06MW6CCdwk9I/99onCPWeE1QsUHuGPLwbaRBGYpgzgurCaFXEJA46IomGRzDwo7hKlep4gXkkQpHLKBHUgW73KcEIVZ6d5xrTOaTy0/Iiqn2tuNHMNysmPYGTC81VZcOsztxZ2V8Gt8shSZ2FOOTZgAWm50+CQLEJuTHUa4zu61gNeREQzNGd0FsmC4WVkcYPM9Bm0/hxMPHaref5eHXkj337ODtuYdtIwtfQjV alcadio-yubikey-20261005"
+      ],
+      "origen": "YubiKey PIV slot 9a, autorizada en noc-monitor el 2026-10-05 (SHA256:GEHyGvIXwcGV/hQOXybpAaoFGWGtvQMLEC2FQcoaOdQ)"
+    },
+    {
+      "id": "fabian",
+      "nombre": "Fabián",
+      "llaves": [
+        "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQCYNRn8H/o5v8seHFLJwQ9AoLPPe315limMU/iWfXzck5GamXzg+DERolbUeMuS8xtIXEiJAXfY/zN+J+Pej2gO2/+hrz33nzsiyAItUsiPh5DLy/JNPTFTV/z07YwAtYAmUsCj7AbDOsrhpW7q6EzR2VgCzz86GdYYc/2/37xkz7h8itGrj0wW6oJ2aqs8Y9y66oP0m4rH7SY0qnXcJYABTR5e3wkcvFlTF8npcXSQdV+k6sKvdyKX0ODbfD+75pGVhJoNuM70TTljguw5tpfplGBOWjOMtCbPqjrgVv4ElcZ2i7rw9LOUZaeQmWFDUEsifecU9PhUEGYNB+RPoHqt fabian@fabian-Linux",
+        "ssh-rsa AAAAB3NzaC1yc2EAAAABIwAAAQEAuRh4CyEsF4/ZOqcKSEq0Zz6ikDLBnH0/eDka9kMw07HE3ANVIDx0nfyUof3DfxlxO6mVH7r39IZ4hRyL+xiZZbyaBXTR8WbRZ9RXRPQjcplbDA0XBUA8Tht/uA8h3wOxgywNAcKrGRkLjC2Kvlqj2cEXiNj9qX4JetpJsz5uJV7+d1i43C9jAKDBhx62RyywyawqEscp/IrAxw8gEY+srTdRnp3epLEkSBdNZtCikRKDIjjWt0lSyed44g9Wzgsaro06FmBuVpNXtElbYydYU44+1TzheGolFG6MDpIGPGJHeAINJ0jFZyB1YZiGhxM12y1S4sNLSPzP3l7kbRcrYQ== fabian@localhost"
+      ],
+      "origen": "las dos llaves de Fabián autorizadas en el root de esxi-20039 (fabian@fabian-Linux y fabian@localhost), leídas el 2026-10-23"
+    },
+    {
+      "id": "jonatan",
+      "nombre": "Jonatan",
+      "llaves": [],
+      "origen": "PENDIENTE: no hay llave SSH de Jonatan registrada en ningún servidor (2026-10-23); pedírsela y agregarla aquí"
+    }
+  ]
+}

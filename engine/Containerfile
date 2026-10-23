@@ -15,6 +15,7 @@ WORKDIR /app
 COPY engine/app.py /app/app.py
 COPY marcas/  /app/config/marcas/
 COPY sabores/ /app/config/sabores/
+COPY equipo/  /app/config/equipo/
 # template del wrapper para el wizard de enrolamiento (Fase D): el motor lo sube
 # al host nuevo reescribiendo su BASE= (mismo archivo que instala enrolar-host.sh)
 COPY vps-wrapper.sh /app/config/vps-wrapper.sh

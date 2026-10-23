@@ -37,7 +37,7 @@ _capt = {}
 def _fake_flujo(job, marca, sabor_slug, cliente, hostname, instalar_cpanel, modo,
                 pubkey_cliente=None, root_password=None, whmcs_serviceid=None,
                 sabor_def=None, host=None, so=None, root_password_auto=False, uso="cliente",
-                pub_lista_req=None):
+                **_resto):   # parámetros nuevos de flujo_crear (red pública, llaves del equipo…)
     _capt.clear()
     _capt.update(cpanel=instalar_cpanel, pw=root_password, auto=root_password_auto)
 motor.flujo_crear = _fake_flujo

@@ -381,7 +381,8 @@ def init_db():
                           ("datastore", "TEXT"),    # multi-datastore: datastore donde VIVE la VM
                           ("so", "TEXT"),           # sistema operativo con el que se creó
                           ("uso", "TEXT"),          # 'cliente' (NULL = cliente) | 'personal' (uso interno de un usuario)
-                          ("propietario", "TEXT")): # usuario del dashboard dueño de un VPS 'personal'
+                          ("propietario", "TEXT"),  # usuario del dashboard dueño de un VPS 'personal'
+                          ("llaves_equipo", "TEXT")):  # JSON {instaladas:[ids], fallidas:[ids]} (tildes de Crear VPS)
             try:
                 c.execute("ALTER TABLE vms ADD COLUMN %s %s" % (col, decl))
             except sqlite3.OperationalError as e:
@@ -1337,6 +1338,75 @@ def securizar_vps(job, nombre, ip, cliente, hostname):
     return r
 
 
+# ── Llaves del equipo (tildes de Crear VPS, Alcadio 2026-10-23) ──────────────
+EQUIPO_ID_RE = re.compile(r"[a-z0-9][a-z0-9._-]{0,39}")
+
+def cargar_llaves_equipo(config_dir):
+    """equipo/llaves.json → {id: {id, nombre, llaves, huellas}}. Solo llaves PÚBLICAS, una por línea,
+    sin opciones de authorized_keys (validadas con PUBKEY_RE completo y ssh-keygen). Una entrada sin
+    llaves es válida (el formulario la muestra deshabilitada; /crear la rechaza). Sin archivo → catálogo
+    vacío. Cualquier error de formato impide arrancar (fail-fast, como las marcas)."""
+    p = os.path.join(config_dir, "equipo", "llaves.json")
+    if not os.path.exists(p):
+        return {}
+    doc = _load_json(p)
+    lista = doc.get("llaves_equipo") if isinstance(doc, dict) else None
+    if not isinstance(lista, list):
+        raise RuntimeError("equipo/llaves.json: falta la lista 'llaves_equipo'")
+    out = {}
+    for e in lista:
+        if not isinstance(e, dict):
+            raise RuntimeError("equipo/llaves.json: cada entrada debe ser un objeto")
+        i, n, ks = e.get("id"), e.get("nombre"), e.get("llaves")
+        if not isinstance(i, str) or not EQUIPO_ID_RE.fullmatch(i):
+            raise RuntimeError("equipo/llaves.json: id inválido %r (minúsculas, dígitos, . _ -)" % (i,))
+        if i in out:
+            raise RuntimeError("equipo/llaves.json: id %r repetido" % i)
+        if not isinstance(n, str) or not n.strip():
+            raise RuntimeError("equipo/llaves.json: %s sin 'nombre'" % i)
+        if not isinstance(ks, list):
+            raise RuntimeError("equipo/llaves.json: %s: 'llaves' debe ser una lista" % i)
+        llaves, huellas = [], []
+        for k in ks:
+            if not isinstance(k, str) or "\n" in k or "\r" in k or not PUBKEY_RE.fullmatch(k.strip()):
+                raise RuntimeError("equipo/llaves.json: %s tiene una llave que no es una pública SSH de "
+                                   "una línea sin opciones" % i)
+            try:
+                huellas.append(fingerprint_pubkey(k.strip()))
+            except RuntimeError as ex:
+                raise RuntimeError("equipo/llaves.json: %s: %s" % (i, ex))
+            llaves.append(k.strip())
+        out[i] = {"id": i, "nombre": n.strip()[:60], "llaves": llaves, "huellas": huellas}
+    return out
+
+LLAVES_EQUIPO = cargar_llaves_equipo(CONFIG_DIR)
+
+def instalar_llaves_equipo(job, nombre, ip, ids):
+    """Instala en la VM las llaves de los ids pedidos (vía llave de gestión). Un fallo NO aborta la
+    creación (la VM ya está lista): se anota y se devuelve para mostrarlo. Registra en vms.llaves_equipo.
+    Devuelve (nombres_ok, nombres_fallidos)."""
+    ok_ids, mal_ids = [], []
+    for i in ids:
+        e = LLAVES_EQUIPO.get(i)
+        try:
+            if not e or not e["llaves"]:
+                raise RuntimeError("sin llave cargada")
+            if not MGMT_PRIVKEY_PATH:
+                raise RuntimeError("sin llave de gestión configurada")
+            for k in e["llaves"]:
+                instalar_pubkey_en_vm(ip, k)
+            ok_ids.append(i)
+        except Exception as ex:  # noqa: BLE001 — se informa por nombre; el tipo va a la auditoría
+            mal_ids.append(i)
+            audit(job.actor, "llaves-equipo", nombre, "no se pudo instalar la llave de %s (%s)"
+                  % (i, type(ex).__name__), "aviso")
+    with DB_LOCK, db() as c:
+        c.execute("UPDATE vms SET llaves_equipo=? WHERE nombre=?",
+                  (json.dumps({"instaladas": ok_ids, "fallidas": mal_ids}), nombre))
+    nom = lambda xs: [LLAVES_EQUIPO[x]["nombre"] if x in LLAVES_EQUIPO else x for x in xs]
+    return nom(ok_ids), nom(mal_ids)
+
+
 # ── Plantilla VMX ────────────────────────────────────────────────────────────
 VMX_TEMPLATE = """.encoding = "UTF-8"
 config.version = "8"
@@ -1859,7 +1929,7 @@ def entregar_root_password(res, root_password, auto, aplicada):
 def flujo_crear(job, marca, sabor_slug, cliente, hostname, instalar_cpanel, modo,
                 pubkey_cliente=None, root_password=None, whmcs_serviceid=None,
                 sabor_def=None, host=None, so=None, root_password_auto=False, uso="cliente",
-                pub_lista_req=None):
+                pub_lista_req=None, llaves_equipo_ids=None):
     nombre = job.vm
 
     # TODO lo previo a tocar el ESXi va dentro del bloque que COMPENSA: si algo falla aquí la
@@ -2189,9 +2259,14 @@ def flujo_crear(job, marca, sabor_slug, cliente, hostname, instalar_cpanel, modo
     job.paso()
     entrega = None
     byo_fp = None
+    equipo_ok, equipo_mal = [], []
     if modo == "produccion":
         if pubkey_cliente:
             byo_fp = securizar_byo(job, nombre, ip, pubkey_cliente)
+        elif uso == "personal" and llaves_equipo_ids:
+            # VPS interno con llaves del equipo: el dueño entra con la suya → no se genera llave
+            # de entrega (nada que custodiar ni Send que mandar)
+            job.detalle("uso personal con llaves del equipo: no se genera llave de entrega")
         else:
             entrega = securizar_vps(job, nombre, ip, cliente, fqdn)
             if entrega:
@@ -2203,6 +2278,12 @@ def flujo_crear(job, marca, sabor_slug, cliente, hostname, instalar_cpanel, modo
                     (" · contraseña: " + entrega["password"]) if entrega.get("password") else ""))
     else:
         job.detalle("omitido (modo pruebas — la securización va en producción)")
+    if llaves_equipo_ids:
+        equipo_ok, equipo_mal = instalar_llaves_equipo(job, nombre, ip, llaves_equipo_ids)
+        previo = job.pasos[job._i]["detalle"] if 0 <= job._i < len(job.pasos) else ""
+        job.detalle(((previo + " · ") if previo else "") + "llaves del equipo: " +
+                    (("instaladas " + ", ".join(equipo_ok)) if equipo_ok else "ninguna instalada") +
+                    ((" · ⚠ NO se pudo instalar: %s — agregarla a mano" % ", ".join(equipo_mal)) if equipo_mal else ""))
 
     # 15. finalizar
     job.paso()
@@ -2212,7 +2293,10 @@ def flujo_crear(job, marca, sabor_slug, cliente, hostname, instalar_cpanel, modo
     acceso_ip = publica or ip
     res = {"vm": nombre, "sabor": sabor_slug, "privada": ip, "usuario": "root",
            "acceso_ip": acceso_ip,
-           "ssh_cmd": ("ssh -i TU_LLAVE_PRIVADA root@%s" if byo_fp else "ssh -i id_ed25519 root@%s") % acceso_ip,
+           "ssh_cmd": ("ssh -i TU_LLAVE_PRIVADA root@%s" if byo_fp else
+                       "ssh -i id_ed25519 root@%s" if entrega else
+                       "ssh root@%s" if equipo_ok else "ssh -i id_ed25519 root@%s") % acceso_ip,
+           "llaves_equipo": equipo_ok, "llaves_equipo_fallidas": equipo_mal,
            "publica": publica, "cpanel": bool(instalar_cpanel),
            "byo": bool(byo_fp), "byo_fp": byo_fp,
            "whm": ("https://%s:2087" % acceso_ip) if instalar_cpanel else None}
@@ -3053,6 +3137,8 @@ def health():
                     "marcas": marcas_activas(), "sabores": sorted("%s/%s" % k for k in SABORES),
                     "sabores_detalle": detalle, "marcas_detalle": marcas_det,
                     "redes_publicas": [{"lista": k, "red": v} for k, v in sorted(PUB_REDES.items())],
+                    "llaves_equipo": [{"id": e["id"], "nombre": e["nombre"], "huellas": e["huellas"],
+                                       "disponible": bool(e["llaves"])} for e in LLAVES_EQUIPO.values()],
                     "sistemas": sistemas, "so_default": SO_DEFAULT})
 
 @app.route("/crear", methods=["POST"])
@@ -3165,6 +3251,23 @@ def crear():
                                      % (pub_lista_req, ", ".join(sorted(PUB_REDES)))}), 400
         if modo != "produccion":
             return jsonify({"error": "la red pública solo aplica en modo producción"}), 400
+    # LLAVES DEL EQUIPO (tildes de Crear VPS): ids del catálogo equipo/llaves.json; nunca llaves crudas.
+    _le = d.get("llaves_equipo")
+    if _le is None:
+        _le = []
+    if not isinstance(_le, list) or len(_le) > 20 or not all(isinstance(x, str) for x in _le):
+        return jsonify({"error": "llaves_equipo debe ser una lista de ids (texto, máx 20)"}), 400
+    llaves_equipo_ids = list(dict.fromkeys(x.strip() for x in _le if x.strip()))
+    if llaves_equipo_ids:
+        if rol != "admin":
+            return jsonify({"error": "solo el NOC puede agregar llaves del equipo"}), 403
+        for x in llaves_equipo_ids:
+            if x not in LLAVES_EQUIPO:
+                return jsonify({"error": "llave del equipo desconocida: %s (opciones: %s)"
+                                         % (x, ", ".join(sorted(LLAVES_EQUIPO)) or "ninguna")}), 400
+            if not LLAVES_EQUIPO[x]["llaves"]:
+                return jsonify({"error": "%s todavía no tiene una llave cargada en el catálogo"
+                                         % LLAVES_EQUIPO[x]["nombre"]}), 400
     # SISTEMA OPERATIVO: por defecto el `so_default` del plan; el NOC puede forzar otro
     # (WHMCS vende el catálogo: su SO lo define el plan, igual que las specs).
     _so = d.get("so")
@@ -3265,7 +3368,8 @@ def crear():
                                            pubkey_cliente or None, root_password, whmcs_serviceid,
                                            sabor_def=sabor_def, host=host_sel, so=so_efectivo,
                                            root_password_auto=root_password_auto, uso=uso,
-                                           pub_lista_req=pub_lista_req))
+                                           pub_lista_req=pub_lista_req,
+                                           llaves_equipo_ids=llaves_equipo_ids))
     except Exception as e:
         # cupo excedido: rechazo LIMPIO con el motivo (no es un error interno)
         if "cupo del" in str(e) and "excedido" in str(e):

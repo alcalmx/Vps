@@ -1,6 +1,6 @@
 #!/bin/bash
 # Despliegue del motor vps-engine en noc-monitor (guion reutilizable; nació con el multi-marca 2026-10-23).
-# Uso: scp engine/app.py marcas/ sabores/ a /tmp/vps-marcas/ (engine/app.py, marcas/, sabores/) y luego
+# Uso: scp a /tmp/vps-marcas/ engine/app.py, engine/Containerfile, marcas/, sabores/ y equipo/; luego
 #      ssh noc-monitor 'bash /tmp/vps-marcas/desplegar_motor_marcas.sh' — o copiar este guion a /tmp/vps-marcas/.
 # Lee ENGINE_TOKEN con grep (NO con source: engine.env tiene valores con espacios, p.ej. MGMT_PUBKEY).
 # Espera los archivos nuevos en /tmp/vps-marcas/{engine/app.py,marcas/,sabores/}.
@@ -10,15 +10,16 @@ B=/opt/vps-engine/build
 SRC=/tmp/vps-marcas
 TS=$(date +%Y%m%d-%H%M)
 SUF="${1:-deploy}"   # sufijo del respaldo (ej: marcas, uso, pub)
-[ -s "$SRC/engine/app.py" ] && [ -d "$SRC/marcas" ] && [ -d "$SRC/sabores" ] || { echo "faltan archivos en $SRC"; exit 1; }
+[ -s "$SRC/engine/app.py" ] && [ -s "$SRC/engine/Containerfile" ] && [ -d "$SRC/marcas" ] && [ -d "$SRC/sabores" ] && [ -d "$SRC/equipo" ] || { echo "faltan archivos en $SRC"; exit 1; }
 echo "== respaldo del build =="
 tar -C /opt/vps-engine -czf "/opt/vps-engine/build.bak-$SUF-$TS.tgz" build
 cp -p "$B/engine/app.py" "$B/engine/app.py.bak-$SUF-$TS"
 echo "respaldo: /opt/vps-engine/build.bak-$SUF-$TS.tgz y app.py.bak-$SUF-$TS"
 echo "== copia =="
 cp "$SRC/engine/app.py" "$B/engine/app.py"
-rm -rf "$B/marcas" "$B/sabores"
-cp -r "$SRC/marcas" "$SRC/sabores" "$B/"
+cp "$SRC/engine/Containerfile" "$B/engine/Containerfile"
+rm -rf "$B/marcas" "$B/sabores" "$B/equipo"
+cp -r "$SRC/marcas" "$SRC/sabores" "$SRC/equipo" "$B/"
 echo "md5 app.py en build: $(md5sum "$B/engine/app.py" | cut -d' ' -f1)"
 ls "$B/marcas"
 echo "== build de la imagen (1-3 min) =="
