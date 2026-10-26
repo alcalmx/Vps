@@ -369,6 +369,15 @@ def db():
     conn.row_factory = sqlite3.Row
     return conn
 
+def marcar_jobs_huerfanos():
+    """Jobs 'corriendo' de un proceso anterior (reinicio del motor): sus hilos ya no existen → error,
+    para que no bloqueen el gate de 1-job-por-VM ni queden girando en el dashboard. SOLO al arrancar
+    el servicio (__main__), nunca al importar: el 2026-10-26 un `import app` de diagnóstico en otro
+    proceso marcó como interrumpida una creación que seguía corriendo en el motor."""
+    with DB_LOCK, db() as c:
+        return c.execute("UPDATE jobs SET estado='error', error='interrumpido por reinicio del motor', "
+                         "updated_at=datetime('now','localtime') WHERE estado='corriendo'").rowcount
+
 def init_db():
     with DB_LOCK, db() as c:
         c.executescript("""
@@ -420,11 +429,8 @@ def init_db():
         except sqlite3.OperationalError as e:
             if "duplicate column name" not in str(e).lower():
                 raise
-        # jobs 'corriendo' huérfanos de un proceso anterior (reinicio del motor): sus
-        # threads ya no existen → error, para que no bloqueen el gate de 1-job-por-VM
-        # ni queden girando eternamente en el dashboard
-        c.execute("UPDATE jobs SET estado='error', error='interrumpido por reinicio del motor', "
-                  "updated_at=datetime('now','localtime') WHERE estado='corriendo'")
+        # (los jobs 'corriendo' huérfanos ya NO se marcan aquí: init_db corre también al
+        # importar el módulo — ver marcar_jobs_huerfanos, que solo llama el arranque real)
         # ── MULTI-HOST Fase A1 (2026-09-17) ──────────────────────────────────
         # Registro de hosts VMware donde el motor puede actuar. Las CREDENCIALES
         # nunca van aquí: api/ssh referencian rutas y NOMBRES de env vars del
@@ -5238,4 +5244,5 @@ def auditoria():
 init_db()
 
 if __name__ == "__main__":
+    marcar_jobs_huerfanos()
     app.run(host="127.0.0.1", port=8224, threaded=True)
