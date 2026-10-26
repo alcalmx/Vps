@@ -99,6 +99,9 @@ dashboard**, el formulario pregunta el acceso: «Llave SSH» (lo de siempre) o �
   cliente. La llave de gestión del NOC sigue instalada.
 - La contraseña se ve solo en el resultado del job (rol admin del dashboard) y se **redacta al vencer el plazo de
   entrega**, igual que la de WHM. Con cPanel, la misma contraseña sirve para SSH y WHM.
+- **Clave de root en todos los VPS del dashboard (Alcadio 2026-10-26):** también con acceso por llave (cliente o uso
+  personal) el motor genera, aplica y entrega una clave de root; ahí sirve para WHM (si hay cPanel) y la consola de VMware,
+  **no** para SSH (el SSH sigue solo con llave). WHMCS: sin cambios.
 - **No aplica** a VPS de uso personal (siempre llave) ni a creaciones desde WHMCS (sin cambios). `vms.acceso`
   registra `llave` o `clave` para saber qué VPS migrar.
 - **Volver a solo llave** en un VPS: borrar `/etc/ssh/sshd_config.d/00-acceso-clave.conf` y `systemctl reload sshd`.

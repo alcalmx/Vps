@@ -3634,7 +3634,10 @@ def crear():
         if root_password:
             return jsonify({"error": "con acceso por contraseña la clave de root la genera el motor"}), 400
     root_password_auto = False
-    if (cpanel or acceso == "clave") and not root_password:
+    # Alcadio 2026-10-26: TODO VPS creado desde el DASHBOARD (rol admin) lleva clave de root asignada y entregada en el
+    # panel — con acceso por llave sirve para WHM (si hay cPanel) y la consola, NO para SSH; con acceso por contraseña
+    # además para SSH. WHMCS es otro flujo (sin cambios: genera solo si pide cPanel y no trae clave).
+    if not root_password and (rol == "admin" or cpanel or acceso == "clave"):
         root_password = password_root_auto()   # con cPanel + clave: la MISMA sirve para SSH y WHM
         root_password_auto = True
     # id del servicio en WHMCS (para trackear la VM sin depender del Username)

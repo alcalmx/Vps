@@ -71,12 +71,30 @@ assert _capt["pw"] == mia, "la clave suministrada NO se toca"
 assert _capt["auto"] is False, "no es autogenerada"
 print("ok - clave suministrada se conserva EXACTA y no se marca como generada")
 
-# (3) SIN cPanel -> no se genera nada (el VPS es key-only, no necesita clave)
+# (las reservas de los casos anteriores quedan 'creando' porque el flujo es falso: se liberan para no agotar el cupo)
+with motor.DB_LOCK, motor.db() as _c:
+    _c.execute("DELETE FROM vms WHERE estado='creando'")
+# (3) SIN cPanel desde el DASHBOARD -> TAMBIÉN se genera (Alcadio 2026-10-26: todo VPS del dashboard lleva clave de
+#     root asignada, para consola/WHM; el SSH sigue solo con llave salvo acceso=clave)
 r = cli.post("/crear", json=dict(BASE, sabor="vps-estandar", hostname="p3.cl",
                                  instalar_cpanel=False), headers=ADMIN)
 assert r.status_code == 200, r.get_json()
+assert _capt["auto"] is True and _capt["pw"] and len(_capt["pw"]) == 12
+# uso personal (dashboard) sin cPanel -> también
+with motor.DB_LOCK, motor.db() as _c:
+    _c.execute("DELETE FROM vms WHERE estado='creando'")
+r = cli.post("/crear", json=dict(BASE, sabor="vps-estandar", hostname="p3b.cl", instalar_cpanel=False,
+                                 uso="personal", actor="gerardo"), headers=ADMIN)
+assert r.status_code == 200, r.get_json()
+assert _capt["auto"] is True and _capt["pw"]
+# WHMCS sin cPanel -> sigue SIN clave (otro flujo, sin cambios)
+with motor.DB_LOCK, motor.db() as _c:
+    _c.execute("DELETE FROM vms WHERE estado='creando'")
+r = cli.post("/crear", json=dict(BASE, sabor="vps-estandar", hostname="p3c.cl", instalar_cpanel=False,
+                                 whmcs_serviceid="57"), headers=WHMCS)
+assert r.status_code == 200, r.get_json()
 assert _capt["pw"] is None and _capt["auto"] is False
-print("ok - sin cPanel no se genera clave")
+print("ok - dashboard (cliente o personal) siempre genera clave de root; WHMCS sin cPanel no")
 
 # (4) también se genera para WHMCS si pidiera cPanel sin clave (es condición del servicio,
 #     no del rol — criterio de Codex)

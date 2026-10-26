@@ -320,9 +320,12 @@ try:
     # b) acceso por llave (default): lo de siempre, sin tocar sshd
     reset_vm()
     j = crear(hostname="srv2")
-    assert capt["secv"] == 1 and motor.SSHD_CLAVE_SCRIPT not in capt["cmds"] and capt["chpasswd"] == [] and LOGINS == []
+    assert capt["secv"] == 1 and motor.SSHD_CLAVE_SCRIPT not in capt["cmds"] and LOGINS == []
+    # Alcadio 2026-10-26: también lleva clave de root (WHM/consola) aplicada y entregada, pero el SSH NO se abre
+    assert len(capt["chpasswd"]) == 1 and j["resultado"]["root_password"] == capt["chpasswd"][0][len("root:"):].strip()
     assert j["resultado"]["acceso"] == "llave" and motor.vm_registrada(j["vm"])["acceso"] == "llave"
-    print("ok - acceso por llave (default): llave generada y entregada, sshd intacto, sin contraseña")
+    assert j["resultado"]["ssh_cmd"].startswith("ssh -i id_ed25519") and "SSH sigue solo con llave" in j["pasos"][10]["detalle"]
+    print("ok - acceso por llave (default): llave entregada + clave de root para WHM/consola; sshd intacto, sin login por contraseña")
 
     # c) Codex r3: otro equipo toma la IP ENTRE el chpasswd y la habilitación → nada se ejecuta ni se envía; incierto
     reset_vm(suplantar_tras_chpasswd=True)
