@@ -5,6 +5,22 @@
 
 ---
 
+## 2026-10-26 (lunes, 16:08) — 🛡️ Limpieza de jobs huérfanos SOLO al arrancar el servicio — EN PRODUCCIÓN, APROBADO por Codex
+
+Arreglo de fondo del incidente de las 15:30 (entrada más abajo), con OK de Alcadio ("ok despliega"). La marca
+"interrumpido por reinicio del motor" a los jobs 'corriendo' salió de `init_db()` (que corre al importar el módulo) a
+`marcar_jobs_huerfanos()`, llamada solo en `if __name__ == "__main__":` antes de `app.run` (el servicio arranca con
+`python3 /app/app.py`; Codex confirmó que no hay otro arranque: Quadlet, sin WSGI ni reloader). Importar `app.py` desde
+otro proceso ya no toca jobs vivos. Prueba nueva `tests/test_huerfanos.py` (job vivo + import en OTRO proceso con el
+mismo registro → sigue corriendo; la limpieza marca solo los 'corriendo'; ast: solo en __main__ antes de app.run);
+**falla con el código anterior**. 25 suites verdes. Deploy `desplegar-motor.sh huerfanos` sin jobs corriendo
+(verificado): respaldo `/opt/vps-engine/build.bak-huerfanos-20261026-1608.tgz` + `app.py.bak-huerfanos-20261026-1608`,
+imagen 119ae28bb36b, 200 en 2 s, 0 tracebacks, md5 e94843db… = repo (commit `399e6a0`).
+
+**Pendiente (bloqueado por permisos):** agregar `marca_nombre`/`plan` al resultado del job `3abca92fa8f7`
+(`vps-ihpe-0001-alcadio`, anterior al texto para el cliente). Escribir en el registro de producción quedó bloqueado por
+el clasificador de permisos; se le consultó a Alcadio.
+
 ## 2026-10-26 (lunes, ~15:45–16:00) — ✉️ TEXTO PARA EL CLIENTE en el panel del job — EN PRODUCCIÓN 16:02 (motor) / 16:03 (dashboard), APROBADO por Codex (3 rondas)
 
 Pedido de Alcadio (sobre el panel de acceso del job terminado): *"necesito poder copiar un texto, que es el que voy a
