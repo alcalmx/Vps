@@ -5,6 +5,42 @@
 
 ---
 
+## ⏯️ PARA RETOMAR (estado al cierre del 2026-10-26)
+
+**En producción hoy (todo con Codex; motor 26 suites verdes, dashboard 5 pruebas `test_vps_*.py`):**
+- **9 marcas** (8 comerciales + `interno`) y en esxi-20051 los portgroups de TODAS: VLAN 81–86 + `Sistemas_Internos`.
+- **Acceso por contraseña de root** para VPS de cliente (pregunta «Acceso»; validado en real con `vps-ihpe-0001/0002`);
+  clave de root de 12 caracteres en TODO VPS del dashboard (con llave: solo WHM/consola). Red106-0 solo en /25.
+- **Panel del job:** «Texto para el cliente» (asunto + mensaje editable para el correo; «Servidor» = IP, firma con la
+  marca) y modal compacto con 3 secciones plegables (Paso a paso · Acceso · Texto) y un paso por línea.
+- **Formulario Crear VPS** minimalista (sin textos de ayuda obvios) y Sabor con «Personalizado» primero; planes de menor
+  a mayor.
+- **Permisos por rol** (Administración → Usuarios): «NOC + VPS completo» = Fabián, Jonatan; «NOC + VPS internos» =
+  Gerardo, Cristian (solo SUS VPS internos, sin Motor); NOC sin sección = Roni; Alcadio superadmin. Casillas del editor
+  de roles: «↳ VPS de clientes» y «↳ Pestaña Motor». El motor aplica `solo_personal` (falla cerrado).
+- Limpieza de jobs huérfanos solo al arrancar el motor (ya no al importar `app.py`).
+- Todos los VPS están hoy en la papelera (Alcadio eliminó los de prueba).
+
+**Cómo desplegar:** motor = copiar `engine/app.py`, `engine/Containerfile`, `marcas/`, `sabores/`, `equipo/` y
+`noc-monitor/desplegar-motor.sh` a `/tmp/vps-marcas/` de noc-monitor y `bash desplegar-motor.sh <sufijo>` (ANTES verificar
+sin jobs corriendo: el reinicio los corta). Dashboard = `fastnetmon/containers/dashboard/deploy_dashboard.sh <archivo>
+<sufijo>`; parches en orden: marcas v1/v2 → uso_personal v1–v3 → pub_lista v1/v2 → llaves_equipo v1/v2 → acceso_clave
+v1–v4 → texto_cliente v1–v3 → job_modal v1 → sabores_orden v1 → form_minimal v1/v2 → permisos v1/v2. Tras cada deploy del
+dashboard, recordar **Ctrl+F5**. Siempre con OK de Alcadio. Para inspeccionar el motor: BD en solo lectura, NUNCA `import app`.
+
+**Pendientes de Alcadio:**
+0. **LICENCIA de esxi-20051 antes del 2026-11-28** (Modo Evaluación).
+1. Llave pública de **Jonatan** → `equipo/llaves.json` + desplegar el motor.
+2. Confirmar si las **dos llaves de Fabián** siguen vigentes.
+3. Borrar las reglas **45/46** de RouterData (10.100.36.253) y revisar el **NAT puesto en 201.148.106.102** (figura libre).
+4. **Go-live por marca** (`pub_lista` real y quitar `publica_rango_prueba`) y planes propios por marca.
+5. Cuándo dar «VPS de clientes» a Gerardo/Cristian (es un cambio de rol, sin código).
+6. Ofrecidos sin respuesta: Entorno «Producción» por defecto en el formulario; 2FA (9 de 11 usuarios del dashboard sin
+   2FA configurado); fail2ban o limitar el 22 en VPS con acceso por contraseña (riesgo aceptado en SEGURIDAD.md).
+
+**Frentes técnicos abiertos:** flujo de WHMCS ("más adelante"), dorada Ubuntu en otros hosts, multi-datastore Incremento 2,
+licencia cPanel automática, opción de SO en el módulo WHMCS.
+
 ## 2026-10-26 (lunes, 17:48–17:51) — 🔒 PERMISOS DE LA SECCIÓN VPS (quién crea qué) — EN PRODUCCIÓN, APROBADO por Codex (2 rondas)
 
 Pedido de Alcadio: *"esta herramienta debe ser utilizada en su totalidad por Alcadio, Fabián y Jonatan; Gerardo y
@@ -208,7 +244,7 @@ de mayor prioridad, prio 99, y aloja los VPS de prueba vps-int-0002/0003/0004). 
 asignarle licencia (p. ej. vSphere 8 Standard como el 20039) o bajarle la prioridad/pausarlo y crear en otro host.
 También del día: medición de vCPU dentro del VPS que dio 8 era del contenedor del motor (comillas); VMware y lscpu = 6.
 
-## ⏯️ PARA RETOMAR (estado al cierre del 2026-10-23)
+## ⏯️ (histórico) PARA RETOMAR del 2026-10-23
 
 **En producción hoy (todo con Codex y 21 suites verdes):** motor y dashboard creando VPS de **8 marcas** (hosting.cl,
 planetahosting.cl/.pe/.com.co, inkahosting.pe, unohosting.pe, hosting.pe, hostingcenter.cl) con los planes de hosting.cl
