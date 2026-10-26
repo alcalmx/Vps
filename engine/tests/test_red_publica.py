@@ -106,8 +106,7 @@ try:
     assert motor.ip_publica_libre("Red107-0", job=j)[0] == "201.148.107.254"
     assert any("no pude leer las direcciones de interfaz" in x for x in j.d), j.d
     # Codex: 'network=' como único motivo de exclusión, retorno ok=False y TimeoutExpired
-    router(("Red107-0", "201.148.107"), [200, 199], interfaces=" 5 address=10.0.0.1/24 network=201.148.107.200
-")
+    router(("Red107-0", "201.148.107"), [200, 199], interfaces=" 5 address=10.0.0.1/24 network=201.148.107.200\n")
     assert motor.ip_publica_libre("Red107-0")[0] == "201.148.107.199", "la dirección de red de una subred configurada se excluye"
     import subprocess as _sp
     for falla in ("ok_false", "timeout"):
