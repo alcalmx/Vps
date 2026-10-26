@@ -5,7 +5,15 @@
 
 ---
 
-## 2026-10-26 (lunes) — 🔐 ACCESO POR CONTRASEÑA DE ROOT para VPS de cliente + red pública Red106-0 solo en /25 — APROBADO por Codex, PENDIENTE DE DEPLOY
+## 2026-10-26 (lunes) — 🔐 ACCESO POR CONTRASEÑA DE ROOT para VPS de cliente + clave de root en todo VPS del dashboard + Red106-0 solo en /25 — EN PRODUCCIÓN 15:15/15:18
+
+**DESPLEGADO con OK de Alcadio ("si despliega"):** motor `desplegar-motor.sh clave` (respaldo
+`/opt/vps-engine/build.bak-clave-20261026-1515.tgz` + `app.py.bak-clave-20261026-1515`, imagen c19c75eec705, 200 en 2 s,
+0 tracebacks; `/health.redes_publicas` con Red106-0 → 201.148.106.0/25). Dashboard `deploy_dashboard.sh … vpsclave`
+(respaldo `dashboard.py.bak.20261026-vpsclave`, md5 1d2e7e7f…, imagen v2 007bf6f9ec5e, 200 en 2 s). **Siguiente paso:**
+crear un VPS de cliente con «Contraseña de root» en esxi-20051 para validar de punta a punta (el motor hace el login de
+prueba y lo informa en el paso 14).
+
 
 ### Red106-0 → solo 201.148.106.0/25 (commits `b08f46e`, `a459862`, `c42ecee`; Codex: aprobado)
 Alcadio preguntó si ya podía crear un VPS con pública de la Red106. Revisión en vivo (solo lectura): la primera
