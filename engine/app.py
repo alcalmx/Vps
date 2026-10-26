@@ -1949,16 +1949,24 @@ def set_root_password(ip, password):
 # Drop-in que habilita root con contraseña. Se llama 00-acceso-clave.conf para leerse ANTES que 00-hosting.conf
 # (dorada AlmaLinux), 50-cloud-init.conf y 99-vps.conf (Ubuntu): en sshd gana el PRIMER valor leído. Volver a
 # "root solo con llave" = borrar este archivo y recargar sshd. Los scripts son FIJOS (sin datos del usuario).
-# Codex (acceso clave r1): el éxito exige config EFECTIVA para root desde la IP del motor (sshd -T -C, que evalúa los
-# Match) Y un LOGIN REAL solo con contraseña; cualquier falla tras instalar REVIERTE (restaura el archivo previo o lo
-# borra, valida y recarga) y la reversión se CONFIRMA — si no se puede confirmar, el estado es "incierto".
+# Codex (acceso clave r1/r2):
+#  - éxito = config EFECTIVA para root desde la IP del motor (sshd -T -C, evalúa Match) + LOGIN REAL solo con contraseña;
+#  - la contraseña solo se envía a la llave de host del MISMO canal de gestión que ya recibió el chpasswd, y esa llave
+#    debe figurar entre las /etc/ssh/ssh_host_*_key.pub que reporta la propia VM (pinning; el modelo TOFU del canal de
+#    gestión en la red privada de VPS es el límite aceptado del motor, Codex #9 obs.4);
+#  - toda falla tras instalar REVIERTE de forma IDEMPOTENTE (el respaldo se COPIA, no se mueve: revertir dos veces deja
+#    lo mismo) y la reversión se CONFIRMA con config efectiva completa que bloquea + sshd activo + login real RECHAZADO;
+#    si algo de eso no se puede comprobar, el estado es "incierto".
 SSHD_CLAVE_CONF = "/etc/ssh/sshd_config.d/00-acceso-clave.conf"
 _SSHD_PREVIO = SSHD_CLAVE_CONF + ".vps-engine-previo"   # no termina en .conf: sshd no lo incluye
+_SSHD_HOSTKEYS = 'echo "@@HOSTKEYS@@"; cat /etc/ssh/ssh_host_*_key.pub 2>/dev/null'
+_SSHD_ACTIVO = (r'if systemctl is-active --quiet sshd || systemctl is-active --quiet ssh '
+                r'|| systemctl is-active --quiet ssh.socket; then echo "activo=si"; else echo "activo=no"; fi')
 _SSHD_EFECTIVO = (r'c="${SSH_CLIENT%% *}"; [ -n "$c" ] || c=127.0.0.1; '
                   r'sshd -T -C "user=root,host=$c,addr=$c" | grep -E "^(permitrootlogin|passwordauthentication|authenticationmethods) "')
 SSHD_CLAVE_SCRIPT = (r'''f="@CONF@"; b="@PREVIO@"
 restaurar() {
-  if [ -e "$b" ]; then mv -f "$b" "$f"; else rm -f "$f"; fi
+  if [ -e "$b" ]; then cp -p "$b" "$f"; else rm -f "$f"; fi
   sshd -t && { systemctl reload sshd 2>/dev/null || systemctl reload ssh 2>/dev/null; }
 }
 rm -f "$b"
@@ -1969,69 +1977,127 @@ printf '%s\n' '# vps-engine: acceso por CONTRASENA de root pedido para este VPS 
   || { rm -f "$f.tmp"; restaurar; exit 4; }
 if ! sshd -t; then restaurar; echo SSHD_INVALIDO; exit 3; fi
 if ! { systemctl reload sshd 2>/dev/null || systemctl reload ssh 2>/dev/null; }; then restaurar; echo RELOAD_FALLO; exit 5; fi
-@EFECTIVO@''').replace("@CONF@", SSHD_CLAVE_CONF).replace("@PREVIO@", _SSHD_PREVIO).replace("@EFECTIVO@", _SSHD_EFECTIVO)
+@ACTIVO@
+@EFECTIVO@
+@HOSTKEYS@''')
 SSHD_CLAVE_ROLLBACK = (r'''f="@CONF@"; b="@PREVIO@"
-if [ -e "$b" ]; then mv -f "$b" "$f"; else rm -f "$f"; fi
+if [ -e "$b" ]; then cp -p "$b" "$f"; else rm -f "$f"; fi
 sshd -t || exit 3
 systemctl reload sshd 2>/dev/null || systemctl reload ssh 2>/dev/null || exit 5
-@EFECTIVO@''').replace("@CONF@", SSHD_CLAVE_CONF).replace("@PREVIO@", _SSHD_PREVIO).replace("@EFECTIVO@", _SSHD_EFECTIVO)
+@ACTIVO@
+@EFECTIVO@
+@HOSTKEYS@''')
+for _k, _v in (("@CONF@", SSHD_CLAVE_CONF), ("@PREVIO@", _SSHD_PREVIO), ("@ACTIVO@", _SSHD_ACTIVO),
+               ("@EFECTIVO@", _SSHD_EFECTIVO), ("@HOSTKEYS@", _SSHD_HOSTKEYS)):
+    SSHD_CLAVE_SCRIPT = SSHD_CLAVE_SCRIPT.replace(_k, _v)
+    SSHD_CLAVE_ROLLBACK = SSHD_CLAVE_ROLLBACK.replace(_k, _v)
 SSHD_CLAVE_LIMPIEZA = 'rm -f "%s"' % _SSHD_PREVIO
+_SSHD_CAMPOS = ("permitrootlogin", "passwordauthentication", "authenticationmethods")
+
+def _partir_salida_sshd(out):
+    """Salida de los scripts → (dict de config efectiva, activo(bool|None), set de llaves de host 'tipo base64')."""
+    cfg, claves, activo, en_claves = {}, set(), None, False
+    for linea in (out or "").splitlines():
+        t = linea.strip()
+        if t == "@@HOSTKEYS@@":
+            en_claves = True
+            continue
+        if en_claves:
+            p = t.split()
+            if len(p) >= 2:
+                claves.add((p[0], p[1]))
+            continue
+        if t in ("activo=si", "activo=no"):
+            activo = (t == "activo=si")
+            continue
+        p = t.lower().split(None, 1)
+        if len(p) == 2 and p[0] in _SSHD_CAMPOS:
+            cfg[p[0]] = p[1].strip()
+    return cfg, activo, claves
 
 def _sshd_efectivo(out):
-    """'clave valor' por línea de `sshd -T` → dict en minúsculas."""
-    d = {}
-    for linea in (out or "").splitlines():
-        p = linea.strip().lower().split(None, 1)
-        if len(p) == 2:
-            d[p[0]] = p[1].strip()
-    return d
+    return _partir_salida_sshd(out)[0]
 
 def _clave_efectiva(d):
-    """root puede entrar con contraseña según la config efectiva (incluidos los Match evaluados con -C)."""
-    return (d.get("permitrootlogin") == "yes" and d.get("passwordauthentication") == "yes"
-            and d.get("authenticationmethods", "any") == "any")
+    """root puede entrar con contraseña según la config efectiva COMPLETA (incluidos los Match evaluados con -C)."""
+    return (all(k in d for k in _SSHD_CAMPOS) and d["permitrootlogin"] == "yes"
+            and d["passwordauthentication"] == "yes" and d["authenticationmethods"] == "any")
 
-def _ssh_gestion(ip):
+def _bloqueo_confirmado(d, activo):
+    """La config efectiva está COMPLETA, sshd está activo y root NO puede entrar con contraseña."""
+    if activo is not True or not all(k in d for k in _SSHD_CAMPOS):
+        return False
+    return (d["permitrootlogin"] != "yes" or d["passwordauthentication"] != "yes"
+            or (d["authenticationmethods"] != "any" and "password" not in d["authenticationmethods"]))
+
+def _hostkey_coincide(key, claves_vm):
+    """La llave de host del canal de gestión figura entre las que la propia VM reporta."""
+    if key is None:
+        return False
+    try:
+        import base64
+        return (key.get_name(), base64.b64encode(key.asbytes()).decode()) in claves_vm
+    except Exception:  # noqa: BLE001
+        return False
+
+def _correr_gestion(ip, script, timeout=90):
+    """Corre un script fijo por el canal de gestión. Devuelve (salida, llave de host presentada por el servidor)."""
     cli = paramiko.SSHClient()
     cli.set_missing_host_key_policy(paramiko.AutoAddPolicy())
     cli.connect(ip, username="root", key_filename=MGMT_PRIVKEY_PATH, timeout=15,
                 allow_agent=False, look_for_keys=False)
-    return cli
-
-def _correr_gestion(ip, script, timeout=90):
-    cli = _ssh_gestion(ip)
     try:
-        return _ssh_exec(cli, script, timeout=timeout)
+        try:
+            key = cli.get_transport().get_remote_server_key()
+        except Exception:  # noqa: BLE001
+            key = None
+        return _ssh_exec(cli, script, timeout=timeout), key
     finally:
         try:
             cli.close()
         except Exception:  # noqa: BLE001
             pass
 
-def _probar_login_clave(ip, password):
-    """Conexión SSH NUEVA solo con contraseña (sin agente ni llaves): prueba el sshd que de verdad atiende."""
+def _politica_pin(esperada):
+    """Política de llave de host que SOLO acepta la llave esperada (no agrega nada a known_hosts)."""
+    class _Pin(paramiko.MissingHostKeyPolicy):
+        def missing_host_key(self, client, hostname, key):
+            if (esperada is None or key.get_name() != esperada.get_name()
+                    or key.asbytes() != esperada.asbytes()):
+                raise paramiko.SSHException("llave de host distinta a la del canal de gestión")
+    return _Pin()
+
+def _login_clave(ip, password, hostkey):
+    """Conexión SSH NUEVA solo con contraseña (sin agente ni llaves), con la llave de host FIJADA. Devuelve 'ok',
+    'rechazado' (el servidor rechazó la autenticación) o 'error' (transporte, timeout, llave de host distinta…)."""
     cli = paramiko.SSHClient()
-    cli.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+    cli.set_missing_host_key_policy(_politica_pin(hostkey))
     try:
         cli.connect(ip, username="root", password=password, timeout=15, banner_timeout=15, auth_timeout=15,
                     allow_agent=False, look_for_keys=False)
-        return True
-    except Exception:  # noqa: BLE001 — cualquier falla = no se pudo entrar
-        return False
+        return "ok"
+    except paramiko.AuthenticationException:
+        return "rechazado"
+    except Exception:  # noqa: BLE001
+        return "error"
     finally:
         try:
             cli.close()
         except Exception:  # noqa: BLE001
             pass
 
-def deshabilitar_ssh_clave(ip):
-    """Revierte (restaura el drop-in previo o lo borra, valida y recarga) y CONFIRMA con la config efectiva que root ya
-    no entra con contraseña. True solo si quedó confirmado."""
+def deshabilitar_ssh_clave(ip, password):
+    """Revierte de forma idempotente (restaura el drop-in previo o lo borra, valida y recarga) y CONFIRMA: config
+    efectiva completa que bloquea, sshd activo, llave de host coherente y login real con la contraseña RECHAZADO.
+    True solo si todo eso quedó comprobado."""
     try:
-        d = _sshd_efectivo(_correr_gestion(ip, SSHD_CLAVE_ROLLBACK))
+        out, key = _correr_gestion(ip, SSHD_CLAVE_ROLLBACK)
     except Exception:  # noqa: BLE001
         return False
-    return bool(d) and not _clave_efectiva(d)
+    cfg, activo, claves_vm = _partir_salida_sshd(out)
+    if not _bloqueo_confirmado(cfg, activo) or not _hostkey_coincide(key, claves_vm):
+        return False
+    return _login_clave(ip, password, key) == "rechazado"
 
 def habilitar_ssh_clave(job, ip, password):
     """Habilita el login SSH de root con contraseña y lo VERIFICA de verdad. Devuelve 'habilitado' (config efectiva +
@@ -2040,19 +2106,27 @@ def habilitar_ssh_clave(job, ip, password):
     if not MGMT_PRIVKEY_PATH:
         job.detalle("aviso: sin llave de gestión — no se pudo habilitar el SSH con contraseña")
         return "deshabilitado"   # no se tocó nada
+    def revertir(motivo):
+        job.detalle("aviso: %s — se revierte" % motivo)
+        return "deshabilitado" if deshabilitar_ssh_clave(ip, password) else "incierto"
     try:
-        out = _correr_gestion(ip, SSHD_CLAVE_SCRIPT)
+        out, key = _correr_gestion(ip, SSHD_CLAVE_SCRIPT)
     except Exception as e:  # noqa: BLE001 — el script ya restaura en sus fallas; igual se fuerza y confirma
-        job.detalle("aviso: no se pudo habilitar el SSH con contraseña (%s) — se revierte" % type(e).__name__)
-        return "deshabilitado" if deshabilitar_ssh_clave(ip) else "incierto"
-    if _clave_efectiva(_sshd_efectivo(out)) and _probar_login_clave(ip, password):
-        try:
-            _correr_gestion(ip, SSHD_CLAVE_LIMPIEZA, timeout=30)   # respaldo ya innecesario (best effort)
-        except Exception:  # noqa: BLE001
-            pass
-        return "habilitado"
-    job.detalle("aviso: la configuración no quedó efectiva o el login de prueba con contraseña falló — se revierte")
-    return "deshabilitado" if deshabilitar_ssh_clave(ip) else "incierto"
+        return revertir("no se pudo habilitar el SSH con contraseña (%s)" % type(e).__name__)
+    cfg, activo, claves_vm = _partir_salida_sshd(out)
+    if not (_clave_efectiva(cfg) and activo is True):
+        return revertir("la configuración efectiva no permite root con contraseña")
+    if not _hostkey_coincide(key, claves_vm):
+        return revertir("la llave de host del canal de gestión no coincide con la de la VM: no se envía la contraseña")
+    r = _login_clave(ip, password, key)
+    if r != "ok":
+        return revertir("el login de prueba con contraseña %s"
+                        % ("fue rechazado" if r == "rechazado" else "no se pudo completar"))
+    try:
+        _correr_gestion(ip, SSHD_CLAVE_LIMPIEZA, timeout=30)   # respaldo ya innecesario (best effort)
+    except Exception:  # noqa: BLE001
+        pass
+    return "habilitado"
 
 def aplicar_root_password(job, ip, root_password, auto, para_ssh=False):
     """Pone la clave de root en la VM y devuelve si se CONFIRMÓ. No bloquea la creación:
