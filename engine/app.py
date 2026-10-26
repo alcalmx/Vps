@@ -2166,15 +2166,26 @@ def entregar_root_password(res, root_password, auto, aplicada):
     """Añade al resultado del job la clave de root AUTOGENERADA. El NOC necesita verla para
     entrar a WHM (se redacta al vencer el TTL, igual que los secretos de entrega), pero SOLO
     si se confirmó su aplicación: mostrar una clave que quizá no quedó puesta es peor que no
-    mostrar ninguna. Una clave que vino de fuera (WHMCS) nunca se devuelve: ya la tiene."""
-    if not (auto and root_password):
+    mostrar ninguna. Una clave que vino de fuera (WHMCS) nunca se devuelve: ya la tiene. Sí se
+    marca que quedó puesta, para que el texto al cliente no le pida definirla con passwd; si no se
+    confirmó, se avisa igual que con la autogenerada (Codex r1 #2 y r2 #2)."""
+    if not root_password:
         return res
-    if aplicada:
-        res["root_password"] = root_password
-    else:
+    if not aplicada:
         res["root_password_error"] = ("no se pudo confirmar la aplicación de la clave de "
                                       "root — define una a mano: ssh root@IP y 'passwd root'")
+    elif auto:
+        res["root_password"] = root_password
+    else:
+        res["root_password_externa"] = True
     return res
+
+def datos_comerciales(marca, marca_cfg, sabor):
+    """Marca y plan tal como los conoce el cliente, para el texto de bienvenida que el NOC le copia
+    al correo desde el panel del job (Alcadio 2026-10-26). Sin hostname: a veces no hay dominio."""
+    return {"marca_nombre": (marca_cfg or {}).get("nombre") or marca,
+            "plan": (sabor or {}).get("nombre_web") or None}
+
 
 def flujo_crear(job, marca, sabor_slug, cliente, hostname, instalar_cpanel, modo,
                 pubkey_cliente=None, root_password=None, whmcs_serviceid=None,
@@ -2571,6 +2582,7 @@ def flujo_crear(job, marca, sabor_slug, cliente, hostname, instalar_cpanel, modo
            "publica": publica, "cpanel": bool(instalar_cpanel),
            "byo": bool(byo_fp), "byo_fp": byo_fp,
            "whm": ("https://%s:2087" % acceso_ip) if instalar_cpanel else None}
+    res.update(datos_comerciales(marca, marca_cfg, sabor))
     entregar_root_password(res, root_password, root_password_auto, root_pw_ok)
     if acceso == "clave":
         res["acceso_clave_estado"] = clave_estado

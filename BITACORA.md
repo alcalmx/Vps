@@ -5,6 +5,33 @@
 
 ---
 
+## 2026-10-26 (lunes, ~15:45–16:00) — ✉️ TEXTO PARA EL CLIENTE en el panel del job — APROBADO por Codex (3 rondas), PENDIENTE DE DEPLOY
+
+Pedido de Alcadio (sobre el panel de acceso del job terminado): *"necesito poder copiar un texto, que es el que voy a
+enviarle por mail al cliente para que pueda acceder al servidor"*. Le mostré el ejemplo y corrigió: *"en la línea
+Servidor no coloques el dominio, ya que a veces no hay dominio comprado: usa la IP"*.
+- **Dashboard:** tarjeta «Texto para el cliente» bajo el panel de acceso: **Asunto** (input + Copiar) y **Mensaje**
+  (textarea editable + «Copiar mensaje»). Solo VPS de cliente (`uso != personal`) con IP pública y acceso de usuario.
+  Texto: Servidor = IP pública, Plan (nombre del plan, SIN recursos: el disco va con +3 GB para que el cliente vea los
+  100/150 netos), ACCESO SSH (contraseña + `ssh root@IP`; o enlace de la llave "vence en 48 horas" + `ssh -i
+  id_ed25519`; o BYO), PANEL WHM (con contraseña: "la misma del acceso SSH"), recomendaciones y firma
+  "Equipo <marca>". Secretos vencidos o no confirmados → línea marcada para que el NOC escriba el dato.
+- **Motor:** `datos_comerciales()` agrega `marca_nombre` y `plan` al resultado de /crear (los jobs anteriores no los
+  traen: el texto sale sin «Plan» ni firma). `entregar_root_password`: una clave EXTERNA (WHMCS) aplicada marca
+  `root_password_externa` (sin el secreto) → el texto dice "la que definiste al contratar el servicio"; si no se
+  confirmó, `root_password_error` como la autogenerada.
+- **Sondeo del modal** (`vpsengVerJob`): no vuelve a dibujar un job ya terminado (borraba lo editado), una petición a
+  la vez, respuestas atrasadas descartadas (abrir otro job, cerrar el modal, «Limpiar»), 502/5xx = transitorio
+  (reintenta), 401/403/404 = definitivo (lo informa).
+- **Codex:** R1 2 hallazgos (sondeos simultáneos borran lo editado; clave de WHMCS → el texto pedía `passwd`); R2 3
+  (HTTP de error cortaba el sondeo; externa no confirmada anunciada como válida; reset no invalidaba peticiones);
+  R3 **APROBADO**. Pruebas: `tests/test_texto_cliente.py` (nueva; recorrido aplicar→entregar con canal simulado),
+  `test_rootpw.py` ajustada; en fastnetmon `test_vps_texto_cliente.py` (node --check de la página, texto en 10 casos,
+  simulación del sondeo con el código real; falla contra v1+v2). **24 suites verdes.**
+
+**PENDIENTE:** OK de Alcadio para desplegar motor (`desplegar-motor.sh textocli`) + dashboard
+(`/tmp/dashboard.py.vpstexto`, parches `patch_vps_texto_cliente_v1..v3.py`).
+
 ## 2026-10-26 (lunes, 15:30–15:40) — ⚠️ INCIDENTE (causado por Claude): job de creación marcado «interrumpido por reinicio del motor» sin que el motor se reiniciara
 
 **Qué vio Alcadio:** creando `vps-ihpe-0001-alcadio` (Inkahosting.pe, VLAN 85, acceso por contraseña de root, job

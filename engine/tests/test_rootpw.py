@@ -135,8 +135,9 @@ jf3 = _JobFalso()
 assert motor.aplicar_root_password(jf3, "1.2.3.4", "Z" * 20, True) is True
 assert "GENERADA por el motor" in jf3.detalles[0] and "Z" * 20 not in jf3.detalles[0]
 assert motor.entregar_root_password({}, "Z" * 20, True, True)["root_password"] == "Z" * 20
-# una clave de WHMCS aplicada NO se devuelve (ya la tiene el cliente en su ficha)
-assert motor.entregar_root_password({}, "de-whmcs", False, True) == {}
+# una clave de WHMCS aplicada NO se devuelve (ya la tiene el cliente en su ficha); solo se marca que
+# quedó puesta (2026-10-26, texto para el cliente)
+assert motor.entregar_root_password({}, "de-whmcs", False, True) == {"root_password_externa": True}
 print("ok - éxito: confirmada y entregada (y la de WHMCS nunca se devuelve)")
 
 motor.set_root_password = _orig_srp
