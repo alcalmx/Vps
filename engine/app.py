@@ -78,6 +78,21 @@ WRAPPER_TEMPLATE = os.environ.get("WRAPPER_TEMPLATE", "/app/config/vps-wrapper.s
 # address-list de RouterData por red pública (igual que ALTA_PUB_REDES del NOC)
 PUB_REDES = {"Red57-0": "38.19.57", "Red104-0": "201.148.104", "Red105-0": "201.148.105",
              "Red106-0": "201.148.106", "Red107-0": "201.148.107"}
+# Excepción por lista (Alcadio 2026-10-26): la IP pública de Red106-0 se busca SOLO en 201.148.106.0/25 — el resto
+# de la /24 está repartido en subredes de routers (/30 de enlace del CCR de borde, /29 de RouterData).
+PUB_SUBRED = {"Red106-0": "201.148.106.0/25"}
+for _l, _sub in PUB_SUBRED.items():
+    _n = ipaddress.ip_network(_sub, strict=True)
+    if _l not in PUB_REDES or not str(_n.network_address).startswith(PUB_REDES[_l] + ".") or _n.prefixlen < 24:
+        raise RuntimeError("PUB_SUBRED[%s]=%s no está dentro de %s.0/24" % (_l, _sub, PUB_REDES.get(_l)))
+
+def _hosts_subred(lista):
+    """(primer, último) octeto de HOST de la subred permitida de la lista, o None si no hay excepción."""
+    sub = PUB_SUBRED.get(lista)
+    if not sub:
+        return None
+    n = ipaddress.ip_network(sub)
+    return (int(n.network_address) & 0xFF) + 1, (int(n.broadcast_address) & 0xFF) - 1
 # vps-provision (bóveda) para guardar la llave del cliente y crear el Bitwarden Send
 PROVISION_URL = os.environ.get("PROVISION_URL", "http://127.0.0.1:8223")
 PROVISION_TOKEN = os.environ.get("PROVISION_TOKEN", "")
@@ -1026,6 +1041,16 @@ def ip_publica_libre(lista, rango=None, job=None):
     ok_arp, out_arp = mikrotik("/ip arp print terse")
     if not (ok_l and ok_nat and ok_arp):
         raise RuntimeError("no pude consultar RouterData para la IP pública")
+    # excepción por lista: solo los hosts de su subred permitida (Red106-0 → 201.148.106.0/25)
+    hosts = _hosts_subred(lista)
+    # IPs de interfaz de RouterData en esa red (gateway, etc.): nunca son candidatas. Best effort.
+    try:
+        ok_if, out_if = mikrotik('/ip address print terse where address~"^%s."' % red)
+    except (subprocess.TimeoutExpired, OSError, RuntimeError):
+        ok_if, out_if = False, ""
+    en_if = _octs(out_if or "", red) if ok_if else set()
+    if job and not ok_if:
+        job.detalle("aviso: no pude leer las direcciones de interfaz de RouterData (queda el ping como control)")
     candidatas = []
     for line in out_l.splitlines():
         m = re.search(r"address=" + re.escape(red) + r"\.(\d+)\b", line)
@@ -1033,6 +1058,10 @@ def ip_publica_libre(lista, rango=None, job=None):
             continue
         oct_ = int(m.group(1))
         if rango and not (rango[0] <= oct_ <= rango[1]):
+            continue
+        if hosts and not (hosts[0] <= oct_ <= hosts[1]):
+            continue
+        if oct_ in en_if:
             continue
         deshab = bool(re.match(r"^\s*\d+\s+X", line))   # X = deshabilitada = en uso
         if not deshab and "comment=" not in line:       # habilitada y sin comentario = libre
@@ -1056,7 +1085,9 @@ def ip_publica_libre(lista, rango=None, job=None):
         if job:
             job.detalle("pública %s libre (validada: lista/NAT/ARP/otras/ping)" % ip)
         return ip, rechazadas
-    raise RuntimeError("sin IP pública libre en %s. Rechazadas: %s" % (lista, ", ".join(rechazadas) or "ninguna candidata"))
+    raise RuntimeError("sin IP pública libre en %s%s. Rechazadas: %s"
+                       % (lista, (" (solo %s)" % PUB_SUBRED[lista]) if lista in PUB_SUBRED else "",
+                          ", ".join(rechazadas) or "ninguna candidata"))
 
 
 def crear_nat(privada, publica, lista, hostname, marca_nombre, job=None):
@@ -3140,7 +3171,8 @@ def health():
     return jsonify({"ok": True, "modo": MODO,
                     "marcas": marcas_activas(), "sabores": sorted("%s/%s" % k for k in SABORES),
                     "sabores_detalle": detalle, "marcas_detalle": marcas_det,
-                    "redes_publicas": [{"lista": k, "red": v} for k, v in sorted(PUB_REDES.items())],
+                    "redes_publicas": [{"lista": k, "red": v, "subred": PUB_SUBRED.get(k)}
+                                       for k, v in sorted(PUB_REDES.items())],
                     "llaves_equipo": [{"id": e["id"], "nombre": e["nombre"], "huellas": e["huellas"],
                                        "disponible": bool(e["llaves"])} for e in LLAVES_EQUIPO.values()],
                     "sistemas": sistemas, "so_default": SO_DEFAULT})
