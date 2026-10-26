@@ -5,6 +5,53 @@
 
 ---
 
+## 2026-10-26 (lunes) — 🔐 ACCESO POR CONTRASEÑA DE ROOT para VPS de cliente + red pública Red106-0 solo en /25 — APROBADO por Codex, PENDIENTE DE DEPLOY
+
+### Red106-0 → solo 201.148.106.0/25 (commits `b08f46e`, `a459862`, `c42ecee`; Codex: aprobado)
+Alcadio preguntó si ya podía crear un VPS con pública de la Red106. Revisión en vivo (solo lectura): la primera
+candidata del motor era **201.148.106.254**, que es el otro extremo del **/30 de enlace del CCR de borde**
+(`201.148.106.253/30` en ether1 del CCR GTD): habilitada y sin comentario en la address-list, sin NAT, sin ARP y sin
+responder ping → pasaba las 5 validaciones. Decisión de Alcadio: *"de la red 106 hay que hacer una excepción solo con
+esta red: que la verificación la haga sobre la red 201.148.106.0/25"* (la "LAN HOSTING PUBLICA" de RouterData,
+201.148.106.1/25). Hecho: `PUB_SUBRED = {"Red106-0": "201.148.106.0/25"}` (hosts .1-.126), y en TODAS las listas se
+excluyen las IP de interfaz de RouterData (`/ip address`, best effort). `/health.redes_publicas` lleva `subred`; el
+selector muestra "Red106-0 — 201.148.106.0/25". Simulación en vivo: tomaría **.109** (siguiente .81); solo 3 libres en
+la /25 y **la .102 figura libre en la lista pero tiene un NAT** (revisar). Suite `test_red_publica.py`.
+
+### Acceso por contraseña de root (commits `d7dd1f7` … `68c1aaa`; Codex: 4 rondas, APROBADO)
+Pedido de Alcadio: *"generar una contraseña fuerte al usuario root y permitir el acceso por root, ya que mis clientes
+actualmente lo usan así y para colocar el sistema en producción me exigen que mantengamos esto hasta que migremos 100% a
+llaves SSH. En el formulario deberás preguntar cómo será el acceso, si por root o por key. Solo para VPS de clientes;
+para VPS internos seguiremos usando las keys."* Contraseña: *"nos quedamos con 12 pero solo usa 2 dígitos especiales,
+lo demás letras y números, y usa 1 mayúscula"*.
+- **Formulario:** pregunta «Acceso» (Llave SSH / Contraseña de root) SIN opción preseleccionada (si no se elige, alerta);
+  con contraseña se oculta la llave pública; con uso personal la pregunta no aparece. Panel: contraseña con copiar,
+  "pedirá la contraseña de root", WHM "la misma contraseña"; aviso distinto si el estado es incierto.
+- **Motor:** `/crear acceso=llave|clave` (clave: solo dashboard, solo cliente, sin BYO ni clave externa). Generador
+  `password_root_auto`: **12 = 2 especiales + 1 mayúscula + minúsculas/números (≥1 número)**, sin ambiguos ni ':',
+  ningún especial al inicio (~65 bits; también para WHM). Con clave: se aplica con chpasswd (se **captura la llave de
+  host de ese canal**), no se genera llave ni Send, y `habilitar_ssh_clave` instala `/etc/ssh/sshd_config.d/00-acceso-clave.conf`
+  (PermitRootLogin yes, PasswordAuthentication yes; se lee antes que el 00-hosting.conf de la dorada — precedencia
+  probada en AlmaLinux 9.8 real con una copia temporal). Éxito solo con **config efectiva** (`sshd -T -C` para root desde
+  la IP del motor) + sshd activo + **login real solo con la contraseña** contra la llave fijada. Preparación con tres
+  estados (ausente / respaldo completo atómico / fallida sin tocar el original); toda falla revierte de forma
+  idempotente y la reversión se **confirma** (config que bloquea + sshd activo + login RECHAZADO); si no: **"incierto"**.
+  `vms.acceso` = llave|clave (para saber qué migrar). Uso personal y WHMCS: sin cambios (llave).
+- **SEGURIDAD.md** documenta la excepción, cómo volver a solo llave (borrar el drop-in y recargar sshd) y el riesgo
+  aceptado (SSH con contraseña expuesto por el NAT; pendiente fail2ban o limitar el 22).
+- **Codex:** R1 3 hallazgos (verificación en disco ≠ acceso real; estado parcial tras fallas; recuperación sin contraseña
+  conocida); R2 4 (rollback doble; confirmación falsa; contraseña a host sin verificar; dashboard incierto); R3 2 (pin
+  no ligado al canal del chpasswd; respaldo fallido ≠ ausencia); R4 **APROBADO**. Pruebas: `test_acceso_clave.py`
+  ejecuta los scripts reales con bash sobre archivos temporales y simula VM con estado, identidad e impostor;
+  `test_rootpw.py` valida la composición de la clave (2000 muestras). **23 suites verdes.** Pinning verificado en real
+  (ed25519 del canal de gestión = /etc/ssh/ssh_host_ed25519_key.pub).
+- Lecciones propias del día: heredocs con `%` o comillas rompen el armado de textos (usar Write + reemplazos con
+  marcadores); suites viejas con CRLF requieren normalizar antes de reemplazar.
+
+**PENDIENTE:** OK de Alcadio para desplegar (motor `/tmp/vps-marcas` + dashboard `/tmp/dashboard.py.vpsclave`; lleva
+también la excepción de Red106-0). Tras desplegar: crear un VPS de cliente con «Contraseña de root» en esxi-20051 para
+validar en real (el motor hace el login de prueba y lo informa).
+
 ## 2026-10-26 (lunes) — ⚠️ esxi-20051 está en MODO EVALUACIÓN: vence el 2026-11-28 · licencias y hot-add verificadas
 
 Pregunta de Alcadio tras ver un upgrade en caliente (vps-int-0004: vCPU 4→6, RAM 4→8 GB, disco 103→153 GB en 2 s, sin
