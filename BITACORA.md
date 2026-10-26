@@ -5,6 +5,25 @@
 
 ---
 
+## 2026-10-26 (lunes) — ⚠️ esxi-20051 está en MODO EVALUACIÓN: vence el 2026-11-28 · licencias y hot-add verificadas
+
+Pregunta de Alcadio tras ver un upgrade en caliente (vps-int-0004: vCPU 4→6, RAM 4→8 GB, disco 103→153 GB en 2 s, sin
+cortar su sesión SSH): *"¿será lo de vcpu.hotadd y mem.hotadd por las licencias de VMware?"* — Verificado por SSH
+(`vim-cmd vimsvc/license --show`, solo lectura, claves no mostradas):
+
+| Host | ESXi | Licencia | Hot-add («Hot-Pluggable virtual HW») |
+|---|---|---|---|
+| esxi-245 (10.100.37.245) | 7.0.3 | vSphere 7 Enterprise Plus | sí |
+| esxi-20039 (192.168.200.39) | 8.0.3 | vSphere 8 Standard | sí |
+| esxi-20051 (192.168.200.51) | 8.0.3 | **Evaluation Mode — vence 2026-11-28 19:20 UTC** | sí (la evaluación trae todo) |
+
+Conclusión: no es la licencia; las VMs hechas a mano no tenían hot-add porque «CPU/Memory Hot Plug» vienen desmarcados
+por defecto (el VMX del motor lleva `vcpu.hotadd`/`mem.hotadd`). **RIESGO CON FECHA:** al vencer la evaluación, las VMs que
+corren siguen, pero no se puede encender ninguna VM y el motor no podrá crear ni cambiar planes en esxi-20051 (es el host
+de mayor prioridad, prio 99, y aloja los VPS de prueba vps-int-0002/0003/0004). **Acción de Alcadio antes del 28-11:**
+asignarle licencia (p. ej. vSphere 8 Standard como el 20039) o bajarle la prioridad/pausarlo y crear en otro host.
+También del día: medición de vCPU dentro del VPS que dio 8 era del contenedor del motor (comillas); VMware y lscpu = 6.
+
 ## ⏯️ PARA RETOMAR (estado al cierre del 2026-10-23)
 
 **En producción hoy (todo con Codex y 21 suites verdes):** motor y dashboard creando VPS de **8 marcas** (hosting.cl,
@@ -20,6 +39,7 @@ Primer VPS personal: `vps-int-0001-alcadio` (10.100.36.253 ↔ 38.19.57.102, lla
 marcas v1/v2 → uso_personal v1/v2/v3 → pub_lista v1 → llaves_equipo v1/v2). Siempre con OK de Alcadio.
 
 **Pendientes de Alcadio:**
+0. **LICENCIA de esxi-20051 antes del 2026-11-28** (hoy en Modo Evaluación; ver entrada del 26-10).
 1. Llave pública de **Jonatan** (no existe en ningún servidor) → agregarla a `equipo/llaves.json` y desplegar el motor.
 2. Confirmar si las **dos llaves de Fabián** (de esxi-20039) siguen vigentes.
 3. Borrar las reglas **45/46** de RouterData (huérfanas para 10.100.36.253; la 46 ya la deshabilitó).
