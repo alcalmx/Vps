@@ -1,0 +1,249 @@
+<title>Guía del Motor VPS</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Sora:wght@500;600;700&family=Manrope:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: una columna de lectura (~68ch) con índice de saltos arriba; cada pestaña del dashboard es una tarjeta. */
+:root {
+  --bg: #f4f6fb; --surface: #ffffff; --surface-2: #eef2f9; --fg: #0e1628; --muted: #586379; --line: #dfe5ef;
+  --accent: #2458d3; --accent-soft: rgba(36, 88, 211, .09); --ok: #15803d; --ok-soft: rgba(21, 128, 61, .10);
+  --warn: #a35a06; --warn-soft: rgba(196, 120, 10, .12); --no: #b42318; --no-soft: rgba(180, 35, 24, .09);
+  --display: 'Sora', 'Segoe UI', system-ui, sans-serif; --body: 'Manrope', 'Segoe UI', system-ui, sans-serif;
+  --mono: 'JetBrains Mono', ui-monospace, 'Cascadia Mono', Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --bg: #0b111d; --surface: #111a2b; --surface-2: #16223a; --fg: #e5ebf6; --muted: #95a2ba; --line: #22304a;
+  --accent: #7aa2ff; --accent-soft: rgba(122, 162, 255, .12); --ok: #4ade80; --ok-soft: rgba(74, 222, 128, .12);
+  --warn: #f5b454; --warn-soft: rgba(245, 180, 84, .12); --no: #f8877a; --no-soft: rgba(248, 135, 122, .12);
+  color-scheme: dark } }
+:root[data-theme="dark"] {
+  --bg: #0b111d; --surface: #111a2b; --surface-2: #16223a; --fg: #e5ebf6; --muted: #95a2ba; --line: #22304a;
+  --accent: #7aa2ff; --accent-soft: rgba(122, 162, 255, .12); --ok: #4ade80; --ok-soft: rgba(74, 222, 128, .12);
+  --warn: #f5b454; --warn-soft: rgba(245, 180, 84, .12); --no: #f8877a; --no-soft: rgba(248, 135, 122, .12);
+  color-scheme: dark }
+
+* { box-sizing: border-box; }
+body { background: var(--bg); color: var(--fg); font-family: var(--body); font-size: 15px; line-height: 1.6;
+  padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); }
+.page { max-width: 880px; margin: 0 auto; padding-block: 40px 64px; display: grid; gap: 28px; }
+h1, h2, h3 { font-family: var(--display); text-wrap: balance; margin: 0; letter-spacing: -.01em; }
+h1 { font-size: clamp(1.7rem, 4vw, 2.2rem); font-weight: 700; }
+h2 { font-size: 1.3rem; font-weight: 600; }
+h3 { font-size: 1.05rem; font-weight: 600; }
+p { margin: 0; max-width: 68ch; }
+ul, ol { margin: 0; padding-left: 1.2em; display: grid; gap: 4px; max-width: 68ch; }
+code, .mono { font-family: var(--mono); font-size: .86em; }
+code { background: var(--surface-2); padding: 1px 5px; border-radius: 5px; }
+a { color: var(--accent); }
+a:focus-visible, .idx a:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.eyebrow { font-size: .74rem; text-transform: uppercase; letter-spacing: .09em; color: var(--muted); font-weight: 600; }
+header { display: grid; gap: 10px; }
+header .lead { color: var(--muted); font-size: 1.02rem; }
+.ruta { font-family: var(--mono); font-size: .82rem; color: var(--muted); }
+.idx { display: flex; flex-wrap: wrap; gap: 8px; }
+.idx a { text-decoration: none; color: var(--fg); background: var(--surface); border: 1px solid var(--line);
+  border-radius: 999px; padding: 4px 12px; font-size: .84rem; font-weight: 600; }
+.idx a:hover { border-color: var(--accent); color: var(--accent); }
+
+section { display: grid; gap: 14px; scroll-margin-top: 16px; }
+.card { background: var(--surface); border: 1px solid var(--line); border-radius: 14px; padding: 20px 22px;
+  display: grid; gap: 12px; min-width: 0; }
+.tab { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+.tabname { font-family: var(--display); font-weight: 600; font-size: 1.05rem; display: inline-flex; align-items: center; gap: 8px; }
+.tabname .ico { width: 26px; height: 26px; border-radius: 8px; background: var(--accent-soft); color: var(--accent);
+  display: inline-grid; place-items: center; font-size: .85rem; }
+.who { margin-left: auto; font-size: .76rem; color: var(--muted); }
+.grid3 { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; }
+.box { background: var(--surface-2); border-radius: 10px; padding: 12px 14px; display: grid; gap: 6px; min-width: 0; }
+.box h4 { margin: 0; font-size: .78rem; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); }
+.box ul { gap: 2px; font-size: .9rem; }
+
+.chip { display: inline-block; font-size: .74rem; font-weight: 700; border-radius: 999px; padding: 1px 9px; white-space: nowrap; }
+.si { background: var(--ok-soft); color: var(--ok); }
+.no { background: var(--no-soft); color: var(--no); }
+.parcial { background: var(--warn-soft); color: var(--warn); }
+.nota { border-left: 3px solid var(--warn); background: var(--warn-soft); border-radius: 0 10px 10px 0; padding: 10px 14px;
+  font-size: .92rem; max-width: 72ch; }
+.nota b { color: var(--fg); }
+
+.tw { overflow-x: auto; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); }
+table { border-collapse: collapse; width: 100%; font-size: .9rem; }
+th, td { text-align: left; padding: 9px 14px; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { font-size: .72rem; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); font-weight: 700; background: var(--surface-2); }
+tr:last-child td { border-bottom: 0; }
+td.c, th.c { text-align: center; }
+
+.acc { display: grid; gap: 8px; }
+.acc div { display: grid; grid-template-columns: 9.5rem 1fr; gap: 12px; align-items: baseline; }
+.acc .k { font-weight: 700; font-size: .88rem; }
+.acc .v { color: var(--fg); font-size: .92rem; min-width: 0; }
+
+ol.pasos { list-style: none; padding: 0; counter-reset: p; gap: 10px; max-width: none; }
+ol.pasos > li { counter-increment: p; display: grid; grid-template-columns: 34px 1fr; gap: 12px; align-items: start; }
+ol.pasos > li::before { content: counter(p); font-family: var(--display); font-weight: 700; width: 30px; height: 30px;
+  border-radius: 50%; background: var(--accent); color: var(--surface); display: grid; place-items: center; font-size: .9rem; }
+ol.pasos > li > div { display: grid; gap: 4px; min-width: 0; padding-top: 3px; }
+ol.pasos ul { font-size: .92rem; }
+footer { color: var(--muted); font-size: .82rem; border-top: 1px solid var(--line); padding-top: 14px; }
+
+@media (max-width: 560px) {
+  .acc div { grid-template-columns: 1fr; gap: 2px; }
+  .who { margin-left: 0; width: 100%; }
+  .card { padding: 16px; }
+}
+@media (prefers-reduced-motion: no-preference) { html { scroll-behavior: smooth; } }
+</style>
+
+<div class="page">
+
+<header>
+  <span class="eyebrow">Entrega al equipo NOC · v1 borrador · 26-10-2026</span>
+  <h1>Motor VPS: guía de entrega</h1>
+  <p class="lead">Con el motor creamos y administramos VPS en nuestros servidores VMware directamente desde el dashboard: el motor clona la plantilla, asigna IP privada y pública, arma el NAT, registra todo en NetBox y entrega los accesos.</p>
+  <span class="ruta">Dashboard → Infraestructura Lógica → VPS (crear/gestionar)</span>
+  <nav class="idx" aria-label="Índice">
+    <a href="#roles">Quién puede qué</a><a href="#crear">Crear VPS</a><a href="#gestionados">VPS gestionados</a>
+    <a href="#jobs">Jobs</a><a href="#motor">Motor</a><a href="#host-nuevo">Host nuevo</a><a href="#doradas">Plantillas doradas</a>
+  </nav>
+</header>
+
+<section id="roles">
+  <h2>Quién puede qué</h2>
+  <p>El acceso se da por <b>rol</b>, en <b>Administración → Usuarios</b>. Hoy queda así:</p>
+  <div class="tw"><table>
+    <thead><tr><th>Usuario</th><th>Rol</th><th class="c">VPS internos</th><th class="c">VPS de clientes</th><th class="c">Pestaña Motor</th></tr></thead>
+    <tbody>
+      <tr><td>Alcadio</td><td>Superadmin</td><td class="c"><span class="chip si">sí</span></td><td class="c"><span class="chip si">sí</span></td><td class="c"><span class="chip si">sí</span></td></tr>
+      <tr><td>Fabián, Jonatan</td><td>NOC + VPS completo</td><td class="c"><span class="chip si">sí</span></td><td class="c"><span class="chip si">sí</span></td><td class="c"><span class="chip si">sí</span></td></tr>
+      <tr><td>Gerardo, Cristian</td><td>NOC + VPS internos</td><td class="c"><span class="chip parcial">solo los suyos</span></td><td class="c"><span class="chip no">no</span></td><td class="c"><span class="chip no">no</span></td></tr>
+      <tr><td>Resto del equipo</td><td>NOC, Soporte, Operaciones</td><td class="c" colspan="3"><span class="chip no">no ven la sección</span></td></tr>
+    </tbody>
+  </table></div>
+  <p>Los permisos son tres casillas del editor de roles: <b>VPS (crear/gestionar)</b> abre la sección y permite VPS internos; <b>↳ VPS de clientes</b> permite crear y operar VPS de clientes; <b>↳ Pestaña Motor</b> muestra la pestaña Motor. Quien no tiene un permiso no ve la opción, y el servidor también lo bloquea.</p>
+</section>
+
+<section id="crear">
+  <div class="card">
+    <div class="tab"><span class="tabname"><span class="ico">＋</span>Crear VPS</span><span class="who">Todos los que ven la sección</span></div>
+    <p>El formulario tiene tres bloques. Al pulsar <b>Crear VPS</b> se abre el paso a paso y el VPS queda listo en 3 a 7 minutos.</p>
+    <div class="grid3">
+      <div class="box"><h4>Qué se crea</h4><ul>
+        <li><b>Marca</b>: define la red del VPS.</li>
+        <li><b>Plan</b>: «Personalizado» o uno del catálogo, de menor a mayor.</li>
+        <li><b>Sistema operativo</b> y <b>plantilla</b>: con o sin cPanel.</li></ul></div>
+      <div class="box"><h4>Para quién</h4><ul>
+        <li><b>Para un cliente</b> o <b>uso personal</b> (VPS interno tuyo, red 10.100.36.x).</li>
+        <li><b>Acceso</b>: llave SSH o contraseña de root.</li>
+        <li><b>Cliente</b> y <b>hostname</b>.</li></ul></div>
+      <div class="box"><h4>Dónde se crea</h4><ul>
+        <li><b>Host VMware</b>.</li>
+        <li><b>Entorno</b>: Pruebas o Producción.</li>
+        <li><b>Red pública</b>: de qué lista sale la IP pública.</li></ul></div>
+    </div>
+    <div class="acc">
+      <div><span class="k">Pruebas</span><span class="v">Red de pruebas, sin IP pública. No toca el router.</span></div>
+      <div><span class="k">Producción</span><span class="v">Red real de la marca + IP pública + NAT en RouterData + registro en NetBox.</span></div>
+      <div><span class="k">Llave SSH</span><span class="v">El motor genera la llave y la entrega por un enlace seguro que vence en 48 h. Si el cliente te dio su llave pública, pégala.</span></div>
+      <div><span class="k">Contraseña de root</span><span class="v">Contraseña fuerte de 12 caracteres; el motor habilita el SSH con contraseña y lo prueba con un login real.</span></div>
+    </div>
+    <p class="nota"><b>Uso personal</b> fuerza la red interna y Producción, y el VPS solo lo ves tú (y el superadmin). Ahí aparecen las casillas de <b>llaves del equipo</b> para entrar con tu llave.</p>
+  </div>
+</section>
+
+<section id="gestionados">
+  <div class="card">
+    <div class="tab"><span class="tabname"><span class="ico">≡</span>VPS gestionados</span><span class="who">Cada uno ve lo que su rol permite</span></div>
+    <p>Lista los VPS activos en tres grupos: <b>mis VPS de uso personal</b>, <b>VPS de clientes creados a mano</b> y <b>clientes automáticos (WHMCS)</b>. Se actualiza sola cada 30 segundos.</p>
+    <div class="acc">
+      <div><span class="k">Suspender</span><span class="v">Bloquea la IP pública en el router; la VM sigue encendida. Un VPS sin IP pública se apaga.</span></div>
+      <div><span class="k">Reanudar</span><span class="v">Desbloquea la IP (o enciende la VM).</span></div>
+      <div><span class="k">Cambiar plan</span><span class="v">Sube CPU, RAM y disco en caliente, sin reiniciar.</span></div>
+      <div><span class="k">Eliminar</span><span class="v">Pide escribir el nombre exacto. El VPS va a la <b>papelera</b> y se borra solo a los 7 días; libera la IP pública y el NAT.</span></div>
+    </div>
+  </div>
+</section>
+
+<section id="jobs">
+  <div class="card">
+    <div class="tab"><span class="tabname"><span class="ico">◷</span>Jobs</span><span class="who">Cada uno ve los suyos según su rol</span></div>
+    <p>Cada creación, suspensión, cambio de plan o eliminación es un <b>job</b>. A la izquierda van los del NOC (manuales y mantención); a la derecha, los de clientes (WHMCS). <b>Ver pasos</b> abre el detalle en tres secciones plegables:</p>
+    <div class="acc">
+      <div><span class="k">Paso a paso</span><span class="v">Los pasos del job en una línea cada uno; clic en el detalle para verlo completo. Si algo falla, el paso en rojo explica qué pasó.</span></div>
+      <div><span class="k">Acceso al VPS</span><span class="v">IP pública, contraseña o enlace de la llave, comando SSH y panel WHM.</span></div>
+      <div><span class="k">Texto para el cliente</span><span class="v">Asunto y mensaje listos para el correo, con botón Copiar. Se puede retocar antes de copiar.</span></div>
+    </div>
+    <p class="nota"><b>La contraseña y el enlace de la llave se muestran solo 48 horas.</b> Cópialos y envíalos al cliente apenas termine el job.</p>
+  </div>
+</section>
+
+<section id="motor">
+  <div class="card">
+    <div class="tab"><span class="tabname"><span class="ico">⚙</span>Motor</span><span class="who">Solo NOC + VPS completo y superadmin</span></div>
+    <p>Administra los servidores VMware (hosts) donde se crean los VPS. Cada host puede estar en dos motores:</p>
+    <div class="acc">
+      <div><span class="k">Motor de clientes</span><span class="v">Lo usa WHMCS de forma automática. Elige el host por <b>prioridad</b> (menor = preferido); un host <b>pausado</b> no recibe clientes nuevos.</span></div>
+      <div><span class="k">Motor admin</span><span class="v">Los hosts que aparecen en «Host VMware» al crear desde el dashboard.</span></div>
+    </div>
+    <p>En la tabla se ve el espacio libre por datastore, el hardware y lo comprometido. Botones por host: <b>Pausar / Activar</b>, <b>Prioridad</b>, chips <b>clientes / admin</b> para sumarlo o quitarlo de cada motor, y el basurero (solo si no tiene VPS). Abajo están <b>Preparar host nuevo</b> y <b>Copiar plantillas doradas</b>.</p>
+  </div>
+</section>
+
+<section id="host-nuevo">
+  <h2>Incorporar un host VMware nuevo</h2>
+  <ol class="pasos">
+    <li><div><h3>Antes de empezar</h3><ul>
+      <li>ESXi instalado y con licencia (sin licencia no enciende VMs al vencer la evaluación).</li>
+      <li>Red: noc-monitor debe llegar al host por los puertos <code>443</code> y <code>22</code>.</li>
+      <li>El troncal del switch lleva las VLAN de las marcas (81–86) y la red interna como nativa.</li>
+      <li>Crear en el host los <b>portgroups</b> con estos nombres (tabla de abajo).</li></ul></div></li>
+    <li><div><h3>Preparar host nuevo</h3><ul>
+      <li>En Motor: IP del host, datastore principal y clave root (se usa una vez y no se guarda).</li>
+      <li><b>1) Obtener huella</b>, compárala con la consola del ESXi y marca la casilla.</li>
+      <li>Elige los motores y pulsa <b>2) Preparar y enrolar</b>. El motor securiza el host y lo deja <b>pausado</b>.</li></ul></div></li>
+    <li><div><h3>Copiar plantillas doradas</h3><ul>
+      <li>Destino = host nuevo, desde = un host que ya las tenga. Son unos 10 GB.</li></ul></div></li>
+    <li><div><h3>Probar</h3><ul>
+      <li>Crear un VPS en ese host, revisar IP, NAT y acceso, y eliminarlo.</li></ul></div></li>
+    <li><div><h3>Activar</h3><ul>
+      <li>Pulsar <b>Activar</b> y ajustar su <b>prioridad</b>.</li></ul></div></li>
+  </ol>
+  <div class="tw"><table>
+    <thead><tr><th>Portgroup</th><th>VLAN</th><th>Red</th><th>Marcas</th></tr></thead>
+    <tbody>
+      <tr><td class="mono">Vps_Hosting.cl</td><td>81</td><td class="mono">10.100.16.0/24</td><td>Hosting.cl</td></tr>
+      <tr><td class="mono">Vps_Planetahosting.cl</td><td>82</td><td class="mono">10.100.18.0/24</td><td>PlanetaHosting.cl</td></tr>
+      <tr><td class="mono">Vps_Planetahosting.pe</td><td>83</td><td class="mono">10.100.20.0/24</td><td>PlanetaHosting.pe</td></tr>
+      <tr><td class="mono">Vps_Planetahosting.com.co</td><td>84</td><td class="mono">10.100.22.0/24</td><td>PlanetaHosting.com.co</td></tr>
+      <tr><td class="mono">Vps_Inkahosting.pe</td><td>85</td><td class="mono">10.100.24.0/24</td><td>Inkahosting.pe, UnoHosting.pe, Hosting.pe</td></tr>
+      <tr><td class="mono">Vps_Hostingcenter.cl</td><td>86</td><td class="mono">10.100.26.0/24</td><td>HostingCenter.cl</td></tr>
+      <tr><td class="mono">Sistemas_Internos</td><td>nativa</td><td class="mono">10.100.36.0/24</td><td>Uso personal</td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<section id="doradas">
+  <h2>Plantillas doradas</h2>
+  <p>El motor no instala desde una ISO cada vez: <b>clona una plantilla dorada</b> ya preparada, por eso un VPS sale en minutos. Por cada sistema operativo hay dos: la <b>base</b> y la variante con <b>cPanel</b> preinstalado (la licencia se activa con la IP del VPS al primer arranque).</p>
+  <div class="tw"><table>
+    <thead><tr><th>Plantilla</th><th>Sistema</th><th>Cómo se construye</th></tr></thead>
+    <tbody>
+      <tr><td class="mono">dorada-almalinux9.7</td><td>AlmaLinux 9.7</td><td>Desde la <b>ISO</b> del sistema, con instalación desatendida (kickstart), unos 20 min.</td></tr>
+      <tr><td class="mono">dorada-almalinux9.7-cpanel</td><td>AlmaLinux 9.7 + cPanel</td><td>A partir de la base: se instala cPanel y se limpia su identidad, unos 40 min.</td></tr>
+      <tr><td class="mono">dorada-ubuntu26.04</td><td>Ubuntu 26.04 LTS</td><td>Desde la imagen cloud oficial (no usa ISO).</td></tr>
+    </tbody>
+  </table></div>
+  <p>Para un <b>host nuevo</b> no se construyen: se copian desde otro host. Se <b>reconstruyen</b> (unas 1 hora, casi desatendido) cuando sale una versión nueva del sistema o una versión mayor de cPanel, más o menos una vez al mes. Lo hace quien administra el motor.</p>
+</section>
+
+<section>
+  <h2>Buenas prácticas</h2>
+  <ul>
+    <li>Después de una actualización del dashboard, recarga con <b>Ctrl+F5</b>.</li>
+    <li>Producción crea una IP pública y un NAT reales: revisa marca y red pública antes de crear.</li>
+    <li>Envía la contraseña o el enlace de la llave al cliente antes de 48 horas.</li>
+    <li>No crees VPS de prueba en <b>esxi-20039</b>: es producción.</li>
+  </ul>
+</section>
+
+<footer>Borrador para revisión de Alcadio. Detalle técnico en el repositorio <span class="mono">alcalmx/Vps</span> (README, SEGURIDAD.md y docs/RUNBOOK-ENROLAR-HOST.md).</footer>
+</div>

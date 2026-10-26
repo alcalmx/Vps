@@ -41,6 +41,19 @@ dashboard, recordar **Ctrl+F5**. Siempre con OK de Alcadio. Para inspeccionar el
 **Frentes técnicos abiertos:** flujo de WHMCS ("más adelante"), dorada Ubuntu en otros hosts, multi-datastore Incremento 2,
 licencia cPanel automática, opción de SO en el módulo WHMCS.
 
+## 2026-10-26 (lunes, noche) — 📘 Documentación de entrega del Motor VPS (v1, borrador) + pestaña Motor minimalista
+
+Pedido de Alcadio: *"preparemos una documentación para hacer entrega formal del motor VPS a mis compañeros desde el
+dashboard: las 4 pestañas, lo que podrá hacer cada usuario (roles y permisos) y cómo adoptar un host nuevo y crear las
+ISO correspondientes; un HTML didáctico no tan extenso"*. Hecho: `docs/entrega-motor-vps.html` (publicado como artifact
+privado https://claude.ai/artifact/1EbFVk2SJG7KDkRBQVwN4F para que lo revise): quién puede qué, Crear VPS, VPS
+gestionados, Jobs, Motor, incorporar un host nuevo (requisitos + portgroups por VLAN, wizard, copiar doradas, probar,
+activar) y plantillas doradas (las «ISO»: AlmaLinux desde la ISO con kickstart; variante cPanel; Ubuntu desde imagen
+cloud; a un host nuevo se copian, no se construyen). Pendiente: sus ajustes.
+Además, *"sigue el mismo criterio de Crear VPS con el motor"*: pestaña Motor sin textos largos
+(`fastnetmon/containers/dashboard/patch_vps_motor_minimal_v1.py` + `test_vps_motor_minimal.py`). Codex: 1 hallazgo (la
+casilla de la llave de Claude debe advertir que es shell root sin restricciones → corregido). PENDIENTE DE DEPLOY.
+
 ## 2026-10-26 (lunes, 17:48–17:51) — 🔒 PERMISOS DE LA SECCIÓN VPS (quién crea qué) — EN PRODUCCIÓN, APROBADO por Codex (2 rondas)
 
 Pedido de Alcadio: *"esta herramienta debe ser utilizada en su totalidad por Alcadio, Fabián y Jonatan; Gerardo y
