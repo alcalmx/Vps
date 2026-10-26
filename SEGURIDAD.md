@@ -88,18 +88,22 @@ Decisión de Alcadio: los clientes actuales entran a sus VPS con usuario `root` 
 producción exigen mantenerlo **hasta migrar 100% a llaves SSH**. Por eso, solo para **VPS de cliente creados desde el
 dashboard**, el formulario pregunta el acceso: «Llave SSH» (lo de siempre) o «Contraseña de root».
 
-- Con contraseña, el **motor la genera** (20 caracteres de un alfabeto de 66 símbolos, ~121 bits, sin caracteres
-  ambiguos), la aplica con `chpasswd` por stdin y crea en la VM el archivo
+- Con contraseña, el **motor la genera** (12 caracteres, pedido de Alcadio: exactamente 2 especiales, 1 mayúscula y el
+  resto minúsculas y números con al menos 1 número; sin caracteres ambiguos ni ':'; ~65 bits), la aplica con
+  `chpasswd` por stdin y crea en la VM el archivo
   `/etc/ssh/sshd_config.d/00-acceso-clave.conf` (`PermitRootLogin yes`, `PasswordAuthentication yes`), que se lee antes
-  que el `00-hosting.conf` de la dorada. Valida con `sshd -t` (si falla, borra el archivo), recarga y **verifica** con
-  `sshd -T`. No se genera ni entrega llave del cliente. La llave de gestión del NOC sigue instalada.
+  que el `00-hosting.conf` de la dorada (respaldando uno previo). Valida con `sshd -t`, recarga y da el acceso por bueno
+  solo si la **configuración efectiva** para root desde la IP del motor (`sshd -T -C`) lo permite **y un login real
+  solo con la contraseña** funciona. Cualquier falla revierte (restaura o borra, valida y recarga) y la reversión se
+  confirma; si no se puede confirmar, el job lo informa como **estado incierto**. No se genera ni entrega llave del
+  cliente. La llave de gestión del NOC sigue instalada.
 - La contraseña se ve solo en el resultado del job (rol admin del dashboard) y se **redacta al vencer el plazo de
   entrega**, igual que la de WHM. Con cPanel, la misma contraseña sirve para SSH y WHM.
 - **No aplica** a VPS de uso personal (siempre llave) ni a creaciones desde WHMCS (sin cambios). `vms.acceso`
   registra `llave` o `clave` para saber qué VPS migrar.
 - **Volver a solo llave** en un VPS: borrar `/etc/ssh/sshd_config.d/00-acceso-clave.conf` y `systemctl reload sshd`.
 - **Riesgo aceptado:** SSH con contraseña expuesto a internet por el NAT 1:1 → intentos de fuerza bruta. La contraseña
-  de 121 bits los hace inviables, pero generan ruido en los logs. Mejora pendiente: fail2ban o limitar el puerto 22 a
+  de ~65 bits los hace inviables por SSH, pero generan ruido en los logs. Mejora pendiente: fail2ban o limitar el puerto 22 a
   las IP del cliente.
 
 ## Superficie de red
