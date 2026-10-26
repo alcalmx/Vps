@@ -25,12 +25,22 @@ ADMIN = {"X-Auth-Token": "tok-admin-test"}
 WHMCS = {"X-Auth-Token": "tok-whmcs-test"}
 
 # ── el generador ────────────────────────────────────────────────────────────
+# composición pedida por Alcadio (2026-10-26): 12 = 2 especiales + 1 mayúscula + minúsculas/números (>=1 número)
+for _ in range(2000):
+    pw = motor.password_root_auto()
+    assert len(pw) == 12, pw
+    assert sum(c in motor.ROOT_ESPECIALES for c in pw) == 2, pw
+    assert sum(c in motor.ROOT_MAYUS for c in pw) == 1, pw
+    assert sum(c in motor.ROOT_DIGITOS for c in pw) >= 1, pw
+    assert all(c in motor.ROOT_MINUS + motor.ROOT_MAYUS + motor.ROOT_DIGITOS + motor.ROOT_ESPECIALES for c in pw), pw
+    assert pw[0] not in motor.ROOT_ESPECIALES, 'ningún especial al inicio'
+    assert not (set(pw) & set('lIO01')), pw
+assert len(set(motor.password_root_auto() for _ in range(200))) == 200, 'debe ser aleatoria'
 pw = motor.password_root_auto()
-assert len(pw) == 20, len(pw)
 assert ":" not in pw and "\n" not in pw and "\r" not in pw, "rompería chpasswd (root:clave)"
 assert len(set(motor.password_root_auto() for _ in range(50))) == 50, "debe ser aleatoria"
 assert not (set(pw) & set("lIO01")), "sin caracteres ambiguos"
-print("ok - generador: 20 chars, sin ':' ni saltos, aleatoria, sin ambiguos")
+print("ok - generador: 12 chars = 2 especiales + 1 mayúscula + minúsculas/números, sin ':' ni ambiguos, aleatoria")
 
 # ── qué captura el motor: se guarda lo que REALMENTE se manda a flujo_crear ──
 _capt = {}
@@ -48,7 +58,7 @@ BASE = {"marca": "hosting.cl", "cliente": "t", "modo": "pruebas"}
 r = cli.post("/crear", json=dict(BASE, sabor="vps-estandar", hostname="p1.cl",
                                  instalar_cpanel=True), headers=ADMIN)
 assert r.status_code == 200, r.get_json()
-assert _capt["auto"] is True and _capt["pw"] and len(_capt["pw"]) == 20
+assert _capt["auto"] is True and _capt["pw"] and len(_capt["pw"]) == 12
 print("ok - cPanel sin clave (dashboard) -> el motor genera una")
 
 # (2) cPanel CON clave -> se respeta EXACTA (ruta de WHMCS; #15: no se modifica)
