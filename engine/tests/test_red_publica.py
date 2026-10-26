@@ -105,7 +105,25 @@ try:
     j = JobFalso()
     assert motor.ip_publica_libre("Red107-0", job=j)[0] == "201.148.107.254"
     assert any("no pude leer las direcciones de interfaz" in x for x in j.d), j.d
-    print("ok - otras listas: sin restricción de subred, sin IPs de interfaz del router; best effort si la consulta falla")
+    # Codex: 'network=' como único motivo de exclusión, retorno ok=False y TimeoutExpired
+    router(("Red107-0", "201.148.107"), [200, 199], interfaces=" 5 address=10.0.0.1/24 network=201.148.107.200
+")
+    assert motor.ip_publica_libre("Red107-0")[0] == "201.148.107.199", "la dirección de red de una subred configurada se excluye"
+    import subprocess as _sp
+    for falla in ("ok_false", "timeout"):
+        router(("Red107-0", "201.148.107"), [254])
+        def mk2(cmd, host=None, timeout=25, _f=falla):
+            if cmd.startswith("/ip address print terse"):
+                if _f == "timeout":
+                    raise _sp.TimeoutExpired(cmd, timeout)
+                return False, ""
+            return mk(cmd, host, timeout)
+        motor.mikrotik = mk2
+        j = JobFalso()
+        assert motor.ip_publica_libre("Red107-0", job=j)[0] == "201.148.107.254", falla
+        assert any("no pude leer las direcciones de interfaz" in x for x in j.d), (falla, j.d)
+        motor.mikrotik = mk
+    print("ok - otras listas: sin restricción de subred, sin IPs de interfaz del router; best effort si la consulta falla (ok=False o timeout)")
 finally:
     motor.mikrotik = _mk
 print("TODO OK - test_red_publica")
