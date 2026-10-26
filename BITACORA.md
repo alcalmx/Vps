@@ -48,8 +48,15 @@ lo demás letras y números, y usa 1 mayúscula"*.
 - Lecciones propias del día: heredocs con `%` o comillas rompen el armado de textos (usar Write + reemplazos con
   marcadores); suites viejas con CRLF requieren normalizar antes de reemplazar.
 
+**Añadido (mismo día, Codex APROBADO, commit `7fd6fcf`):** Alcadio: *"en el uso personal y [cliente con llave] necesito
+también la clave root para el WHM; estará asignada y no se podrá iniciar sesión SSH con ella pero sí al WHM; aplica a los
+VPS creados desde el dashboard, WHMCS es otro flujo"* → todo VPS del dashboard (rol admin) genera, aplica y entrega clave
+de root; con acceso por llave sirve para WHM (si hay cPanel) y la consola de VMware, NO para SSH. WHMCS sin cambios. Panel:
+bloque de clave también sin cPanel; con el plazo vencido muestra "ya no se muestra: venció el plazo" (observación menor
+de Codex: "(expirado)" no debe aparecer como contraseña copiable).
+
 **PENDIENTE:** OK de Alcadio para desplegar (motor `/tmp/vps-marcas` + dashboard `/tmp/dashboard.py.vpsclave`; lleva
-también la excepción de Red106-0). Tras desplegar: crear un VPS de cliente con «Contraseña de root» en esxi-20051 para
+también la excepción de Red106-0). y la clave de root en todos los VPS del dashboard) Tras desplegar: crear un VPS de cliente con «Contraseña de root» en esxi-20051 para
 validar en real (el motor hace el login de prueba y lo informa).
 
 ## 2026-10-26 (lunes) — ⚠️ esxi-20051 está en MODO EVALUACIÓN: vence el 2026-11-28 · licencias y hot-add verificadas
