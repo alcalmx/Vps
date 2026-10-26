@@ -5,6 +5,30 @@
 
 ---
 
+## 2026-10-26 (lunes, tarde) — 🔒 PERMISOS DE LA SECCIÓN VPS (quién crea qué) — APROBADO por Codex (2 rondas), PENDIENTE DE DEPLOY
+
+Pedido de Alcadio: *"esta herramienta debe ser utilizada en su totalidad por Alcadio, Fabián y Jonatan; Gerardo y
+Cristian también podrán crear VPS, pero en primera instancia solo VPS internos (después evaluaré darles VPS de
+clientes y quiero poder controlarlo); la pestaña Motor solo Alcadio, Fabián y Jonatan"* y *"el resto de los usuarios
+no deben poder ver la opción de crear VPS"*. Elegido: Gerardo/Cristian ven SOLO sus VPS internos; control POR ROLES.
+- **Dashboard** (`patch_vps_permisos_v1/v2.py`): sub-permisos `vps_crear_clientes` («↳ VPS de clientes») y
+  `vps_motor` («↳ Pestaña Motor») además de `vps_engine`. El proxy manda `solo_personal` al motor (lo fija el
+  servidor) y rechaza crear para clientes sin permiso; las rutas de escritura de hosts exigen `vps_motor`; GET /hosts
+  sin Motor devuelve solo id/estado de los hosts uso_admin. Pantalla: sin clientes solo «Uso personal»; sin Motor no
+  hay pestaña. /health queda con `vps_engine` (lo usa el formulario; Codex lo aceptó).
+- **Motor**: `_vista_args` → (usuario, total, solo); `solo_personal` falla cerrado; /vms, /jobs (SQL antes del LIMIT)
+  y /job solo personales propios; /crear para cliente → 403; /accion y /editar: control de dueño ANTES de los
+  estados y respuesta ÚNICA (`ERR_SOLO_OPERAR`) para VM inexistente/ajena/serviceid (no se sondea). Sin el
+  parámetro, comportamiento previo. Suite nueva `tests/test_solo_personal.py` (26 suites verdes).
+- **Roles** (`migrar_roles_vps_20261026.py` + `aplicar_roles_vps_20261026.sh` en fastnetmon): «NOC + VPS completo»
+  (fabian, jonatan), «NOC + VPS internos» (gerardo, cristian), NOC sin sección (roni). Valida los permisos EFECTIVOS de
+  todos antes de escribir; se aplica con el dashboard DETENIDO (contenedor de un solo uso), respaldo e idempotente.
+- **Codex:** R1 5 hallazgos (ventana en el orden de despliegue; inventario de hosts expuesto; migración vs escrituras
+  concurrentes; permisos explícitos de usuarios excluidos; sondeo de existencia por mensajes) → R2 **APROBADO**.
+
+**Despliegue (orden obligatorio):** 1) motor (compatible con el dashboard actual); 2) dashboard (todo NOC queda en
+«solo internos» ~1 min, falla cerrado); 3) roles con `aplicar_roles_vps_20261026.sh`. PENDIENTE: OK de Alcadio.
+
 ## 2026-10-26 (lunes, 16:08) — 🛡️ Limpieza de jobs huérfanos SOLO al arrancar el servicio — EN PRODUCCIÓN, APROBADO por Codex
 
 Arreglo de fondo del incidente de las 15:30 (entrada más abajo), con OK de Alcadio ("ok despliega"). La marca

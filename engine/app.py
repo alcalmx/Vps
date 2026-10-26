@@ -3485,6 +3485,8 @@ def crear():
     uso = d.get("uso", "cliente")
     if uso not in ("cliente", "personal"):
         return jsonify({"error": "uso inválido (cliente | personal)"}), 400
+    if rol == "admin" and bool(d.get("solo_personal")) and uso != "personal":
+        return jsonify({"error": ERR_SOLO_PERSONAL}), 403
     propietario = None
     if uso == "personal":
         if rol != "admin":
@@ -3722,10 +3724,15 @@ def crear():
     return jsonify({"ok": True, "job_id": job.id, "vm": nombre, "modo": modo,
                     "byo": bool(pubkey_cliente)})
 
-def _visible_para(row, usuario, total):
+def _visible_para(row, usuario, total, solo=False):
     """Un VPS/job de uso PERSONAL solo lo ve su dueño (o quien ve TODO: superadmin del
-    dashboard, total=1). Todo lo demás lo ve cualquiera con acceso a la sección."""
-    if (row.get("uso") or "cliente") != "personal" or total:
+    dashboard, total=1). Todo lo demás lo ve cualquiera con acceso a la sección. Con `solo`
+    (usuario SIN permiso de VPS de clientes, lo afirma el proxy) ve únicamente SUS VPS/jobs
+    personales: ni los de clientes ni los del sistema (Alcadio 2026-10-26)."""
+    personal = (row.get("uso") or "cliente") == "personal"
+    if solo:
+        return personal and bool(usuario) and row.get("propietario") == usuario
+    if not personal or total:
         return True
     return bool(usuario) and row.get("propietario") == usuario
 
@@ -3734,10 +3741,16 @@ def _vista_args(rol):
     dashboard) puede afirmarlo: con cualquier otro token (WHMCS) los parámetros se IGNORAN y lo
     personal queda oculto (Codex uso personal #1)."""
     if rol != "admin":
-        return "", False
+        return "", False, False
     usuario = (request.args.get("usuario") or "").strip()[:60]
     total = request.args.get("total") in ("1", "true")
-    return usuario, total
+    # sin permiso de VPS de clientes; cualquier valor que no sea un "no" explícito RESTRINGE (falla cerrado)
+    solo = (request.args.get("solo_personal") or "0").strip().lower() not in ("0", "false", "no")
+    return usuario, total, solo
+
+ERR_SOLO_PERSONAL = "no tienes permiso para VPS de clientes: solo tus VPS de uso personal"
+# al OPERAR, «no existe» y «no es tuyo» responden igual: no se puede sondear qué VPS existen (Codex)
+ERR_SOLO_OPERAR = "VPS inexistente o sin permiso: solo puedes operar tus VPS de uso personal"
 
 @app.route("/job/<jid>")
 def job_get(jid):
@@ -3746,12 +3759,14 @@ def job_get(jid):
         return jsonify({"error": "unauthorized"}), 401
     with DB_LOCK, db() as c:
         row = c.execute("SELECT * FROM jobs WHERE id=?", (jid,)).fetchone()
+    usuario, total, solo = _vista_args(rol)
     if not row:
+        if solo:
+            return jsonify({"error": ERR_SOLO_PERSONAL}), 403
         return jsonify({"error": "job no existe"}), 404
     d = dict(row)
-    usuario, total = _vista_args(rol)
-    if not _visible_para(d, usuario, total):
-        return jsonify({"error": "job de un VPS de uso personal de otro usuario"}), 403
+    if not _visible_para(d, usuario, total, solo):
+        return jsonify({"error": ERR_SOLO_PERSONAL if solo else "job de un VPS de uso personal de otro usuario"}), 403
     d["pasos"] = json.loads(d["pasos"])
     if rol != "admin":
         # el resultado puede traer credenciales de entrega (link+clave del Send) —
@@ -3782,18 +3797,20 @@ def jobs_list():
         return jsonify({"error": "unauthorized"}), 401
     if rol != "admin":
         return jsonify({"error": ERR_SOLO_ADMIN}), 403
-    usuario, total = _vista_args(rol)
+    usuario, total, solo = _vista_args(rol)
     with DB_LOCK, db() as c:
         # la visibilidad va en el SQL, ANTES del LIMIT: 60 jobs personales ajenos no deben vaciar
-        # la lista de los demás (Codex uso personal #4). NULL = cliente.
+        # la lista de los demás (Codex uso personal #4). NULL = cliente. `solo`: únicamente los suyos.
         rows = c.execute("SELECT id,tipo,vm,estado,error,motor,created_at,updated_at,uso,propietario "
                          "FROM jobs WHERE (uso IS NULL OR uso != 'personal' OR ?=1 OR propietario=?) "
-                         "ORDER BY created_at DESC LIMIT 60", (1 if total else 0, usuario)).fetchall()
+                         "AND (?=0 OR (uso='personal' AND propietario=?)) "
+                         "ORDER BY created_at DESC LIMIT 60",
+                         (1 if total else 0, usuario, 1 if solo else 0, usuario)).fetchall()
     # motor NULL (jobs previos a la separación) → se infiere por tipo para el agrupado
     out = []
     for r in rows:
         d = dict(r)
-        if not _visible_para(d, usuario, total):
+        if not _visible_para(d, usuario, total, solo):
             continue
         d["motor"] = d.get("motor") or _motor_por_defecto(d["tipo"])
         out.append(d)
@@ -3811,9 +3828,9 @@ def vms_list():
             "SELECT * FROM vms WHERE estado != 'papelera' ORDER BY nombre").fetchall()]
         papelera = [dict(r) for r in c.execute(
             "SELECT nombre,papelera_entrada,updated_at,uso,propietario FROM vms WHERE estado='papelera'").fetchall()]
-    usuario, total = _vista_args(rol)
-    rows = [r for r in rows if _visible_para(r, usuario, total)]
-    papelera = [r for r in papelera if _visible_para(r, usuario, total)]
+    usuario, total, solo = _vista_args(rol)
+    rows = [r for r in rows if _visible_para(r, usuario, total, solo)]
+    papelera = [r for r in papelera if _visible_para(r, usuario, total, solo)]
     hcache = {h["id"]: h for h in hosts_lista()}
     for r in rows:
         _h = hcache.get(r.get("host"))
@@ -3827,9 +3844,13 @@ ACCIONES_PERSONAL_PASOS = {
     "suspender": ["Validar guardarraíles", "Apagar la VM (uso personal, sin IP pública)", "Marcar suspendido"],
     "reanudar": ["Validar guardarraíles", "Encender la VM", "Marcar activo"]}
 
-def _solo_dueno(reg, rol, actor, admin_total):
+def _solo_dueno(reg, rol, actor, admin_total, solo=False):
     """Un VPS de uso personal solo lo opera su dueño, o un superadmin (admin_total, lo
-    afirma el proxy del dashboard). Devuelve el error JSON o None."""
+    afirma el proxy del dashboard). Con `solo` (usuario sin permiso de VPS de clientes, lo
+    afirma el proxy) solo opera SUS VPS personales. Devuelve el error JSON o None."""
+    if solo and not (rol == "admin" and (reg.get("uso") or "cliente") == "personal"
+                     and reg.get("propietario") == actor):
+        return jsonify({"error": ERR_SOLO_OPERAR}), 403
     if (reg.get("uso") or "cliente") != "personal":
         return None
     if rol == "admin" and (bool(admin_total) or reg.get("propietario") == actor):
@@ -3896,6 +3917,9 @@ def accion():
             return jsonify({"error": "el token de WHMCS opera solo por serviceid (vm explícito no permitido)"}), 403
         if not serviceid:
             return jsonify({"error": "falta serviceid"}), 400
+    solo = rol == "admin" and bool(d.get("solo_personal"))
+    if solo and serviceid:    # un VPS personal no tiene serviceid: no se resuelve (ni se revela si existe)
+        return jsonify({"error": ERR_SOLO_OPERAR}), 403
     # caso WHMCS: si no vino el nombre, se resuelve por el serviceid
     por_sid = False
     if not vm and serviceid:
@@ -3906,7 +3930,12 @@ def accion():
     try:
         reg = guardarraices(vm)
     except RuntimeError as e:
+        if solo:
+            return jsonify({"error": ERR_SOLO_OPERAR}), 403
         return jsonify({"error": str(e)}), 400
+    err_dueno = _solo_dueno(reg, rol, actor, d.get("admin_total"), solo)
+    if err_dueno:
+        return err_dueno
     # #17: matriz de estados aptos por operación (reanudar sobre 'activo' se deja
     # pasar: el flujo responde ok-noop y el Unsuspend de WHMCS depende de eso)
     if reg.get("estado") == "purgando":
@@ -3918,9 +3947,6 @@ def accion():
         sugerencia = " — reintenta 'eliminar'" if reg.get("estado") == "eliminando" else ""
         return jsonify({"error": "la VM %s está '%s': la acción '%s' no aplica%s"
                         % (vm, reg.get("estado"), acc, sugerencia)}), 409
-    err_dueno = _solo_dueno(reg, rol, actor, d.get("admin_total"))
-    if err_dueno:
-        return err_dueno
     # eliminar exige confirmación = nombre de la VM (o el serviceid si se identificó por él)
     if acc == "eliminar":
         conf = d.get("confirmacion")
@@ -3963,6 +3989,9 @@ def editar():
             return jsonify({"error": "el token de WHMCS opera solo por serviceid (vm explícito no permitido)"}), 403
         if not serviceid:
             return jsonify({"error": "falta serviceid"}), 400
+    solo = rol == "admin" and bool(d.get("solo_personal"))
+    if solo and serviceid:    # un VPS personal no tiene serviceid: no se resuelve (ni se revela si existe)
+        return jsonify({"error": ERR_SOLO_OPERAR}), 403
     if not vm and serviceid:
         vm = vm_por_serviceid(serviceid) or ""
         if not vm:
@@ -3970,8 +3999,10 @@ def editar():
     try:
         reg = guardarraices(vm)
     except RuntimeError as e:
+        if solo:
+            return jsonify({"error": ERR_SOLO_OPERAR}), 403
         return jsonify({"error": str(e)}), 400
-    err_dueno = _solo_dueno(reg, rol, actor, d.get("admin_total"))
+    err_dueno = _solo_dueno(reg, rol, actor, d.get("admin_total"), solo)
     if err_dueno:
         return err_dueno
     # #17: editar solo sobre VMs operativas, y solo hacia sabores activos del catálogo
