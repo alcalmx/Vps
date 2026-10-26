@@ -5,7 +5,30 @@
 
 ---
 
-## 2026-10-26 (lunes, ~18:25) — 🔌 Portgroups de TODAS las marcas en esxi-20051 (VLAN 81–86 + Sistemas_Internos)
+## 2026-10-26 (lunes, 15:30–15:40) — ⚠️ INCIDENTE (causado por Claude): job de creación marcado «interrumpido por reinicio del motor» sin que el motor se reiniciara
+
+**Qué vio Alcadio:** creando `vps-ihpe-0001-alcadio` (Inkahosting.pe, VLAN 85, acceso por contraseña de root, job
+`3abca92fa8f7`), a las 15:30:59 el dashboard mostró el job en **error: "interrumpido por reinicio del motor"** en el paso 11.
+
+**Causa:** para verificar los portgroups (entrada anterior) Claude ejecutó dentro del contenedor `vps-engine` un script
+aparte que hacía `import app`. Importar `app.py` ejecuta `init_db()` a nivel de módulo, y `init_db()` marca como error
+**todo job en estado 'corriendo'** (limpieza de huérfanos pensada para el arranque real). El motor NO se reinició: el
+hilo real siguió trabajando, pero la fila del job quedó en error.
+
+**Resultado:** el hilo terminó bien. El primer boot no aplicó la IP estática (la carrera cloud-init/NetworkManager
+conocida desde el 2026-09-15: ARP «failed» en RouterData, guest solo con IPv6 de enlace) y el **reinicio automático** del
+paso 11 la arregló. 15/15 a las 15:34:52: pública **38.19.57.102 ↔ 10.100.24.253**, NAT + NetBox, cPanel 138.0 con WHM
+200, **SSH de root con contraseña habilitado y verificado con login real** (primera validación en producción del acceso
+por contraseña). Al terminar, el hilo puso `estado='ok'` pero dejó el texto del error; Claude lo limpió con un UPDATE
+acotado (`id='3abca92fa8f7' AND estado='ok' AND error='interrumpido…'`, 1 fila). El intento previo de las 15:25
+(`6f2b300ae242`) falló bien: aún no existía el portgroup de la VLAN 85.
+
+**Lección:** NUNCA importar `app.py` del motor fuera del proceso del servicio con la BD de producción (ni para
+"solo leer"). Para inspeccionar: BD en solo lectura (`sqlite3 file:/data/registry.db?mode=ro`), `govc`/`esxcli` directo
+o la API del motor. **Arreglo propuesto (pendiente, con Codex + OK):** mover la limpieza de jobs 'corriendo' de
+`init_db()` al arranque real (`if __name__ == "__main__"`), para que importar el módulo no toque jobs vivos.
+
+## 2026-10-26 (lunes, ~15:25) — 🔌 Portgroups de TODAS las marcas en esxi-20051 (VLAN 81–86 + Sistemas_Internos)
 
 Pedido de Alcadio: *"crea en el VMware 192.168.200.51 todos los portgroups de las marcas que ofrecemos en el
 dashboard; yo acabo de crear el de VLAN 85, crea los que faltan"*. Él creó `Vps_Inkahosting.pe` (VLAN 85). Claude creó
