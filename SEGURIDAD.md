@@ -82,6 +82,26 @@ con shell libre:
 - Cada host ESXi futuro tendrá SU PROPIA llave y SU PROPIO usuario `svc-vps`
   (compromiso de uno no abre los demás).
 
+## Excepción: acceso por contraseña de root (VPS de clientes, desde 2026-10-26)
+
+Decisión de Alcadio: los clientes actuales entran a sus VPS con usuario `root` y contraseña, y para pasar a
+producción exigen mantenerlo **hasta migrar 100% a llaves SSH**. Por eso, solo para **VPS de cliente creados desde el
+dashboard**, el formulario pregunta el acceso: «Llave SSH» (lo de siempre) o «Contraseña de root».
+
+- Con contraseña, el **motor la genera** (20 caracteres de un alfabeto de 66 símbolos, ~121 bits, sin caracteres
+  ambiguos), la aplica con `chpasswd` por stdin y crea en la VM el archivo
+  `/etc/ssh/sshd_config.d/00-acceso-clave.conf` (`PermitRootLogin yes`, `PasswordAuthentication yes`), que se lee antes
+  que el `00-hosting.conf` de la dorada. Valida con `sshd -t` (si falla, borra el archivo), recarga y **verifica** con
+  `sshd -T`. No se genera ni entrega llave del cliente. La llave de gestión del NOC sigue instalada.
+- La contraseña se ve solo en el resultado del job (rol admin del dashboard) y se **redacta al vencer el plazo de
+  entrega**, igual que la de WHM. Con cPanel, la misma contraseña sirve para SSH y WHM.
+- **No aplica** a VPS de uso personal (siempre llave) ni a creaciones desde WHMCS (sin cambios). `vms.acceso`
+  registra `llave` o `clave` para saber qué VPS migrar.
+- **Volver a solo llave** en un VPS: borrar `/etc/ssh/sshd_config.d/00-acceso-clave.conf` y `systemctl reload sshd`.
+- **Riesgo aceptado:** SSH con contraseña expuesto a internet por el NAT 1:1 → intentos de fuerza bruta. La contraseña
+  de 121 bits los hace inviables, pero generan ruido en los logs. Mejora pendiente: fail2ban o limitar el puerto 22 a
+  las IP del cliente.
+
 ## Superficie de red
 
 - `vps-engine` escucha SOLO `127.0.0.1:8224` en noc-monitor (red de host, como

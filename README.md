@@ -256,7 +256,7 @@ Al crear un VPS se elige el **uso**:
 | IP pública / NAT | Sí (lista pública de la marca) | Sí, igual que un cliente (hoy Red57-0 rango de prueba) |
 | Nombre de VM | `vps-<marca>-NNNN-<cliente>` | `vps-int-NNNN-<usuario>` |
 | Suspender / reanudar | Bloquear / desbloquear la IP pública | Igual; si no tuviera pública, apagar / encender |
-| Llave de acceso | Bóveda + Send al cliente | Bóveda + Send al dueño |
+| Acceso | El formulario pregunta: llave SSH (bóveda + Send, o BYO) o **contraseña de root** (generada por el motor, SSH por contraseña; ver SEGURIDAD.md) | Siempre llave (tildes del equipo, BYO o bóveda + Send) |
 | WHMCS | Puede venir de WHMCS | Nunca |
 
 La red interna es `marcas/interno.json` con `"uso": "interno"`: no aparece en el selector de marcas y

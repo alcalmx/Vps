@@ -397,7 +397,8 @@ def init_db():
                           ("so", "TEXT"),           # sistema operativo con el que se creó
                           ("uso", "TEXT"),          # 'cliente' (NULL = cliente) | 'personal' (uso interno de un usuario)
                           ("propietario", "TEXT"),  # usuario del dashboard dueño de un VPS 'personal'
-                          ("llaves_equipo", "TEXT")):  # JSON {instaladas:[ids], fallidas:[ids]} (tildes de Crear VPS)
+                          ("llaves_equipo", "TEXT"),  # JSON {instaladas:[ids], fallidas:[ids]} (tildes de Crear VPS)
+                          ("acceso", "TEXT")):        # 'llave' (NULL = llave) | 'clave' (root con contraseña por SSH)
             try:
                 c.execute("ALTER TABLE vms ADD COLUMN %s %s" % (col, decl))
             except sqlite3.OperationalError as e:
@@ -1928,7 +1929,44 @@ def set_root_password(ip, password):
         cli.close()
     return True
 
-def aplicar_root_password(job, ip, root_password, auto):
+# Drop-in que habilita root con contraseña. Se llama 00-acceso-clave.conf para leerse ANTES que 00-hosting.conf
+# (dorada AlmaLinux), 50-cloud-init.conf y 99-vps.conf (Ubuntu): en sshd gana el PRIMER valor leído. Volver a
+# "root solo con llave" = borrar este archivo y recargar sshd. El script es FIJO (sin datos del usuario).
+SSHD_CLAVE_CONF = "/etc/ssh/sshd_config.d/00-acceso-clave.conf"
+SSHD_CLAVE_SCRIPT = (
+    "f=%s; "
+    "printf '%%s\\n' '# vps-engine: acceso por CONTRASENA de root pedido para este VPS (dashboard NOC).' "
+    "'# Para volver a root solo con llave: borrar este archivo y ejecutar: systemctl reload sshd' "
+    "'PermitRootLogin yes' 'PasswordAuthentication yes' > \"$f.tmp\" "
+    "&& chmod 600 \"$f.tmp\" && mv -f \"$f.tmp\" \"$f\" || exit 4; "
+    "if ! sshd -t; then rm -f \"$f\"; echo SSHD_INVALIDO; exit 3; fi; "
+    "systemctl reload sshd 2>/dev/null || systemctl reload ssh 2>/dev/null || exit 5; "
+    "sshd -T | grep -E '^(permitrootlogin|passwordauthentication) '" % SSHD_CLAVE_CONF)
+
+def habilitar_ssh_clave(job, ip):
+    """Habilita en la VM el login SSH de root con contraseña (vía llave de gestión) y lo VERIFICA con `sshd -T`.
+    No aborta la creación: devuelve True solo si quedó comprobado; si no, avisa en el paso (sin el error crudo)."""
+    if not MGMT_PRIVKEY_PATH:
+        job.detalle("aviso: sin llave de gestión — no se pudo habilitar el SSH con contraseña")
+        return False
+    cli = paramiko.SSHClient()
+    cli.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+    try:
+        cli.connect(ip, username="root", key_filename=MGMT_PRIVKEY_PATH, timeout=15,
+                    allow_agent=False, look_for_keys=False)
+        out = _ssh_exec(cli, SSHD_CLAVE_SCRIPT, timeout=60)
+    except Exception as e:  # noqa: BLE001 — se informa el tipo; nada del remoto
+        job.detalle("aviso: no se pudo habilitar el SSH con contraseña (%s)" % type(e).__name__)
+        return False
+    finally:
+        try:
+            cli.close()
+        except Exception:  # noqa: BLE001
+            pass
+    lineas = set(l.strip().lower() for l in (out or "").splitlines())
+    return "permitrootlogin yes" in lineas and "passwordauthentication yes" in lineas
+
+def aplicar_root_password(job, ip, root_password, auto, para_ssh=False):
     """Pone la clave de root en la VM y devuelve si se CONFIRMÓ. No bloquea la creación:
     un VPS sin clave de WHM sigue siendo un VPS entregable por SSH. Separada de flujo_crear
     para poder probar el camino de fallo sin SSH real (Codex rootpw r2)."""
@@ -1936,8 +1974,10 @@ def aplicar_root_password(job, ip, root_password, auto):
         return False
     try:
         set_root_password(ip, root_password)
-        job.detalle("contraseña de root %s (para WHM/consola; SSH sigue solo con llave)"
-                    % ("GENERADA por el motor y aplicada" if auto else "aplicada"))
+        job.detalle("contraseña de root %s (%s)"
+                    % ("GENERADA por el motor y aplicada" if auto else "aplicada",
+                       "acceso por contraseña: también servirá para SSH" if para_ssh
+                       else "para WHM/consola; SSH sigue solo con llave"))
         return True
     except Exception as e:  # noqa: BLE001 — rc explícito y timeout llegan igual: sin confirmar
         job.detalle("aviso: no se pudo aplicar la contraseña de root (%s)" % e)
@@ -1960,7 +2000,7 @@ def entregar_root_password(res, root_password, auto, aplicada):
 def flujo_crear(job, marca, sabor_slug, cliente, hostname, instalar_cpanel, modo,
                 pubkey_cliente=None, root_password=None, whmcs_serviceid=None,
                 sabor_def=None, host=None, so=None, root_password_auto=False, uso="cliente",
-                pub_lista_req=None, llaves_equipo_ids=None):
+                pub_lista_req=None, llaves_equipo_ids=None, acceso="llave"):
     nombre = job.vm
 
     # TODO lo previo a tocar el ESXi va dentro del bloque que COMPENSA: si algo falla aquí la
@@ -1995,7 +2035,7 @@ def flujo_crear(job, marca, sabor_slug, cliente, hostname, instalar_cpanel, modo
         reg = vm_registrada(nombre)
         if not reg or reg.get("estado") != "creando":
             raise RuntimeError("reserva de %s no encontrada o en estado inesperado" % nombre)
-        set_estado(nombre, "creando", so=so)   # deja registrado el SO desde el inicio
+        set_estado(nombre, "creando", so=so, acceso=acceso)   # deja registrados SO y tipo de acceso desde el inicio
         job.detalle("%s · %s (%d vCPU / %d MB / %d GB) · %s · modo %s · host %s · %s: red %s%s%s"
                     % (nombre, sabor["nombre_web"], sabor["vcpu"], sabor["ram_mb"],
                        sabor["disco_gb"], so_info["nombre"], modo, h["id"], marca_cfg["nombre"],
@@ -2181,7 +2221,8 @@ def flujo_crear(job, marca, sabor_slug, cliente, hostname, instalar_cpanel, modo
         job.detalle("SSH root@%s con llave de gestión: OK" % ip)
         # clave de root (opcional, viene de WHMCS): se aplica por SSH; SSH sigue key-only,
         # esta clave sirve para WHM/consola, no para login SSH.
-        root_pw_ok = aplicar_root_password(job, ip, root_password, root_password_auto)
+        root_pw_ok = aplicar_root_password(job, ip, root_password, root_password_auto,
+                                           para_ssh=(acceso == "clave"))
     else:
         job.detalle("sin MGMT_PRIVKEY_PATH configurada — verificación omitida")
 
@@ -2291,8 +2332,11 @@ def flujo_crear(job, marca, sabor_slug, cliente, hostname, instalar_cpanel, modo
     entrega = None
     byo_fp = None
     equipo_ok, equipo_mal = [], []
+    clave_ok = False
     if modo == "produccion":
-        if pubkey_cliente:
+        if acceso == "clave":
+            job.detalle("acceso por contraseña de root: no se genera ni entrega llave")
+        elif pubkey_cliente:
             byo_fp = securizar_byo(job, nombre, ip, pubkey_cliente)
         elif uso == "personal" and llaves_equipo_ids:
             # VPS interno con llaves del equipo: el dueño entra con la suya → no se genera llave
@@ -2315,6 +2359,13 @@ def flujo_crear(job, marca, sabor_slug, cliente, hostname, instalar_cpanel, modo
         job.detalle(((previo + " · ") if previo else "") + "llaves del equipo: " +
                     (("instaladas " + ", ".join(equipo_ok)) if equipo_ok else "ninguna instalada") +
                     ((" · ⚠ NO se pudo instalar: %s — agregarla a mano" % ", ".join(equipo_mal)) if equipo_mal else ""))
+    if acceso == "clave":
+        # solo tiene sentido abrir el SSH por contraseña si la contraseña QUEDÓ puesta (root_pw_ok)
+        clave_ok = habilitar_ssh_clave(job, ip) if root_pw_ok else False
+        previo = job.pasos[job._i]["detalle"] if 0 <= job._i < len(job.pasos) else ""
+        job.detalle(((previo + " · ") if previo else "") +
+                    ("SSH de root con contraseña HABILITADO y verificado (%s)" % SSHD_CLAVE_CONF if clave_ok else
+                     "⚠ SSH con contraseña NO habilitado%s" % ("" if root_pw_ok else " (la contraseña no se pudo aplicar)")))
 
     # 15. finalizar
     job.paso()
@@ -2327,13 +2378,17 @@ def flujo_crear(job, marca, sabor_slug, cliente, hostname, instalar_cpanel, modo
            # sin ninguna llave de usuario instalada NO se ofrece un comando con una llave inexistente
            "ssh_cmd": (("ssh -i TU_LLAVE_PRIVADA root@%s" % acceso_ip) if byo_fp else
                        ("ssh -i id_ed25519 root@%s" % acceso_ip) if entrega else
-                       ("ssh root@%s" % acceso_ip) if equipo_ok else None),
-           "sin_llave_usuario": not (byo_fp or entrega or equipo_ok), "modo": modo,
+                       ("ssh root@%s" % acceso_ip) if (equipo_ok or clave_ok) else None),
+           "sin_llave_usuario": not (byo_fp or entrega or equipo_ok or clave_ok), "modo": modo,
+           "acceso": acceso,
            "llaves_equipo": equipo_ok, "llaves_equipo_fallidas": equipo_mal,
            "publica": publica, "cpanel": bool(instalar_cpanel),
            "byo": bool(byo_fp), "byo_fp": byo_fp,
            "whm": ("https://%s:2087" % acceso_ip) if instalar_cpanel else None}
     entregar_root_password(res, root_password, root_password_auto, root_pw_ok)
+    if acceso == "clave" and not clave_ok:
+        res["acceso_clave_error"] = ("no se pudo habilitar el acceso SSH por contraseña — revisar la VM por consola "
+                                     "(crear %s con PermitRootLogin yes y PasswordAuthentication yes)" % SSHD_CLAVE_CONF)
     if entrega and entrega.get("url"):
         res["send_url"] = entrega["url"]
         res["send_password"] = entrega.get("password")
@@ -2342,6 +2397,7 @@ def flujo_crear(job, marca, sabor_slug, cliente, hostname, instalar_cpanel, modo
     job.set_resultado(res)
     job.ok("VPS %s activo (%s) — %s/%s%s%s" % (nombre, destino, marca, sabor_slug,
                                                " · llave BYO del cliente" if byo_fp else "",
+                                               " · acceso por contraseña de root" if clave_ok else
                                                " · ⚠ sin llave de acceso de usuario (solo la de gestión del NOC)"
                                                if res["sin_llave_usuario"] else ""))
 
@@ -3359,9 +3415,27 @@ def crear():
     # no manda ninguna y el VPS quedaba SIN forma de entrar a WHM. El motor genera una clave
     # fuerte y la devuelve en el resultado del job (visible solo para admin, y redactada al
     # vencer el TTL como los demás secretos de entrega).
+    # ACCESO (Alcadio 2026-10-26): VPS de CLIENTE desde el dashboard → "llave" (BYO o generada + Send) o "clave"
+    # (contraseña fuerte de root generada por el motor + SSH por contraseña: los clientes aún entran así hasta migrar
+    # a llaves). Uso personal: siempre llave. WHMCS: sin cambios (llave).
+    _ac = d.get("acceso")
+    if _ac is not None and not isinstance(_ac, str):
+        return jsonify({"error": "acceso debe ser texto (llave | clave)"}), 400
+    acceso = (_ac or "llave").strip()
+    if acceso not in ("llave", "clave"):
+        return jsonify({"error": "acceso inválido (llave | clave)"}), 400
+    if acceso == "clave":
+        if rol != "admin":
+            return jsonify({"error": "el acceso por contraseña es solo para VPS creados desde el dashboard"}), 403
+        if uso == "personal":
+            return jsonify({"error": "los VPS de uso personal se acceden solo con llave"}), 400
+        if pubkey_cliente:
+            return jsonify({"error": "con acceso por contraseña no se pega llave pública (elige una u otra)"}), 400
+        if root_password:
+            return jsonify({"error": "con acceso por contraseña la clave de root la genera el motor"}), 400
     root_password_auto = False
-    if cpanel and not root_password:
-        root_password = password_root_auto()
+    if (cpanel or acceso == "clave") and not root_password:
+        root_password = password_root_auto()   # con cPanel + clave: la MISMA sirve para SSH y WHM
         root_password_auto = True
     # id del servicio en WHMCS (para trackear la VM sin depender del Username)
     whmcs_serviceid = (str(d.get("whmcs_serviceid")).strip() if d.get("whmcs_serviceid") else None)
@@ -3409,7 +3483,7 @@ def crear():
                                            sabor_def=sabor_def, host=host_sel, so=so_efectivo,
                                            root_password_auto=root_password_auto, uso=uso,
                                            pub_lista_req=pub_lista_req,
-                                           llaves_equipo_ids=llaves_equipo_ids))
+                                           llaves_equipo_ids=llaves_equipo_ids, acceso=acceso))
     except Exception as e:
         # cupo excedido: rechazo LIMPIO con el motivo (no es un error interno)
         if "cupo del" in str(e) and "excedido" in str(e):
