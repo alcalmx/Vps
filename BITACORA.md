@@ -17,9 +17,9 @@ mismo registro → sigue corriendo; la limpieza marca solo los 'corriendo'; ast:
 (verificado): respaldo `/opt/vps-engine/build.bak-huerfanos-20261026-1608.tgz` + `app.py.bak-huerfanos-20261026-1608`,
 imagen 119ae28bb36b, 200 en 2 s, 0 tracebacks, md5 e94843db… = repo (commit `399e6a0`).
 
-**Pendiente (bloqueado por permisos):** agregar `marca_nombre`/`plan` al resultado del job `3abca92fa8f7`
-(`vps-ihpe-0001-alcadio`, anterior al texto para el cliente). Escribir en el registro de producción quedó bloqueado por
-el clasificador de permisos; se le consultó a Alcadio.
+**Ya no aplica:** completar `marca_nombre`/`plan` en el job `3abca92fa8f7` (bloqueado por permisos) — Alcadio eliminó
+`vps-ihpe-0001-alcadio` a las 16:11 y creó `vps-ihpe-0002-alcadio` (16:11–16:15, ya con marca y plan). Vio la tarjeta
+«Texto para el cliente» tras recargar (Ctrl+F5): la pestaña tenía el código anterior al deploy de las 16:03.
 
 ## 2026-10-26 (lunes, ~15:45–16:00) — ✉️ TEXTO PARA EL CLIENTE en el panel del job — EN PRODUCCIÓN 16:02 (motor) / 16:03 (dashboard), APROBADO por Codex (3 rondas)
 
