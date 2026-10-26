@@ -5,6 +5,28 @@
 
 ---
 
+## 2026-10-26 (lunes, ~18:25) — 🔌 Portgroups de TODAS las marcas en esxi-20051 (VLAN 81–86 + Sistemas_Internos)
+
+Pedido de Alcadio: *"crea en el VMware 192.168.200.51 todos los portgroups de las marcas que ofrecemos en el
+dashboard; yo acabo de crear el de VLAN 85, crea los que faltan"*. Él creó `Vps_Inkahosting.pe` (VLAN 85). Claude creó
+en **VSwitch1** (vmnic1, troncal a Switch-Rack13), con los nombres exactos de `marcas/*.json`:
+
+| Portgroup | VLAN | Red | Marcas |
+|---|---|---|---|
+| `Vps_Hosting.cl` (ya existía) | 81 | 10.100.16.0/24 | hosting.cl |
+| `Vps_Planetahosting.cl` | 82 | 10.100.18.0/24 | planetahosting.cl |
+| `Vps_Planetahosting.pe` | 83 | 10.100.20.0/24 | planetahosting.pe |
+| `Vps_Planetahosting.com.co` | 84 | 10.100.22.0/24 | planetahosting.com.co |
+| `Vps_Inkahosting.pe` (Alcadio) | 85 | 10.100.24.0/24 | inkahosting.pe, unohosting.pe, hosting.pe |
+| `Vps_Hostingcenter.cl` | 86 | 10.100.26.0/24 | hostingcenter.cl |
+| `Sistemas_Internos` (23-10) | 0 | 10.100.36.0/24 | interno (uso personal) |
+
+Verificado: (1) `esxcli … portgroup list` con las VLAN correctas; (2) dentro del contenedor del motor,
+`resolver_portgroup(esxi-20051, red, "produccion")` devuelve para las 9 marcas el portgroup **por nombre exacto**, sin
+nota de VLAN; (3) desde noc-monitor responden los 7 gateways (.16/.18/.20/.22/.24/.26/.36 .1). Sin cambios de código.
+Comando usado (por si hace falta en otro host): `esxcli network vswitch standard portgroup add --portgroup-name=<pg>
+--vswitch-name=VSwitch1` + `… portgroup set --portgroup-name=<pg> --vlan-id=<n>`.
+
 ## 2026-10-26 (lunes) — 🔐 ACCESO POR CONTRASEÑA DE ROOT para VPS de cliente + clave de root en todo VPS del dashboard + Red106-0 solo en /25 — EN PRODUCCIÓN 15:15/15:18
 
 **DESPLEGADO con OK de Alcadio ("si despliega"):** motor `desplegar-motor.sh clave` (respaldo
