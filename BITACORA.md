@@ -5,7 +5,7 @@
 
 ---
 
-## 2026-10-26 (lunes, tarde) — 🔒 PERMISOS DE LA SECCIÓN VPS (quién crea qué) — APROBADO por Codex (2 rondas), PENDIENTE DE DEPLOY
+## 2026-10-26 (lunes, 17:48–17:51) — 🔒 PERMISOS DE LA SECCIÓN VPS (quién crea qué) — EN PRODUCCIÓN, APROBADO por Codex (2 rondas)
 
 Pedido de Alcadio: *"esta herramienta debe ser utilizada en su totalidad por Alcadio, Fabián y Jonatan; Gerardo y
 Cristian también podrán crear VPS, pero en primera instancia solo VPS internos (después evaluaré darles VPS de
@@ -26,8 +26,15 @@ no deben poder ver la opción de crear VPS"*. Elegido: Gerardo/Cristian ven SOLO
 - **Codex:** R1 5 hallazgos (ventana en el orden de despliegue; inventario de hosts expuesto; migración vs escrituras
   concurrentes; permisos explícitos de usuarios excluidos; sondeo de existencia por mensajes) → R2 **APROBADO**.
 
-**Despliegue (orden obligatorio):** 1) motor (compatible con el dashboard actual); 2) dashboard (todo NOC queda en
-«solo internos» ~1 min, falla cerrado); 3) roles con `aplicar_roles_vps_20261026.sh`. PENDIENTE: OK de Alcadio.
+**DESPLEGADO con OK de Alcadio ("ok despliega"), en orden:** 1) motor 17:48 (`desplegar-motor.sh permisos`, sin jobs
+corriendo; respaldo `/opt/vps-engine/build.bak-permisos-20261026-1748.tgz`, imagen 89571d63a578, 0 tracebacks; prueba en
+producción: papelera alcadio total 6, fabian 2 de clientes, gerardo solo 0, alcadio solo 4 personales); 2) dashboard
+17:50 (`deploy_dashboard.sh … vpsperm`, respaldo `dashboard.py.bak.20261026-vpsperm`, imagen v2 8bc96e0f409a, md5 8cf20623…
+= repo); 3) roles 17:51 (`aplicar_roles_vps_20261026.sh`: dashboard detenido unos segundos; respaldos
+`/opt/hosting-noc/data/{roles,bl_users}.json.bak-vpsperm-20261026-205053` [hora UTC del contenedor]). Verificado contra el
+respaldo: solo cambió `role` de fabian/jonatan (noc_vps) y gerardo/cristian (noc_vps_interno); roni en NOC sin VPS;
+contraseñas/2FA/dispositivos y demás roles idénticos. Dashboard 200 en :8081, 0 tracebacks. Rollback de roles: copiar
+los .bak-vpsperm-* con el dashboard detenido.
 
 ## 2026-10-26 (lunes, 16:08) — 🛡️ Limpieza de jobs huérfanos SOLO al arrancar el servicio — EN PRODUCCIÓN, APROBADO por Codex
 
