@@ -5,7 +5,7 @@
 
 ---
 
-## 2026-10-26 (lunes, ~15:45–16:00) — ✉️ TEXTO PARA EL CLIENTE en el panel del job — APROBADO por Codex (3 rondas), PENDIENTE DE DEPLOY
+## 2026-10-26 (lunes, ~15:45–16:00) — ✉️ TEXTO PARA EL CLIENTE en el panel del job — EN PRODUCCIÓN 16:02 (motor) / 16:03 (dashboard), APROBADO por Codex (3 rondas)
 
 Pedido de Alcadio (sobre el panel de acceso del job terminado): *"necesito poder copiar un texto, que es el que voy a
 enviarle por mail al cliente para que pueda acceder al servidor"*. Le mostré el ejemplo y corrigió: *"en la línea
@@ -29,8 +29,11 @@ Servidor no coloques el dominio, ya que a veces no hay dominio comprado: usa la 
   `test_rootpw.py` ajustada; en fastnetmon `test_vps_texto_cliente.py` (node --check de la página, texto en 10 casos,
   simulación del sondeo con el código real; falla contra v1+v2). **24 suites verdes.**
 
-**PENDIENTE:** OK de Alcadio para desplegar motor (`desplegar-motor.sh textocli`) + dashboard
-(`/tmp/dashboard.py.vpstexto`, parches `patch_vps_texto_cliente_v1..v3.py`).
+**DESPLEGADO con OK de Alcadio ("si despliega"; sin jobs corriendo, verificado antes):** motor
+`desplegar-motor.sh textocli` (respaldo `/opt/vps-engine/build.bak-textocli-20261026-1601.tgz` + `app.py.bak-textocli-20261026-1601`,
+imagen 2e33379b63e2, 200 en 2 s, 0 tracebacks, md5 0c239a12… = repo). Dashboard `deploy_dashboard.sh
+/tmp/dashboard.py.vpstexto vpstexto` (respaldo `dashboard.py.bak.20261026-vpstexto`, imagen v2 0c30633e9fc2, 200 en 2 s,
+md5 628e7379… = repo). El job de `vps-ihpe-0001-alcadio` (3abca92fa8f7) es anterior: su texto sale sin «Plan» ni firma.
 
 ## 2026-10-26 (lunes, 15:30–15:40) — ⚠️ INCIDENTE (causado por Claude): job de creación marcado «interrumpido por reinicio del motor» sin que el motor se reiniciara
 
