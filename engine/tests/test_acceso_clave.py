@@ -122,13 +122,13 @@ base = {"marca": "hosting.cl", "sabor": "personalizado", "cliente": "acme", "hos
         "disco_gb": 30, "modo": "produccion", "instalar_cpanel": False, "actor": "alcadio"}
 for extra, code, frag in ((dict(acceso="otro"), 400, "acceso inválido"), (dict(acceso=5), 400, "acceso debe ser texto"),
                           (dict(acceso="clave", uso="personal"), 400, "solo con llave"),
-                          (dict(acceso="clave", pubkey_cliente=motor.LLAVES_EQUIPO["alcadio"]["llaves"][0]), 400, "elige una u otra"),
+                          (dict(acceso="clave", pubkey_cliente="ssh-ed25519 no-es-una-llave"), 400, "llave pública inválida"),
                           (dict(acceso="clave", root_password="MiClave123!"), 400, "la genera el motor")):
     r = cli.post("/crear", headers=ADMIN, json=dict(base, **extra))
     assert r.status_code == code and frag in r.get_json()["error"], (extra, r.get_json())
 r = cli.post("/crear", headers=WHMCS, json=dict(base, sabor="vps-estandar", whmcs_serviceid="7", acceso="clave"))
 assert r.status_code == 403 and "solo para VPS creados desde el dashboard" in r.get_json()["error"], r.get_json()
-print("ok - /crear: acceso validado (llave|clave; clave solo dashboard, solo cliente, sin BYO ni clave externa)")
+print("ok - /crear: acceso validado (llave|clave; clave solo dashboard, solo cliente, sin clave externa; la llave BYO se valida igual)")
 
 # ── VM simulada con estado e identidad ──────────────────────────────────────
 class Llave:
@@ -362,6 +362,34 @@ try:
     j = crear(hostname="srv6", acceso="clave", modo="pruebas")
     assert j["resultado"]["ssh_cmd"] == "ssh root@192.168.200.240" and LOGINS and LOGINS[0][0] == "192.168.200.240"
     print("ok - modo pruebas: acceso por contraseña habilitado y probado")
+
+    # h) Alcadio 2026-10-27: contraseña de root + la llave pública del cliente (entra con cualquiera de las dos)
+    pk = motor.LLAVES_EQUIPO["alcadio"]["llaves"][0]
+    inst = []
+    _ipk = motor.instalar_pubkey_en_vm
+    motor.instalar_pubkey_en_vm = lambda ip, pub: inst.append((ip, pub))
+    try:
+        reset_vm()
+        j = crear(hostname="srv8", acceso="clave", pubkey_cliente=pk)
+        r = j["resultado"]
+        pw = capt["chpasswd"][0][len("root:"):].strip()
+        assert inst == [("10.100.16.250", pk)] and capt["secv"] == 0, (inst, capt["secv"])
+        assert r["acceso"] == "clave" and r["acceso_clave_estado"] == "habilitado" and LOGINS == [("10.100.16.250", pw)]
+        assert r["byo"] is True and r["byo_fp"] == motor.fingerprint_pubkey(pk) and r["root_password"] == pw
+        assert r["ssh_cmd"] == "ssh root@38.19.57.101" and r["sin_llave_usuario"] is False and "acceso_clave_error" not in r
+        assert motor.vm_registrada(j["vm"])["byo_pubkey_fp"] == r["byo_fp"]
+        det = j["pasos"][13]["detalle"]
+        assert "llave PÚBLICA del cliente instalada" in det and "verificado con un login real" in det, det
+        # el SSH con contraseña no se pudo abrir (revertido): queda la llave del cliente y su comando
+        inst.clear()
+        reset_vm(queda_abierto=False)
+        j = crear(hostname="srv9", acceso="clave", pubkey_cliente=pk)
+        r = j["resultado"]
+        assert inst and r["acceso_clave_estado"] == "deshabilitado" and "se revirtió" in r["acceso_clave_error"]
+        assert r["ssh_cmd"] == "ssh -i TU_LLAVE_PRIVADA root@38.19.57.101" and r["sin_llave_usuario"] is False and r["byo"]
+    finally:
+        motor.instalar_pubkey_en_vm = _ipk
+    print("ok - contraseña + llave del cliente: las dos instaladas; si el SSH por contraseña no abre, queda la llave")
 finally:
     for k, v in _orig.items():
         setattr(motor, k, v)

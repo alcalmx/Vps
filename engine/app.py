@@ -2531,10 +2531,10 @@ def flujo_crear(job, marca, sabor_slug, cliente, hostname, instalar_cpanel, modo
     equipo_ok, equipo_mal = [], []
     clave_ok = False
     if modo == "produccion":
-        if acceso == "clave":
-            job.detalle("acceso por contraseña de root: no se genera ni entrega llave")
-        elif pubkey_cliente:
+        if pubkey_cliente:   # BYO; con acceso por contraseña, además de la contraseña (Alcadio 2026-10-27)
             byo_fp = securizar_byo(job, nombre, ip, pubkey_cliente)
+        elif acceso == "clave":
+            job.detalle("acceso por contraseña de root: no se genera ni entrega llave")
         elif uso == "personal" and llaves_equipo_ids:
             # VPS interno con llaves del equipo: el dueño entra con la suya → no se genera llave
             # de entrega (nada que custodiar ni Send que mandar)
@@ -2579,9 +2579,10 @@ def flujo_crear(job, marca, sabor_slug, cliente, hostname, instalar_cpanel, modo
     res = {"vm": nombre, "sabor": sabor_slug, "privada": ip, "usuario": "root",
            "acceso_ip": acceso_ip,
            # sin ninguna llave de usuario instalada NO se ofrece un comando con una llave inexistente
-           "ssh_cmd": (("ssh -i TU_LLAVE_PRIVADA root@%s" % acceso_ip) if byo_fp else
+           "ssh_cmd": (("ssh root@%s" % acceso_ip) if clave_ok else
+                       ("ssh -i TU_LLAVE_PRIVADA root@%s" % acceso_ip) if byo_fp else
                        ("ssh -i id_ed25519 root@%s" % acceso_ip) if entrega else
-                       ("ssh root@%s" % acceso_ip) if (equipo_ok or clave_ok) else None),
+                       ("ssh root@%s" % acceso_ip) if equipo_ok else None),
            "sin_llave_usuario": not (byo_fp or entrega or equipo_ok or clave_ok), "modo": modo,
            "acceso": acceso,
            "llaves_equipo": equipo_ok, "llaves_equipo_fallidas": equipo_mal,
@@ -3637,7 +3638,8 @@ def crear():
     # vencer el TTL como los demás secretos de entrega).
     # ACCESO (Alcadio 2026-10-26): VPS de CLIENTE desde el dashboard → "llave" (BYO o generada + Send) o "clave"
     # (contraseña fuerte de root generada por el motor + SSH por contraseña: los clientes aún entran así hasta migrar
-    # a llaves). Uso personal: siempre llave. WHMCS: sin cambios (llave).
+    # a llaves). Uso personal: siempre llave. WHMCS: sin cambios (llave). Con "clave" se puede pegar ADEMÁS la llave
+    # pública del cliente (BYO): entra con cualquiera de las dos (Alcadio 2026-10-27).
     _ac = d.get("acceso")
     if _ac is not None and not isinstance(_ac, str):
         return jsonify({"error": "acceso debe ser texto (llave | clave)"}), 400
@@ -3649,8 +3651,6 @@ def crear():
             return jsonify({"error": "el acceso por contraseña es solo para VPS creados desde el dashboard"}), 403
         if uso == "personal":
             return jsonify({"error": "los VPS de uso personal se acceden solo con llave"}), 400
-        if pubkey_cliente:
-            return jsonify({"error": "con acceso por contraseña no se pega llave pública (elige una u otra)"}), 400
         if root_password:
             return jsonify({"error": "con acceso por contraseña la clave de root la genera el motor"}), 400
     root_password_auto = False

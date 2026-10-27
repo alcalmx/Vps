@@ -30,7 +30,7 @@
 sin jobs corriendo: el reinicio los corta). Dashboard = `fastnetmon/containers/dashboard/deploy_dashboard.sh <archivo>
 <sufijo>`; parches en orden: marcas v1/v2 → uso_personal v1–v3 → pub_lista v1/v2 → llaves_equipo v1/v2 → acceso_clave
 v1–v4 → texto_cliente v1–v3 → job_modal v1 → sabores_orden v1 → form_minimal v1/v2 → permisos v1/v2 → motor_minimal v1
-→ motor_plegar v1/v2. Tras cada deploy del
+→ motor_plegar v1/v2 → clave_y_llave v1/v2. Tras cada deploy del
 dashboard, recordar **Ctrl+F5**. Siempre con OK de Alcadio. Para inspeccionar el motor: BD en solo lectura, NUNCA `import app`.
 
 **Pendientes de Alcadio:**
@@ -47,6 +47,25 @@ dashboard, recordar **Ctrl+F5**. Siempre con OK de Alcadio. Para inspeccionar el
 **Frentes técnicos abiertos:** flujo de WHMCS ("más adelante"), dorada Ubuntu en otros hosts, multi-datastore Incremento 2,
 licencia cPanel automática (hoy se asigna y libera A MANO; falta saber si usan Manage2, el portal u otro medio), opción
 de SO en el módulo WHMCS.
+
+## ⏳ 2026-10-27 (martes, ~12:30) — Contraseña de root + llave del cliente A LA VEZ — APROBADO por Codex, PENDIENTE DE DEPLOY
+
+Alcadio (captura de «Para quién» con Acceso = Contraseña de root): *"se puede dar el caso que quiera ponerle contraseña
+y también cargar una key"*. Antes el motor lo rechazaba («con acceso por contraseña no se pega llave pública (elige una u
+otra)»). Ahora, con «Contraseña de root» se puede pegar además la llave pública del cliente: el motor instala la BYO
+(`securizar_byo`, misma validación PUBKEY_RE + huella) y abre el SSH por contraseña como siempre (verificado con login
+real); el cliente entra con cualquiera de las dos. `ssh_cmd` = `ssh root@IP` si la contraseña quedó habilitada; si se
+revirtió, el de la llave del cliente. En modo pruebas la BYO no se instala (igual que con «Llave SSH»).
+- Motor `engine/app.py` (md5 bbd036fc…) + `test_acceso_clave.py` caso (h); 26 suites verdes.
+- Dashboard `patch_vps_clave_y_llave_v1.py` + `v2.py` + `test_vps_clave_y_llave.py` (md5 dbdbff96…): el campo de llave ya
+  no se oculta ni se vacía con «Contraseña de root»; panel y texto para el cliente tratan la contraseña como acceso SSH
+  solo si quedó habilitada (`acceso==='clave'` y sin `acceso_clave_error`); con las dos, el texto agrega «también puedes
+  entrar con tu llave». Codex r1: P2 — en estado INCIERTO se afirmaba «no acepta contraseña» → v2 distingue incierto de
+  revertido. r2: sin hallazgos. 8 suites `test_vps_*.py` verdes.
+- Guía de entrega: «Contraseña de root… Si además pegas la llave pública del cliente, puede entrar con cualquiera de las dos».
+- Staging: `/tmp/vps-marcas/engine/app.py` y `/tmp/dashboard.py.vpsclavellave` (md5 = repo). Orden: PRIMERO el motor
+  (`desplegar-motor.sh clavellave`, verificar 0 jobs corriendo) y DESPUÉS el dashboard (`deploy_dashboard.sh
+  /tmp/dashboard.py.vpsclavellave vpsclavellave`).
 
 ## 2026-10-27 (martes, 11:35) — Red57-0 (38.19.57.x) COMPLETA, sin el tope de prueba — EN PRODUCCIÓN
 
