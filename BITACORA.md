@@ -5,7 +5,7 @@
 
 ---
 
-## ⏯️ PARA RETOMAR (estado al 2026-10-27, 11:35)
+## ⏯️ PARA RETOMAR (estado al 2026-10-27, 12:04)
 
 **En producción hoy (todo con Codex; motor 26 suites verdes, dashboard 7 pruebas `test_vps_*.py`):**
 - **9 marcas** (8 comerciales + `interno`) y en esxi-20051 los portgroups de TODAS: VLAN 81–86 + `Sistemas_Internos`.
@@ -17,6 +17,9 @@
   a mayor.
 - **Pestaña Motor** minimalista (27-10): sin textos largos y con «Preparar host nuevo» y «Copiar plantillas doradas»
   plegados (se reabren solos si llega un mensaje).
+- **Hosts VMware por rol** (27-10): columna «Pueden crear» en «Motor admin»; solo el superadmin la cambia; config en
+  `/opt/hosting-noc/data/vps_hosts_roles.json` (sin archivo = todos pueden en todos).
+- **Contraseña de root + llave del cliente** a la vez (27-10) y Red57-0 completa (sin el tope .100-.102).
 - **Guía de entrega** `docs/entrega-motor-vps.html` (artifact privado https://claude.ai/artifact/1EbFVk2SJG7KDkRBQVwN4F):
   Alcadio la está revisando; para que sus compañeros la abran debe compartirla desde el menú Compartir.
 - **Permisos por rol** (Administración → Usuarios): «NOC + VPS completo» = Fabián, Jonatan; «NOC + VPS internos» =
@@ -48,7 +51,7 @@ dashboard, recordar **Ctrl+F5**. Siempre con OK de Alcadio. Para inspeccionar el
 licencia cPanel automática (hoy se asigna y libera A MANO; falta saber si usan Manage2, el portal u otro medio), opción
 de SO en el módulo WHMCS.
 
-## ⏳ 2026-10-27 (martes, ~13:30) — Hosts VMware por rol (quién crea en qué VMware) — APROBADO por Codex, PENDIENTE DE DEPLOY
+## 2026-10-27 (martes, 12:04) — Hosts VMware por rol (quién crea en qué VMware) — EN PRODUCCIÓN
 
 Alcadio: *"trabajemos en algo para definir quiénes ven o no ven los VMware adoptados. Yo los veo todos, pero quisiera
 poder en la sección Motor decir qué rol puede o no puede crear VPS en x VMware"* (antes había pedido que el entorno
@@ -58,8 +61,9 @@ VPS (hoy «NOC + VPS completo» y «NOC + VPS internos»); solo el superadmin la
 `/opt/hosting-noc/data/vps_hosts_roles.json` (no existe = todos pueden en todos los hosts → desplegarlo no cambia nada
 hasta que Alcadio apague chips). El selector «Host VMware» muestra solo los hosts permitidos para el rol y el proxy de
 /crear lo exige. Solo creación desde el dashboard; WHMCS y los VPS ya creados no cambian. Guía de entrega actualizada.
+Desplegado con su OK (*"sí, despliega"*): motor 12:03 (`desplegar-motor.sh clavellave`, 0 jobs corriendo antes, HTTP 200, 9 marcas, 0 tracebacks; respaldo `/opt/vps-engine/build.bak-clavellave-20261027-1202.tgz`) y dashboard 12:04 (`deploy_dashboard.sh /tmp/dashboard.py.vpshostroles vpshostroles`, md5 a32fa831…, HTTP 200, 0 tracebacks; respaldo `dashboard.py.bak.20261027-vpshostroles`). Recordar **Ctrl+F5**.
 
-## ⏳ 2026-10-27 (martes, ~12:30) — Contraseña de root + llave del cliente A LA VEZ — APROBADO por Codex, PENDIENTE DE DEPLOY
+## 2026-10-27 (martes, 12:03) — Contraseña de root + llave del cliente A LA VEZ — EN PRODUCCIÓN
 
 Alcadio (captura de «Para quién» con Acceso = Contraseña de root): *"se puede dar el caso que quiera ponerle contraseña
 y también cargar una key"*. Antes el motor lo rechazaba («con acceso por contraseña no se pega llave pública (elige una u
@@ -74,9 +78,7 @@ revirtió, el de la llave del cliente. En modo pruebas la BYO no se instala (igu
   entrar con tu llave». Codex r1: P2 — en estado INCIERTO se afirmaba «no acepta contraseña» → v2 distingue incierto de
   revertido. r2: sin hallazgos. 8 suites `test_vps_*.py` verdes.
 - Guía de entrega: «Contraseña de root… Si además pegas la llave pública del cliente, puede entrar con cualquiera de las dos».
-- Staging: `/tmp/vps-marcas/engine/app.py` y `/tmp/dashboard.py.vpsclavellave` (md5 = repo). Orden: PRIMERO el motor
-  (`desplegar-motor.sh clavellave`, verificar 0 jobs corriendo) y DESPUÉS el dashboard (`deploy_dashboard.sh
-  /tmp/dashboard.py.vpsclavellave vpsclavellave`).
+- Desplegado con su OK (*"sí, despliega"*): motor 12:03 (`desplegar-motor.sh clavellave`, 0 jobs corriendo antes, HTTP 200, 9 marcas, 0 tracebacks; respaldo `/opt/vps-engine/build.bak-clavellave-20261027-1202.tgz`) y dashboard 12:04 junto con los hosts por rol (`deploy_dashboard.sh /tmp/dashboard.py.vpshostroles vpshostroles`, md5 a32fa831…, HTTP 200, 0 tracebacks; respaldo `dashboard.py.bak.20261027-vpshostroles`). Recordar **Ctrl+F5**.
 
 ## 2026-10-27 (martes, 11:35) — Red57-0 (38.19.57.x) COMPLETA, sin el tope de prueba — EN PRODUCCIÓN
 
