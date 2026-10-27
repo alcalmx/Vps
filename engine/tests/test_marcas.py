@@ -175,7 +175,10 @@ assert p["nombre"] == "PlanetaHosting.cl" and p["prefijo_vm"] == "vps-phcl" and 
 assert p["red_default"] == {"subred": "10.100.18.0/24", "gateway": "10.100.18.1", "vlan": 82,
                             "portgroup": "Vps_Planetahosting.cl"}
 assert p["red_pruebas"]["subred"] == "192.168.200.0/24" and p["red_pruebas"]["vlan"] == 0
-assert p["pub_lista"] == "Red57-0" and p["pub_red"] == "38.19.57" and p["publica_rango_prueba"] == [100, 102]
+assert p["pub_lista"] == "Red57-0" and p["pub_red"] == "38.19.57" and p["publica_rango_prueba"] is None
+# Red57-0 COMPLETA en todas las marcas (Alcadio 2026-10-27: «ya no debe acotarse»; antes .100-.102)
+assert all("publica_rango_prueba" not in m["red_default"] for m in motor.MARCAS.values())
+assert all(d["publica_rango_prueba"] is None for d in h["marcas_detalle"])
 # planes HEREDADOS (decisión de Alcadio 2026-10-23): las 7 marcas nuevas usan los de hosting.cl
 n_hcl = sum(1 for k, v in motor.SABORES.items() if k[0] == "hosting.cl" and v.get("activo", True))
 assert det["hosting.cl"]["sabores"] == n_hcl >= 3 and det["hosting.cl"]["sabores_de"] is None

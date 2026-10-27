@@ -35,7 +35,11 @@ assert "interno" in motor.MARCAS and "interno" not in motor.marcas_activas()
 mi = motor.MARCAS["interno"]
 assert mi["uso"] == "interno" and mi["prefijo_vm"] == "vps-int" and mi["pub_lista"] == "Red57-0", "también lleva pública + NAT"
 assert mi["red_default"]["subred"] == "10.100.36.0/24" and mi["red_default"]["vlan"] is None, "VLAN 1 o nativa: no se verifica"
-assert mi["red_default"]["publica_rango_prueba"] == [100, 102]
+# Red57-0 COMPLETA en todas las marcas (Alcadio 2026-10-27: «ya no debe acotarse»; antes .100-.102)
+assert all("publica_rango_prueba" not in m["red_default"] for m in motor.MARCAS.values())
+# en memoria: la suite sigue cubriendo que un rango de prueba acota SOLO la lista de la marca
+for _m in ("interno", "hosting.cl"):
+    motor.MARCAS[_m]["red_default"]["publica_rango_prueba"] = [100, 102]
 assert ("interno", "vps-estandar") in motor.SABORES and motor.SABORES[("interno", "vps-estandar")]["heredado_de"] == "hosting.cl"
 h = cli.get("/health", headers=ADMIN).get_json()
 assert "interno" not in h["marcas"], "la red interna NO va en el selector de marcas comerciales"

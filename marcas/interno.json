@@ -6,7 +6,7 @@
   "prefijo_vm": "vps-int",
   "activo": true,
   "pub_lista": "Red57-0",
-  "_pub_lista_nota": "Igual que las marcas: mientras dure el staging la pública sale del rango de PRUEBAS 38.19.57.100-102 (publica_rango_prueba). Futuro (Alcadio 2026-10-23): un campo en Crear VPS para elegir la red pública donde buscar la IP.",
+  "_pub_lista_nota": "Igual que las marcas: la IP pública sale de Red57-0 (38.19.57.0/24) COMPLETA, la más alta libre, desde 2026-10-27 (Alcadio: «ya no debe acotarse»; antes solo .100-.102 con publica_rango_prueba). Futuro (Alcadio 2026-10-23): un campo en Crear VPS para elegir la red pública donde buscar la IP.",
   "sabores_de": "hosting.cl",
   "red_default": {
     "subred": "10.100.36.0/24",
@@ -20,10 +20,6 @@
     "portgroups": [
       "Sistemas_Internos",
       "Sistemas Internos"
-    ],
-    "publica_rango_prueba": [
-      100,
-      102
     ],
     "vlan": null,
     "nota": "Red 'Sistemas Internos Hosting.cl' (RouterData: 10.100.36.1/24 en sfp28-2 'Switch A Rack 1- Rack12'; VLAN 1 o sin VLAN, según Alcadio 2026-10-23 → 'vlan': null = no se verifica la etiqueta, solo el NOMBRE). En cada host donde se creen VPS personales debe existir un portgroup llamado 'Sistemas_Internos' (o 'Sistemas Internos') sobre el uplink que lleve esta red; si el host lo llama distinto, agregar el nombre a 'portgroups'. Lo crea Alcadio en el VMware host."

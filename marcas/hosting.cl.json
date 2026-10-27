@@ -4,7 +4,7 @@
   "prefijo_vm": "vps-hcl",
   "activo": true,
   "pub_lista": "Red57-0",
-  "_pub_lista_nota": "Address-list del MikroTik para la IP pública. Red57-0 = 38.19.57.0/24 (rango de PRUEBAS 2026-09-11, acotado por publica_rango_prueba). En producción real de hosting.cl sería Red107-0 (201.148.107), la lista de la marca en Alta de Servicios del NOC.",
+  "_pub_lista_nota": "Address-list del MikroTik para la IP pública. Red57-0 = 38.19.57.0/24 COMPLETA desde 2026-10-27 (la IP más alta libre; antes solo .100-.102 con publica_rango_prueba, Alcadio: «ya no debe acotarse»). En producción real de hosting.cl sería Red107-0 (201.148.107), la lista de la marca en Alta de Servicios del NOC.",
   "red_default": {
     "subred": "10.100.16.0/24",
     "gateway": "10.100.16.1",
@@ -13,8 +13,7 @@
     "portgroup": "Vps_Hosting.cl",
     "vlan": 81,
     "vswitch": "vSwitch4",
-    "publica_rango_prueba": [100, 102],
-    "nota": "Red de PRODUCCIÓN 'Vps Hosting' (usuario 2026-09-11): VLAN 81 (vlan_81_VPS_Hosting.cl en RouterData, gateway 10.100.16.1 verificado 2026-10-23). En esxi-245 y esxi-20051 el portgroup se llama 'Vps_Hosting.cl'; en esxi-20039 'vps_Hosting.cl' — el motor lo resuelve por nombre y, si no existe con ese nombre, por VLAN. 'publica_rango_prueba' [100,102] restringe la IP pública a 38.19.57.100-102 SOLO para pruebas (quitar para producción real → toma la más alta libre)."
+    "nota": "Red de PRODUCCIÓN 'Vps Hosting' (usuario 2026-09-11): VLAN 81 (vlan_81_VPS_Hosting.cl en RouterData, gateway 10.100.16.1 verificado 2026-10-23). En esxi-245 y esxi-20051 el portgroup se llama 'Vps_Hosting.cl'; en esxi-20039 'vps_Hosting.cl' — el motor lo resuelve por nombre y, si no existe con ese nombre, por VLAN."
   },
   "_red_pruebas_nota": "Sin 'red_pruebas' propia: hereda la red de pruebas común de marcas/_pruebas.json (desde 2026-10-23).",
   "ip_libre": {

@@ -222,11 +222,12 @@ El mapeo marca → red VPS es el mismo que usa **Alta de Servicios** del dashboa
   planes propios: sus JSON en `sabores/<marca>/` y quitar `sabores_de` (tener ambos es error al arrancar).
 - **Red de pruebas común:** `marcas/_pruebas.json` (los archivos `_*.json` no son marcas).
   Una marca sin `red_pruebas` propia la hereda; así la red de staging se cambia en un solo lugar.
-- **IP pública:** mientras dure el staging todas usan `Red57-0` con `publica_rango_prueba`
-  [100,102] (38.19.57.100-102). Go-live de una marca = `pub_lista: "Red107-0"` y quitar el rango.
+- **IP pública:** todas usan `Red57-0` (38.19.57.0/24) COMPLETA: la IP más alta libre (desde 2026-10-27;
+  antes acotada a .100-.102 con `publica_rango_prueba`, que el motor sigue aceptando por marca). Go-live de
+  una marca a su lista propia = `pub_lista: "Red107-0"`.
 - **Selector de red pública (2026-10-23):** en Crear VPS el NOC puede elegir de qué address-list sale
   la IP pública (`pub_lista` en `/crear`; las opciones las da `/health.redes_publicas` = `PUB_REDES`).
-  Por defecto la de la marca con su rango de prueba; otra lista = pool completo (IP más alta libre).
+  Por defecto la de la marca (con su `publica_rango_prueba`, si tuviera); otra lista = pool completo (IP más alta libre).
   Solo en producción y solo rol admin (WHMCS usa la de la marca).
 - **Asignador de IP privada (2026-10-23):** además de NAT, ARP vivo y registro, cuentan como ocupadas
   las IP de la subred que aparezcan en reglas de firewall (filter/raw) o address-lists de RouterData
@@ -253,7 +254,7 @@ Al crear un VPS se elige el **uso**:
 |---|---|---|
 | Quién lo ve y lo opera | Todos los usuarios con `vps_engine` | Solo su dueño (y un superadmin) |
 | Marca / red | La marca elegida (VLAN 8x) | Fija: `interno` = 10.100.36.0/24 (VLAN 1 o nativa; no se verifica etiqueta) |
-| IP pública / NAT | Sí (lista pública de la marca) | Sí, igual que un cliente (hoy Red57-0 rango de prueba) |
+| IP pública / NAT | Sí (lista pública de la marca) | Sí, igual que un cliente (hoy Red57-0) |
 | Nombre de VM | `vps-<marca>-NNNN-<cliente>` | `vps-int-NNNN-<usuario>` |
 | Suspender / reanudar | Bloquear / desbloquear la IP pública | Igual; si no tuviera pública, apagar / encender |
 | Acceso | El formulario pregunta: llave SSH (bóveda + Send, o BYO) o **contraseña de root** (generada por el motor, SSH por contraseña; ver SEGURIDAD.md) | Siempre llave (tildes del equipo, BYO o bóveda + Send) |

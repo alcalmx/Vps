@@ -47,6 +47,20 @@ dashboard, recordar **Ctrl+F5**. Siempre con OK de Alcadio. Para inspeccionar el
 licencia cPanel automática (hoy se asigna y libera A MANO; falta saber si usan Manage2, el portal u otro medio), opción
 de SO en el módulo WHMCS.
 
+## ⏳ 2026-10-27 (martes, 11:35) — Red57-0 (38.19.57.x) COMPLETA, sin el tope de prueba — PENDIENTE DE DEPLOY
+
+Alcadio (captura del selector «Red pública: Red57-0 — 38.19.57.x (la de la marca · rango de prueba…)»): *"esta red 38
+ya no debe acotarse solo a 2 IPs como lo teníamos bloqueado"*. Hecho: fuera `publica_rango_prueba` [100,102] de las
+**9 marcas** (`marcas/*.json`, notas actualizadas; el motor sigue aceptando la clave por marca). Ahora la IP pública
+sale de toda la Red57-0: la **más alta libre** con las mismas validaciones de siempre (habilitada y sin comentario en la
+address-list, sin NAT, sin ARP vivo, sin otras listas y muda al ping desde el CCR de borde). Sin cambios de código.
+Pruebas: `test_marcas.py` y `test_uso_personal.py` ya no leen el rango de las marcas reales (verifican que ninguna lo
+tiene) y lo inyectan en memoria para seguir cubriendo que acota solo la lista de la marca; 26 suites verdes.
+Lectura de RouterData (solo lectura, 11:20): ocupadas .249 y .251–.254 (deshabilitadas con comentario + NAT); **el
+próximo VPS tomaría 38.19.57.250** y luego .248, .247… El selector del dashboard pasará a decir «(la de la marca)».
+Staging copiado a `/tmp/vps-marcas/` (md5 = repo). Falta: OK de Alcadio → `bash /tmp/vps-marcas/desplegar-motor.sh red57`
+(reinicia el motor; a las 11:31 no había jobs corriendo).
+
 ## 2026-10-27 (martes, 10:40–10:52) — Ajustes a la guía + pestaña Motor minimalista y plegada EN PRODUCCIÓN
 
 - **Guía de entrega:** Alcadio no entendió *"la licencia se activa con la IP del VPS al primer arranque"* (*"si hasta
