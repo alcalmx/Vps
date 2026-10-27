@@ -5,9 +5,9 @@
 
 ---
 
-## ⏯️ PARA RETOMAR (estado al 2026-10-27, 12:04)
+## ⏯️ PARA RETOMAR (estado al 2026-10-27, 17:48)
 
-**En producción hoy (todo con Codex; motor 26 suites verdes, dashboard 7 pruebas `test_vps_*.py`):**
+**En producción hoy (todo con Codex; motor 26 suites verdes, dashboard 9 pruebas `test_vps_*.py`):**
 - **9 marcas** (8 comerciales + `interno`) y en esxi-20051 los portgroups de TODAS: VLAN 81–86 + `Sistemas_Internos`.
 - **Acceso por contraseña de root** para VPS de cliente (pregunta «Acceso»; validado en real con `vps-ihpe-0001/0002`);
   clave de root de 12 caracteres en TODO VPS del dashboard (con llave: solo WHM/consola). Red106-0 solo en /25.
@@ -20,8 +20,9 @@
 - **Hosts VMware por rol** (27-10): columna «Pueden crear» en «Motor admin»; solo el superadmin la cambia; config en
   `/opt/hosting-noc/data/vps_hosts_roles.json` (sin archivo = todos pueden en todos).
 - **Contraseña de root + llave del cliente** a la vez (27-10) y Red57-0 completa (sin el tope .100-.102).
-- **Guía de entrega** `docs/entrega-motor-vps.html` (artifact privado https://claude.ai/artifact/1EbFVk2SJG7KDkRBQVwN4F):
-  Alcadio la está revisando; para que sus compañeros la abran debe compartirla desde el menú Compartir.
+- **Guía de entrega v2** `docs/entrega-motor-vps.html` (artifact privado https://claude.ai/artifact/1EbFVk2SJG7KDkRBQVwN4F,
+  versión 5): revisada por Codex y aprobada por Alcadio (*"ok perfecto"*); para que sus compañeros la abran debe
+  compartirla desde el menú Compartir. Al cambiar el motor o el dashboard, actualizarla y republicarla.
 - **Permisos por rol** (Administración → Usuarios): «NOC + VPS completo» = Fabián, Jonatan; «NOC + VPS internos» =
   Gerardo, Cristian (solo SUS VPS internos, sin Motor); NOC sin sección = Roni; Alcadio superadmin. Casillas del editor
   de roles: «↳ VPS de clientes» y «↳ Pestaña Motor». El motor aplica `solo_personal` (falla cerrado).
@@ -50,6 +51,20 @@ dashboard, recordar **Ctrl+F5**. Siempre con OK de Alcadio. Para inspeccionar el
 **Frentes técnicos abiertos:** flujo de WHMCS ("más adelante"), dorada Ubuntu en otros hosts, multi-datastore Incremento 2,
 licencia cPanel automática (hoy se asigna y libera A MANO; falta saber si usan Manage2, el portal u otro medio), opción
 de SO en el módulo WHMCS.
+
+## 2026-10-27 (martes, ~17:30) — Guía de entrega v2: revisión de Codex
+
+Alcadio: *"el manual me gusta, ¿lo pasaste por Codex a ver si hay algo que mejorarle?"*. Codex revisó
+`docs/entrega-motor-vps.html` contra el código y encontró 7 errores de hecho. Los verifiqué uno por uno en `engine/app.py` y el
+dashboard antes de corregirlos (`guia_codex.py`, commit 648afb4):
+1. Cambiar plan: subir CPU y RAM es en caliente, pero **bajarlas reinicia el VPS**; el disco solo crece.
+2. Suspender: un VPS de cliente sin IP pública (p. ej. creado en Pruebas) no se puede suspender; el de uso personal se apaga.
+3. Doradas: AlmaLinux tiene base + cPanel; Ubuntu solo base. El tiempo de creación es «suele» 3–7 min (más sin dorada cPanel).
+4. NetBox es de mejor esfuerzo: si falla, el VPS se crea igual y hay que registrarlo a mano.
+5. Entorno Pruebas: no instala ni entrega llave de usuario (tampoco la pegada); la contraseña de root sí funciona.
+6. Uso personal toma una IP pública real con su NAT.
+7. Las 48 h de la contraseña y el enlace se cuentan desde que se lanza el job; después la contraseña sigue funcionando.
+Encabezado: «v2 · 27-10-2026». Republicada como versión 5 del artifact. Alcadio: *"ok perfecto"*.
 
 ## 2026-10-27 (martes, 12:04) — Hosts VMware por rol (quién crea en qué VMware) — EN PRODUCCIÓN
 
