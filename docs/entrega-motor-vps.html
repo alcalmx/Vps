@@ -119,7 +119,7 @@ footer { color: var(--muted); font-size: .82rem; border-top: 1px solid var(--lin
       <tr><td>Resto del equipo</td><td>NOC, Soporte, Operaciones</td><td class="c" colspan="3"><span class="chip no">no ven la sección</span></td></tr>
     </tbody>
   </table></div>
-  <p>Los permisos son tres casillas del editor de roles: <b>VPS (crear/gestionar)</b> abre la sección y permite VPS internos; <b>↳ VPS de clientes</b> permite crear y operar VPS de clientes; <b>↳ Pestaña Motor</b> muestra la pestaña Motor. Quien no tiene un permiso no ve la opción, y el servidor también lo bloquea.</p>
+  <p>Los permisos son tres casillas del editor de roles: <b>VPS (crear/gestionar)</b> abre la sección y permite VPS internos; <b>↳ VPS de clientes</b> permite crear y operar VPS de clientes; <b>↳ Pestaña Motor</b> muestra la pestaña Motor. Quien no tiene un permiso no ve la opción, y el servidor también lo bloquea. Además, en la pestaña Motor se define <b>en qué hosts VMware</b> puede crear cada rol (ver Motor).</p>
 </section>
 
 <section id="crear">
@@ -184,7 +184,7 @@ footer { color: var(--muted); font-size: .82rem; border-top: 1px solid var(--lin
       <div><span class="k">Motor de clientes</span><span class="v">Lo usa WHMCS de forma automática. Elige el host por <b>prioridad</b> (menor = preferido); un host <b>pausado</b> no recibe clientes nuevos.</span></div>
       <div><span class="k">Motor admin</span><span class="v">Los hosts que aparecen en «Host VMware» al crear desde el dashboard.</span></div>
     </div>
-    <p>En la tabla se ve el espacio libre por datastore, el hardware y lo comprometido. Botones por host: <b>Pausar / Activar</b>, <b>Prioridad</b>, chips <b>clientes / admin</b> para sumarlo o quitarlo de cada motor, y el basurero (solo si no tiene VPS). Abajo están <b>Preparar host nuevo</b> y <b>Copiar plantillas doradas</b>, plegados: haz clic en el título para abrirlos.</p>
+    <p>En la tabla se ve el espacio libre por datastore, el hardware y lo comprometido. Botones por host: <b>Pausar / Activar</b>, <b>Prioridad</b>, chips <b>clientes / admin</b> para sumarlo o quitarlo de cada motor, y el basurero (solo si no tiene VPS). En <b>Motor admin</b>, la columna <b>Pueden crear</b> tiene un botón por rol: encendido, ese rol ve el host en «Host VMware» y puede crear ahí; apagado, no lo ve. Sin cambios, todos pueden; el superadmin siempre puede y es el único que la cambia. Abajo están <b>Preparar host nuevo</b> y <b>Copiar plantillas doradas</b>, plegados: haz clic en el título para abrirlos.</p>
   </div>
 </section>
 

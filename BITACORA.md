@@ -30,7 +30,7 @@
 sin jobs corriendo: el reinicio los corta). Dashboard = `fastnetmon/containers/dashboard/deploy_dashboard.sh <archivo>
 <sufijo>`; parches en orden: marcas v1/v2 → uso_personal v1–v3 → pub_lista v1/v2 → llaves_equipo v1/v2 → acceso_clave
 v1–v4 → texto_cliente v1–v3 → job_modal v1 → sabores_orden v1 → form_minimal v1/v2 → permisos v1/v2 → motor_minimal v1
-→ motor_plegar v1/v2 → clave_y_llave v1/v2. Tras cada deploy del
+→ motor_plegar v1/v2 → clave_y_llave v1/v2 → host_roles v1/v2. Tras cada deploy del
 dashboard, recordar **Ctrl+F5**. Siempre con OK de Alcadio. Para inspeccionar el motor: BD en solo lectura, NUNCA `import app`.
 
 **Pendientes de Alcadio:**
@@ -47,6 +47,17 @@ dashboard, recordar **Ctrl+F5**. Siempre con OK de Alcadio. Para inspeccionar el
 **Frentes técnicos abiertos:** flujo de WHMCS ("más adelante"), dorada Ubuntu en otros hosts, multi-datastore Incremento 2,
 licencia cPanel automática (hoy se asigna y libera A MANO; falta saber si usan Manage2, el portal u otro medio), opción
 de SO en el módulo WHMCS.
+
+## ⏳ 2026-10-27 (martes, ~13:30) — Hosts VMware por rol (quién crea en qué VMware) — APROBADO por Codex, PENDIENTE DE DEPLOY
+
+Alcadio: *"trabajemos en algo para definir quiénes ven o no ven los VMware adoptados. Yo los veo todos, pero quisiera
+poder en la sección Motor decir qué rol puede o no puede crear VPS en x VMware"* (antes había pedido que el entorno
+de prueba solo lo vieran Alcadio, Fabián y Jonatán). Solo dashboard (`patch_vps_host_roles_v1/v2.py`, detalle en
+`fastnetmon/BITACORA.md`): columna **«Pueden crear»** en la tabla «Motor admin» con un chip por rol que tiene la sección
+VPS (hoy «NOC + VPS completo» y «NOC + VPS internos»); solo el superadmin la cambia. Config en
+`/opt/hosting-noc/data/vps_hosts_roles.json` (no existe = todos pueden en todos los hosts → desplegarlo no cambia nada
+hasta que Alcadio apague chips). El selector «Host VMware» muestra solo los hosts permitidos para el rol y el proxy de
+/crear lo exige. Solo creación desde el dashboard; WHMCS y los VPS ya creados no cambian. Guía de entrega actualizada.
 
 ## ⏳ 2026-10-27 (martes, ~12:30) — Contraseña de root + llave del cliente A LA VEZ — APROBADO por Codex, PENDIENTE DE DEPLOY
 
