@@ -97,9 +97,9 @@ footer { color: var(--muted); font-size: .82rem; border-top: 1px solid var(--lin
 <div class="page">
 
 <header>
-  <span class="eyebrow">Entrega al equipo NOC · v1 borrador · 26-10-2026</span>
+  <span class="eyebrow">Entrega al equipo NOC · v2 · 27-10-2026</span>
   <h1>Motor VPS: guía de entrega</h1>
-  <p class="lead">Con el motor creamos y administramos VPS en nuestros servidores VMware directamente desde el dashboard: el motor clona la plantilla, asigna IP privada y pública, arma el NAT, registra todo en NetBox y entrega los accesos.</p>
+  <p class="lead">Con el motor creamos y administramos VPS en nuestros servidores VMware directamente desde el dashboard: el motor clona la plantilla, asigna IP privada y pública, arma el NAT, registra las IPs en NetBox y entrega los accesos.</p>
   <span class="ruta">Dashboard → Infraestructura Lógica → VPS (crear/gestionar)</span>
   <nav class="idx" aria-label="Índice">
     <a href="#roles">Quién puede qué</a><a href="#crear">Crear VPS</a><a href="#gestionados">VPS gestionados</a>
@@ -125,7 +125,7 @@ footer { color: var(--muted); font-size: .82rem; border-top: 1px solid var(--lin
 <section id="crear">
   <div class="card">
     <div class="tab"><span class="tabname"><span class="ico">＋</span>Crear VPS</span><span class="who">Todos los que ven la sección</span></div>
-    <p>El formulario tiene tres bloques. Al pulsar <b>Crear VPS</b> se abre el paso a paso y el VPS queda listo en 3 a 7 minutos.</p>
+    <p>El formulario tiene tres bloques. Al pulsar <b>Crear VPS</b> se abre el paso a paso y el VPS suele quedar listo en 3 a 7 minutos (bastante más si el host no tiene la plantilla con cPanel y hay que instalarlo en el momento).</p>
     <div class="grid3">
       <div class="box"><h4>Qué se crea</h4><ul>
         <li><b>Marca</b>: define la red del VPS.</li>
@@ -141,12 +141,12 @@ footer { color: var(--muted); font-size: .82rem; border-top: 1px solid var(--lin
         <li><b>Red pública</b>: de qué lista sale la IP pública.</li></ul></div>
     </div>
     <div class="acc">
-      <div><span class="k">Pruebas</span><span class="v">Red de pruebas, sin IP pública. No toca el router.</span></div>
-      <div><span class="k">Producción</span><span class="v">Red real de la marca + IP pública + NAT en RouterData + registro en NetBox.</span></div>
+      <div><span class="k">Pruebas</span><span class="v">Red de pruebas, sin IP pública. No toca el router. No instala ni entrega llave de usuario (tampoco la pegada); la contraseña de root sí funciona.</span></div>
+      <div><span class="k">Producción</span><span class="v">Red real de la marca + IP pública + NAT en RouterData + registro en NetBox. Si NetBox falla, el VPS se crea igual y el paso lo avisa: regístralo a mano.</span></div>
       <div><span class="k">Llave SSH</span><span class="v">El motor genera la llave y la entrega por un enlace seguro que vence en 48 h. Si el cliente te dio su llave pública, pégala.</span></div>
       <div><span class="k">Contraseña de root</span><span class="v">Contraseña fuerte de 12 caracteres; el motor habilita el SSH con contraseña y lo prueba con un login real. Si además pegas la llave pública del cliente, puede entrar con cualquiera de las dos.</span></div>
     </div>
-    <p class="nota"><b>Uso personal</b> fuerza la red interna y Producción, y el VPS solo lo ves tú (y el superadmin). Ahí aparecen las casillas de <b>llaves del equipo</b> para entrar con tu llave.</p>
+    <p class="nota"><b>Uso personal</b> fuerza la red interna y Producción, toma una <b>IP pública real</b> con su NAT (como un cliente), y el VPS solo lo ves tú (y el superadmin). Ahí aparecen las casillas de <b>llaves del equipo</b> para entrar con tu llave.</p>
   </div>
 </section>
 
@@ -155,9 +155,9 @@ footer { color: var(--muted); font-size: .82rem; border-top: 1px solid var(--lin
     <div class="tab"><span class="tabname"><span class="ico">≡</span>VPS gestionados</span><span class="who">Cada uno ve lo que su rol permite</span></div>
     <p>Lista los VPS activos en tres grupos: <b>mis VPS de uso personal</b>, <b>VPS de clientes creados a mano</b> y <b>clientes automáticos (WHMCS)</b>. Se actualiza sola cada 30 segundos.</p>
     <div class="acc">
-      <div><span class="k">Suspender</span><span class="v">Bloquea la IP pública en el router; la VM sigue encendida. Un VPS sin IP pública se apaga.</span></div>
+      <div><span class="k">Suspender</span><span class="v">Bloquea la IP pública en el router; la VM sigue encendida. Un VPS de uso personal sin IP pública se apaga; uno de cliente sin IP pública (por ejemplo, creado en Pruebas) no se puede suspender.</span></div>
       <div><span class="k">Reanudar</span><span class="v">Desbloquea la IP (o enciende la VM).</span></div>
-      <div><span class="k">Cambiar plan</span><span class="v">Sube CPU, RAM y disco en caliente, sin reiniciar.</span></div>
+      <div><span class="k">Cambiar plan</span><span class="v">Subir CPU y RAM es en caliente, sin reiniciar. <b>Bajarlas reinicia el VPS</b> (corte breve: avisa al cliente). El disco solo crece, y a veces con un reinicio breve.</span></div>
       <div><span class="k">Eliminar</span><span class="v">Pide escribir el nombre exacto. El VPS va a la <b>papelera</b> y se borra solo a los 7 días; libera la IP pública y el NAT, pero <b>no la licencia de cPanel</b>.</span></div>
     </div>
   </div>
@@ -172,7 +172,7 @@ footer { color: var(--muted); font-size: .82rem; border-top: 1px solid var(--lin
       <div><span class="k">Acceso al VPS</span><span class="v">IP pública, contraseña o enlace de la llave, comando SSH y panel WHM.</span></div>
       <div><span class="k">Texto para el cliente</span><span class="v">Asunto y mensaje listos para el correo, con botón Copiar. Se puede retocar antes de copiar.</span></div>
     </div>
-    <p class="nota"><b>La contraseña y el enlace de la llave se muestran solo 48 horas.</b> Cópialos y envíalos al cliente apenas termine el job.</p>
+    <p class="nota"><b>La contraseña y el enlace de la llave se muestran solo 48 horas desde que se lanzó el job.</b> Cópialos y envíalos al cliente apenas termine. Después dejan de verse en el panel, pero la contraseña sigue funcionando.</p>
   </div>
 </section>
 
@@ -223,7 +223,7 @@ footer { color: var(--muted); font-size: .82rem; border-top: 1px solid var(--lin
 
 <section id="doradas">
   <h2>Plantillas doradas</h2>
-  <p>El motor no instala desde una ISO cada vez: <b>clona una plantilla dorada</b> ya preparada, por eso un VPS sale en minutos. Por cada sistema operativo hay dos: la <b>base</b> y la variante con <b>cPanel</b> preinstalado, <b>sin licencia</b>.</p>
+  <p>El motor no instala desde una ISO cada vez: <b>clona una plantilla dorada</b> ya preparada, por eso un VPS sale en minutos. AlmaLinux tiene dos: la <b>base</b> y la variante con <b>cPanel</b> preinstalado, <b>sin licencia</b>. Ubuntu tiene solo la base (no admite cPanel).</p>
   <div class="tw"><table>
     <thead><tr><th>Plantilla</th><th>Sistema</th><th>Cómo se construye</th></tr></thead>
     <tbody>
