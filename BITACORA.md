@@ -5,9 +5,9 @@
 
 ---
 
-## ⏯️ PARA RETOMAR (estado al cierre del 2026-10-26)
+## ⏯️ PARA RETOMAR (estado al 2026-10-27, 10:52)
 
-**En producción hoy (todo con Codex; motor 26 suites verdes, dashboard 5 pruebas `test_vps_*.py`):**
+**En producción hoy (todo con Codex; motor 26 suites verdes, dashboard 7 pruebas `test_vps_*.py`):**
 - **9 marcas** (8 comerciales + `interno`) y en esxi-20051 los portgroups de TODAS: VLAN 81–86 + `Sistemas_Internos`.
 - **Acceso por contraseña de root** para VPS de cliente (pregunta «Acceso»; validado en real con `vps-ihpe-0001/0002`);
   clave de root de 12 caracteres en TODO VPS del dashboard (con llave: solo WHM/consola). Red106-0 solo en /25.
@@ -15,6 +15,10 @@
   marca) y modal compacto con 3 secciones plegables (Paso a paso · Acceso · Texto) y un paso por línea.
 - **Formulario Crear VPS** minimalista (sin textos de ayuda obvios) y Sabor con «Personalizado» primero; planes de menor
   a mayor.
+- **Pestaña Motor** minimalista (27-10): sin textos largos y con «Preparar host nuevo» y «Copiar plantillas doradas»
+  plegados (se reabren solos si llega un mensaje).
+- **Guía de entrega** `docs/entrega-motor-vps.html` (artifact privado https://claude.ai/artifact/1EbFVk2SJG7KDkRBQVwN4F):
+  Alcadio la está revisando; para que sus compañeros la abran debe compartirla desde el menú Compartir.
 - **Permisos por rol** (Administración → Usuarios): «NOC + VPS completo» = Fabián, Jonatan; «NOC + VPS internos» =
   Gerardo, Cristian (solo SUS VPS internos, sin Motor); NOC sin sección = Roni; Alcadio superadmin. Casillas del editor
   de roles: «↳ VPS de clientes» y «↳ Pestaña Motor». El motor aplica `solo_personal` (falla cerrado).
@@ -25,7 +29,8 @@
 `noc-monitor/desplegar-motor.sh` a `/tmp/vps-marcas/` de noc-monitor y `bash desplegar-motor.sh <sufijo>` (ANTES verificar
 sin jobs corriendo: el reinicio los corta). Dashboard = `fastnetmon/containers/dashboard/deploy_dashboard.sh <archivo>
 <sufijo>`; parches en orden: marcas v1/v2 → uso_personal v1–v3 → pub_lista v1/v2 → llaves_equipo v1/v2 → acceso_clave
-v1–v4 → texto_cliente v1–v3 → job_modal v1 → sabores_orden v1 → form_minimal v1/v2 → permisos v1/v2. Tras cada deploy del
+v1–v4 → texto_cliente v1–v3 → job_modal v1 → sabores_orden v1 → form_minimal v1/v2 → permisos v1/v2 → motor_minimal v1
+→ motor_plegar v1/v2. Tras cada deploy del
 dashboard, recordar **Ctrl+F5**. Siempre con OK de Alcadio. Para inspeccionar el motor: BD en solo lectura, NUNCA `import app`.
 
 **Pendientes de Alcadio:**
@@ -39,7 +44,20 @@ dashboard, recordar **Ctrl+F5**. Siempre con OK de Alcadio. Para inspeccionar el
    2FA configurado); fail2ban o limitar el 22 en VPS con acceso por contraseña (riesgo aceptado en SEGURIDAD.md).
 
 **Frentes técnicos abiertos:** flujo de WHMCS ("más adelante"), dorada Ubuntu en otros hosts, multi-datastore Incremento 2,
-licencia cPanel automática, opción de SO en el módulo WHMCS.
+licencia cPanel automática (hoy se asigna y libera A MANO; falta saber si usan Manage2, el portal u otro medio), opción
+de SO en el módulo WHMCS.
+
+## 2026-10-27 (martes, 10:40–10:52) — Ajustes a la guía + pestaña Motor minimalista y plegada EN PRODUCCIÓN
+
+- **Guía de entrega:** Alcadio no entendió *"la licencia se activa con la IP del VPS al primer arranque"* (*"si hasta
+  ahora no hemos automatizado lo de la licencia"*). Tenía razón: el motor solo corre `cpkeyclt` (pregunta si esa IP ya
+  tiene licencia); asignarla del pool y liberarla al eliminar sigue manual (#5). Corregido: la dorada cPanel va «sin
+  licencia», Eliminar «no libera la licencia de cPanel» y buena práctica nueva (asignarla y liberarla a mano) — cc36876.
+  También dice que las tarjetas del Motor vienen plegadas.
+- **Pestaña Motor** (pedido con captura: *"simplifiquemos que sea más minimalista como hicimos en Crear VPS"* →
+  *"despliega y pliega"*): 10:47 minimalista (sin textos largos) y 10:52 «Preparar host nuevo» y «Copiar plantillas
+  doradas» plegados; un mensaje (error, huella, job lanzado) reabre su tarjeta. Codex: 1 hallazgo corregido + 2ª ronda
+  sin hallazgos. Detalle técnico en `fastnetmon/BITACORA.md`. Recordar **Ctrl+F5**.
 
 ## 2026-10-26 (lunes, noche) — 📘 Documentación de entrega del Motor VPS (v1, borrador) + pestaña Motor minimalista
 
@@ -52,7 +70,7 @@ activar) y plantillas doradas (las «ISO»: AlmaLinux desde la ISO con kickstart
 cloud; a un host nuevo se copian, no se construyen). Pendiente: sus ajustes.
 Además, *"sigue el mismo criterio de Crear VPS con el motor"*: pestaña Motor sin textos largos
 (`fastnetmon/containers/dashboard/patch_vps_motor_minimal_v1.py` + `test_vps_motor_minimal.py`). Codex: 1 hallazgo (la
-casilla de la llave de Claude debe advertir que es shell root sin restricciones → corregido). PENDIENTE DE DEPLOY.
+casilla de la llave de Claude debe advertir que es shell root sin restricciones → corregido). Desplegado el 27-10 10:47.
 
 ## 2026-10-26 (lunes, 17:48–17:51) — 🔒 PERMISOS DE LA SECCIÓN VPS (quién crea qué) — EN PRODUCCIÓN, APROBADO por Codex (2 rondas)
 
