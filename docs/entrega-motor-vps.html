@@ -158,7 +158,7 @@ footer { color: var(--muted); font-size: .82rem; border-top: 1px solid var(--lin
       <div><span class="k">Suspender</span><span class="v">Bloquea la IP pública en el router; la VM sigue encendida. Un VPS sin IP pública se apaga.</span></div>
       <div><span class="k">Reanudar</span><span class="v">Desbloquea la IP (o enciende la VM).</span></div>
       <div><span class="k">Cambiar plan</span><span class="v">Sube CPU, RAM y disco en caliente, sin reiniciar.</span></div>
-      <div><span class="k">Eliminar</span><span class="v">Pide escribir el nombre exacto. El VPS va a la <b>papelera</b> y se borra solo a los 7 días; libera la IP pública y el NAT.</span></div>
+      <div><span class="k">Eliminar</span><span class="v">Pide escribir el nombre exacto. El VPS va a la <b>papelera</b> y se borra solo a los 7 días; libera la IP pública y el NAT, pero <b>no la licencia de cPanel</b>.</span></div>
     </div>
   </div>
 </section>
@@ -223,7 +223,7 @@ footer { color: var(--muted); font-size: .82rem; border-top: 1px solid var(--lin
 
 <section id="doradas">
   <h2>Plantillas doradas</h2>
-  <p>El motor no instala desde una ISO cada vez: <b>clona una plantilla dorada</b> ya preparada, por eso un VPS sale en minutos. Por cada sistema operativo hay dos: la <b>base</b> y la variante con <b>cPanel</b> preinstalado (la licencia se activa con la IP del VPS al primer arranque).</p>
+  <p>El motor no instala desde una ISO cada vez: <b>clona una plantilla dorada</b> ya preparada, por eso un VPS sale en minutos. Por cada sistema operativo hay dos: la <b>base</b> y la variante con <b>cPanel</b> preinstalado, <b>sin licencia</b>.</p>
   <div class="tw"><table>
     <thead><tr><th>Plantilla</th><th>Sistema</th><th>Cómo se construye</th></tr></thead>
     <tbody>
@@ -242,6 +242,7 @@ footer { color: var(--muted); font-size: .82rem; border-top: 1px solid var(--lin
     <li>Producción crea una IP pública y un NAT reales: revisa marca y red pública antes de crear.</li>
     <li>Envía la contraseña o el enlace de la llave al cliente antes de 48 horas.</li>
     <li>No crees VPS de prueba en <b>esxi-20039</b>: es producción.</li>
+    <li>VPS con cPanel: la licencia aún <b>no es automática</b>. Asígnala a mano a la IP pública del VPS y libérala al eliminarlo.</li>
   </ul>
 </section>
 
