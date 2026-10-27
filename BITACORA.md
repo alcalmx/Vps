@@ -5,7 +5,7 @@
 
 ---
 
-## ⏯️ PARA RETOMAR (estado al 2026-10-27, 10:52)
+## ⏯️ PARA RETOMAR (estado al 2026-10-27, 11:35)
 
 **En producción hoy (todo con Codex; motor 26 suites verdes, dashboard 7 pruebas `test_vps_*.py`):**
 - **9 marcas** (8 comerciales + `interno`) y en esxi-20051 los portgroups de TODAS: VLAN 81–86 + `Sistemas_Internos`.
@@ -38,7 +38,8 @@ dashboard, recordar **Ctrl+F5**. Siempre con OK de Alcadio. Para inspeccionar el
 1. Llave pública de **Jonatan** → `equipo/llaves.json` + desplegar el motor.
 2. Confirmar si las **dos llaves de Fabián** siguen vigentes.
 3. Borrar las reglas **45/46** de RouterData (10.100.36.253) y revisar el **NAT puesto en 201.148.106.102** (figura libre).
-4. **Go-live por marca** (`pub_lista` real y quitar `publica_rango_prueba`) y planes propios por marca.
+4. **Go-live por marca** (`pub_lista` propia, p. ej. Red107-0) y planes propios por marca. (El tope .100-.102 de
+   Red57-0 ya se quitó el 27-10: hoy toda marca toma la IP más alta libre de 38.19.57.0/24.)
 5. Cuándo dar «VPS de clientes» a Gerardo/Cristian (es un cambio de rol, sin código).
 6. Ofrecidos sin respuesta: Entorno «Producción» por defecto en el formulario; 2FA (9 de 11 usuarios del dashboard sin
    2FA configurado); fail2ban o limitar el 22 en VPS con acceso por contraseña (riesgo aceptado en SEGURIDAD.md).
@@ -47,7 +48,7 @@ dashboard, recordar **Ctrl+F5**. Siempre con OK de Alcadio. Para inspeccionar el
 licencia cPanel automática (hoy se asigna y libera A MANO; falta saber si usan Manage2, el portal u otro medio), opción
 de SO en el módulo WHMCS.
 
-## ⏳ 2026-10-27 (martes, 11:35) — Red57-0 (38.19.57.x) COMPLETA, sin el tope de prueba — PENDIENTE DE DEPLOY
+## 2026-10-27 (martes, 11:35) — Red57-0 (38.19.57.x) COMPLETA, sin el tope de prueba — EN PRODUCCIÓN
 
 Alcadio (captura del selector «Red pública: Red57-0 — 38.19.57.x (la de la marca · rango de prueba…)»): *"esta red 38
 ya no debe acotarse solo a 2 IPs como lo teníamos bloqueado"*. Hecho: fuera `publica_rango_prueba` [100,102] de las
@@ -58,8 +59,9 @@ Pruebas: `test_marcas.py` y `test_uso_personal.py` ya no leen el rango de las ma
 tiene) y lo inyectan en memoria para seguir cubriendo que acota solo la lista de la marca; 26 suites verdes.
 Lectura de RouterData (solo lectura, 11:20): ocupadas .249 y .251–.254 (deshabilitadas con comentario + NAT); **el
 próximo VPS tomaría 38.19.57.250** y luego .248, .247… El selector del dashboard pasará a decir «(la de la marca)».
-Staging copiado a `/tmp/vps-marcas/` (md5 = repo). Falta: OK de Alcadio → `bash /tmp/vps-marcas/desplegar-motor.sh red57`
-(reinicia el motor; a las 11:31 no había jobs corriendo).
+Desplegado con su OK (*"sí, despliégalo"*) a las 11:35: `desplegar-motor.sh red57` (0 jobs corriendo antes), HTTP 200,
+9 marcas en /health, 0 tracebacks; en el contenedor (`/app/config/marcas/`) ninguna marca tiene el tope. Respaldo:
+`/opt/vps-engine/build.bak-red57-20261027-1135.tgz`. Rollback = restaurar ese respaldo y reconstruir.
 
 ## 2026-10-27 (martes, 10:40–10:52) — Ajustes a la guía + pestaña Motor minimalista y plegada EN PRODUCCIÓN
 
